@@ -2,7 +2,7 @@
 # Multi-stage build for minimal production image
 
 # Builder stage
-FROM python:3.11-slim as builder
+FROM python:3.11-slim AS builder
 
 WORKDIR /app
 
@@ -11,8 +11,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy and install dependencies
-COPY pyproject.toml .
+# Copy project files needed for install
+COPY pyproject.toml README.md ./
+COPY src/ src/
+
 RUN pip install --no-cache-dir build && \
     pip install --no-cache-dir -e ".[dev]"
 

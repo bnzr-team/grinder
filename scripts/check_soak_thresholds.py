@@ -13,23 +13,26 @@ import argparse
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
-import yaml
+import yaml  # type: ignore[import-untyped]
 
 
-def load_json(path: Path) -> dict:
+def load_json(path: Path) -> dict[str, Any]:
     """Load JSON file."""
-    with open(path) as f:
-        return json.load(f)
+    with path.open() as f:
+        result: dict[str, Any] = json.load(f)
+        return result
 
 
-def load_yaml(path: Path) -> dict:
+def load_yaml(path: Path) -> dict[str, Any]:
     """Load YAML file."""
-    with open(path) as f:
-        return yaml.safe_load(f)
+    with path.open() as f:
+        result: dict[str, Any] = yaml.safe_load(f)
+        return result
 
 
-def check_thresholds(results: dict, thresholds: dict, mode: str) -> list[str]:
+def check_thresholds(results: dict[str, Any], thresholds: dict[str, Any], mode: str) -> list[str]:
     """Check results against thresholds. Returns list of violations."""
     violations = []
     mode_thresholds = thresholds.get(mode, {})
@@ -43,24 +46,17 @@ def check_thresholds(results: dict, thresholds: dict, mode: str) -> list[str]:
         if isinstance(threshold, dict):
             # Threshold with min/max
             if "max" in threshold and value > threshold["max"]:
-                violations.append(
-                    f"{mode}.{metric}: {value} > max({threshold['max']})"
-                )
+                violations.append(f"{mode}.{metric}: {value} > max({threshold['max']})")
             if "min" in threshold and value < threshold["min"]:
-                violations.append(
-                    f"{mode}.{metric}: {value} < min({threshold['min']})"
-                )
-        else:
-            # Simple max threshold
-            if value > threshold:
-                violations.append(
-                    f"{mode}.{metric}: {value} > {threshold}"
-                )
+                violations.append(f"{mode}.{metric}: {value} < min({threshold['min']})")
+        # Simple max threshold
+        elif value > threshold:
+            violations.append(f"{mode}.{metric}: {value} > {threshold}")
 
     return violations
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Check soak test thresholds")
     parser.add_argument("--baseline", type=Path, required=True, help="Baseline results JSON")
     parser.add_argument("--overload", type=Path, required=True, help="Overload results JSON")
