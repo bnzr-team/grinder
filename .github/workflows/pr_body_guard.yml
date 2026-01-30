@@ -1,0 +1,70 @@
+name: PR Body Guard
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  guard:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate PR description contains Proof Bundle
+        run: |
+          python - <<'PY'
+          import json, os, re, sys
+
+          event_path = os.environ.get("GITHUB_EVENT_PATH")
+          if not event_path or not os.path.exists(event_path):
+            print("ERROR: GITHUB_EVENT_PATH is missing; cannot validate PR body.")
+            sys.exit(1)
+
+          with open(event_path, "r", encoding="utf-8") as f:
+            event = json.load(f)
+
+          pr = event.get("pull_request") or {}
+          body = pr.get("body") or ""
+
+          # Normalize newlines
+          body_n = body.replace("\r\n", "\n").replace("\r", "\n")
+
+          # Find a "## Proof" section (case-insensitive)
+          m = re.search(r"(?im)^##\s*proof\b.*$", body_n)
+          if not m:
+            print("FAIL: PR description must include a '## Proof' section with command outputs.")
+            sys.exit(1)
+
+          start = m.start()
+          rest = body_n[start:]
+          # Cut until the next top-level header (## ...)
+          n = re.search(r"(?m)^##\s+\S", rest[1:])  # look for next header after first char
+          proof = rest if not n else rest[: n.start() + 1]
+
+          # Remove markdown checkboxes and backticks to assess content
+          stripped = re.sub(r"(?m)^\s*[-*]\s*\[[ xX]\]\s*", "", proof)
+          stripped = stripped.replace("`", "")
+
+          # Require at least some real content in the Proof section
+          # (avoid placeholders like "paste output" without actual logs)
+          has_min_content = len(re.sub(r"\s+", "", stripped)) >= 120
+          if not has_min_content:
+            print("FAIL: '## Proof' section is present but looks empty. Paste raw command output.")
+            sys.exit(1)
+
+          # Require at least one of the expected keywords (signals real logs)
+          keywords = ["pytest", "ruff", "docker", "compose", "--help", "secret_guard", "verify_replay_determinism"]
+          if not any(k.lower() in stripped.lower() for k in keywords):
+            print("FAIL: '## Proof' section must include at least one real command/output (pytest/ruff/docker/etc).")
+            sys.exit(1)
+
+          # Reject obvious placeholder text
+          bad_phrases = ["paste output", "TODO", "tbd", "later"]
+          if any(bp.lower() in stripped.lower() for bp in bad_phrases):
+            print("FAIL: '## Proof' contains placeholder text. Replace placeholders with real outputs.")
+            sys.exit(1)
+
+          print("OK: PR Proof Bundle detected.")
+          PY
