@@ -10,7 +10,9 @@ import sys
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(prog="grinder-backtest", description="GRINDER backtest (skeleton)")
+    parser = argparse.ArgumentParser(
+        prog="grinder-backtest", description="GRINDER backtest (skeleton)"
+    )
     parser.add_argument("--fixture", required=True, help="Path to fixture JSON")
     parser.add_argument("--out", required=True, help="Output path for replay JSON")
     args = parser.parse_args()

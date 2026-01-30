@@ -42,16 +42,22 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub = parser.add_subparsers(dest="cmd", required=True)
 
-    p_live = sub.add_parser("live", help="Run live loop (currently a skeleton health/metrics server)")
+    p_live = sub.add_parser(
+        "live", help="Run live loop (currently a skeleton health/metrics server)"
+    )
     p_live.add_argument("--symbols", default="BTCUSDT,ETHUSDT", help="Comma-separated symbols")
     p_live.add_argument("--duration-s", type=int, default=0, help="Duration seconds (0 = forever)")
-    p_live.add_argument("--metrics-port", type=int, default=9090, help="Port for /healthz and /metrics")
+    p_live.add_argument(
+        "--metrics-port", type=int, default=9090, help="Port for /healthz and /metrics"
+    )
 
     p_replay = sub.add_parser("replay", help="Run deterministic replay on fixtures")
     p_replay.add_argument("--fixture", required=True, help="Path to fixture JSON")
     p_replay.add_argument("--out", required=True, help="Output path for replay JSON")
 
-    sub.add_parser("verify-replay", help="Verify replay determinism (runs twice and compares digests)")
+    sub.add_parser(
+        "verify-replay", help="Verify replay determinism (runs twice and compares digests)"
+    )
 
     p_secret = sub.add_parser("secret-guard", help="Scan repository for accidental secrets")
     p_secret.add_argument("--verbose", action="store_true")
@@ -68,14 +74,17 @@ def main() -> None:
         raise SystemExit(2)
 
     if args.cmd == "live":
-        _run_script("scripts.run_live", [
-            "--symbols",
-            args.symbols,
-            "--duration-s",
-            str(args.duration_s),
-            "--metrics-port",
-            str(args.metrics_port),
-        ])
+        _run_script(
+            "scripts.run_live",
+            [
+                "--symbols",
+                args.symbols,
+                "--duration-s",
+                str(args.duration_s),
+                "--metrics-port",
+                str(args.metrics_port),
+            ],
+        )
         return
 
     if args.cmd == "replay":
