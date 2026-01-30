@@ -16,7 +16,7 @@ COPY pyproject.toml README.md ./
 COPY src/ src/
 
 RUN pip install --no-cache-dir build && \
-    pip install --no-cache-dir -e ".[dev]"
+    pip install --no-cache-dir -e .
 
 # Runtime stage
 FROM python:3.11-slim
@@ -45,7 +45,7 @@ EXPOSE 9090
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD curl -f http://localhost:9090/healthz || exit 1
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:9090/healthz', timeout=5).read()" || exit 1
 
 # Entry point
 ENTRYPOINT ["python", "-m", "scripts.run_live"]

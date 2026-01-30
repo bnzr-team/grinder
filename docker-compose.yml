@@ -9,18 +9,17 @@ services:
     environment:
       - GRINDER_MODE=dry-run
       - GRINDER_LOG_LEVEL=INFO
+    # Copy .env.example to .env if you need local overrides.
     env_file:
-      - .env
+      - .env.example
     command:
       - "--symbols"
       - "BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,DOGEUSDT"
       - "--metrics-port"
       - "9090"
-      - "--mode"
-      - "dry-run"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:9090/healthz"]
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9090/healthz', timeout=5).read()"]
       interval: 30s
       timeout: 10s
       retries: 3
