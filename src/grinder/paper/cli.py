@@ -20,7 +20,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    from scripts.run_live import main as live_main  # type: ignore  # noqa: PLC0415
+    from scripts.run_live import main as live_main  # noqa: PLC0415
 
     old_argv = sys.argv
     try:

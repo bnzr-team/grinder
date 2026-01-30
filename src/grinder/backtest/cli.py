@@ -18,7 +18,7 @@ def main() -> None:
     args = parser.parse_args()
 
     # Delegate to the existing replay runner.
-    from scripts.run_replay import main as replay_main  # type: ignore  # noqa: PLC0415
+    from scripts.run_replay import main as replay_main  # noqa: PLC0415
 
     old_argv = sys.argv
     try:
