@@ -1,0 +1,19 @@
+# Keep exported source archives clean (git archive / GitHub source downloads)
+
+# Ignore caches and local artifacts
+.mypy_cache export-ignore
+.pytest_cache export-ignore
+.ruff_cache export-ignore
+__pycache__ export-ignore
+*.pyc export-ignore
+*.pyo export-ignore
+
+# Local env files
+.env export-ignore
+
+# OS noise
+.DS_Store export-ignore
+Thumbs.db export-ignore
+
+# Local notebooks / scratch (if any)
+*.ipynb export-ignore
