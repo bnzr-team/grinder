@@ -3,23 +3,30 @@
 Цель: фиксировать **что реально работает сейчас** (а не что хотелось бы). Обновлять в каждом PR, если изменилось.
 
 ## Works now
+- `grinder --help` / `grinder-paper --help` / `grinder-backtest --help` — CLI entrypoints работают.
 - `python -m scripts.run_live` поднимает `/healthz` и `/metrics`.
+- `python -m scripts.run_soak` генерирует synthetic soak metrics JSON.
 - Replay utilities: `python -m scripts.run_replay` и `python -m scripts.verify_replay_determinism`.
 - `python -m scripts.secret_guard` проверяет repo на утечки секретов.
+- Docker build + healthcheck работают (Dockerfile использует `urllib.request` вместо `curl`).
+- Grafana provisioning: `monitoring/grafana/provisioning/` содержит datasource + dashboard.
+- Branch protection на `main`: все PR требуют 5 зелёных checks.
 
 ## Partially implemented
 - Структура пакета `src/grinder/*` (core, protocols/interfaces) — каркас.
 - Документация в `docs/*` — SSOT по архитектуре/спекам (но должна совпадать с реализацией).
 
 ## Known gaps / mismatches
-- Workflows/упаковка/compose содержат ссылки на несуществующие компоненты (должно быть исправлено в ближайших PR):
-  - `nightly_soak.yml` вызывает `scripts.run_soak` (скрипта нет).
-  - `pyproject.toml` объявляет CLI entrypoints (`grinder`, `grinder-paper`, `grinder-backtest`), но модулей ещё нет.
-  - Docker/compose healthcheck используют `curl`, которого нет в `python:3.11-slim`.
-  - `docker-compose.yml` ожидает Grafana provisioning (`monitoring/grafana/provisioning`), которого нет.
-  - README содержит неверный clone URL и команды, которые пока не исполняются.
+- Нет реальной торговой логики — только skeleton/stubs.
+- Нет интеграции с Binance API (только интерфейсы).
+- ML pipeline (`src/grinder/ml/`) — пустой placeholder.
+
+## Process / governance
+- PR template с обязательной секцией `## Proof`.
+- CI guard (`pr_body_guard.yml`) блокирует PR без Proof Bundle.
+- CLAUDE.md + DECISIONS.md + STATE.md — governance docs.
 
 ## Planned next
-- Привести README/pyproject/CI/Docker к честному состоянию.
-- Сделать минимально рабочие CLI (хотя бы `--help` + запуск существующих scripts).
-- Добавить базовый Grafana provisioning (datasource + 1 dashboard).
+- Реализовать минимальный data connector (Binance WebSocket mock).
+- Добавить первую реальную policy (grid baseline).
+- Расширить тесты до >50% coverage.
