@@ -1,19 +1,31 @@
-# GRINDER Code Owners
-# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+# CODEOWNERS — Grinder
+# Auto-requests reviews when these paths change.
 
-# Default owners for everything
-* @trading-team
+# Default owner for everything
+* @bnzr-hub
 
-# Risk management - requires additional review
-/src/grinder/risk/ @risk-team @trading-team
+# Governance / process / CI
+/.github/ @bnzr-hub
+/.github/workflows/ @bnzr-hub
 
-# ML models
-/src/grinder/ml/ @ml-team @trading-team
+# Packaging & entrypoints
+/pyproject.toml @bnzr-hub
+/src/grinder/cli.py @bnzr-hub
+/src/grinder/backtest/cli.py @bnzr-hub
+/src/grinder/paper/cli.py @bnzr-hub
 
-# Infrastructure
-/.github/ @devops-team
-/monitoring/ @devops-team @trading-team
-/k8s/ @devops-team
+# Docker / runtime / infra
+/Dockerfile @bnzr-hub
+/docker-compose.yml @bnzr-hub
+/monitoring/ @bnzr-hub
 
-# Documentation
-/docs/ @trading-team
+# Scripts that affect determinism, CI, safety
+/scripts/ @bnzr-hub
+
+# Docs SSOT
+/docs/ @bnzr-hub
+
+# Optional: tighten for core trading logic later
+#/src/grinder/policies/ @bnzr-hub
+#/src/grinder/risk/ @bnzr-hub
+#/src/grinder/execution/ @bnzr-hub
