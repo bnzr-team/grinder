@@ -64,6 +64,7 @@ SKIP_PATTERNS = [
     r"\.pytest_cache/",
     r"\.mypy_cache/",
     r"\.ruff_cache/",
+    r"secret_guard\.py$",  # Skip self (contains pattern definitions)
 ]
 
 # False positive patterns
