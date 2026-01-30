@@ -2,18 +2,34 @@
 
 > "Grind the markets, not your nerves"
 
-Enterprise-grade adaptive grid trading system for crypto perpetuals.
+Adaptive grid trading system for crypto perpetuals.
 
 ## Overview
 
-GRINDER is an intelligent grid trading bot that maximizes risk-adjusted returns through:
+GRINDER is an adaptive grid trading system. The long-term goal is to combine:
 
 - **Market Microstructure Analysis** - L1/L2 order book features, OFI, toxicity detection
 - **Dynamic Policy Selection** - 6 grid policies adapting to market regimes
 - **Robust Risk Management** - Inventory caps, drawdown limits, emergency procedures
 - **ML Calibration** - Offline parameter optimization with walk-forward validation
 
-## Key Features
+## Project Status
+
+This repository is currently in a **skeleton / infrastructure-first** stage.
+
+**Implemented now**
+- Health + metrics endpoint (`/healthz`, `/metrics`) via `scripts/run_live.py`
+- Deterministic replay + determinism verification scripts
+- CI guardrails (proof, secrets, replay determinism, docker smoke)
+
+**Planned (not fully implemented yet)**
+- Real exchange connector(s), policy engine, execution engine, risk manager
+- Backtest engine beyond deterministic fixture replay
+- ML calibration and regime selection
+
+If you're looking for a production-ready bot — we're not there yet.
+
+## Key Features (Roadmap)
 
 | Feature | Description |
 |---------|-------------|
@@ -29,7 +45,7 @@ GRINDER is an intelligent grid trading bot that maximizes risk-adjusted returns 
 
 ```bash
 # Clone repository
-git clone https://github.com/grinder/grinder.git
+git clone https://github.com/bnzr-hub/grinder.git
 cd grinder
 
 # Install with all dependencies
@@ -39,35 +55,21 @@ pip install -e ".[all]"
 pip install -e .
 ```
 
-### Configuration
+### Run the live skeleton (health + metrics)
 
 ```bash
-# Copy example config
-cp config/example.yaml config/local.yaml
+python -m scripts.run_live --symbols BTCUSDT,ETHUSDT --duration-s 30 --metrics-port 9090
 
-# Set API credentials (never commit these)
-export BINANCE_API_KEY="your-api-key"
-export BINANCE_API_SECRET="your-api-secret"
+# In another terminal:
+curl -s http://localhost:9090/healthz
+curl -s http://localhost:9090/metrics | head
 ```
 
-### Paper Trading
+### Run deterministic replay
 
 ```bash
-# Start paper trading
-grinder-paper --config config/local.yaml
-
-# With specific symbols
-grinder-paper --config config/local.yaml --symbols BTCUSDT,ETHUSDT
-```
-
-### Backtesting
-
-```bash
-# Run backtest
-grinder-backtest --config config/backtest.yaml --data data/2024-01/
-
-# Generate report
-grinder-backtest --config config/backtest.yaml --data data/2024-01/ --report
+python -m scripts.run_replay --fixture tests/fixtures/sample_day -v
+python -m scripts.verify_replay_determinism --fixture tests/fixtures/sample_day
 ```
 
 ## Architecture
@@ -116,7 +118,7 @@ grinder-backtest --config config/backtest.yaml --data data/2024-01/ --report
 | [01_GLOSSARY.md](docs/01_GLOSSARY.md) | Terminology definitions |
 | [05_FEATURE_CATALOG.md](docs/05_FEATURE_CATALOG.md) | Feature specifications |
 | [07_GRID_POLICY_LIBRARY.md](docs/07_GRID_POLICY_LIBRARY.md) | Policy implementations |
-| [XX_CONSTANTS.md](docs/XX_CONSTANTS.md) | Default parameters |
+| [15_CONSTANTS.md](docs/15_CONSTANTS.md) | Default parameters |
 
 ## Project Structure
 
@@ -124,7 +126,6 @@ grinder-backtest --config config/backtest.yaml --data data/2024-01/ --report
 grinder/
 ├── src/grinder/
 │   ├── connectors/      # Exchange connectivity
-│   │   └── binance/     # Binance Futures integration
 │   ├── data/            # Data quality & storage
 │   ├── features/        # Feature calculations
 │   ├── policies/        # Grid policies
@@ -139,8 +140,7 @@ grinder/
 │   ├── integration/     # Integration tests
 │   └── fixtures/        # Test data
 ├── docs/                # Documentation
-├── config/              # Configuration files
-├── monitoring/          # Grafana dashboards
+├── monitoring/          # Prometheus rules + Grafana provisioning
 ├── k8s/                 # Kubernetes manifests
 └── scripts/             # Utility scripts
 ```
