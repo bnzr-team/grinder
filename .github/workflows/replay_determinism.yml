@@ -1,0 +1,29 @@
+name: Replay Determinism
+
+on:
+  pull_request:
+    paths:
+      - "tests/fixtures/**"
+      - "tests/backtest/**"
+      - "scripts/run_replay.py"
+      - "scripts/run_backtest.py"
+      - "src/grinder/policies/**"
+      - "src/grinder/execution/**"
+      - "src/grinder/risk/**"
+      - "src/grinder/backtest/**"
+
+jobs:
+  replay-determinism:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Replay double-run determinism check
+        run: python -m scripts.verify_replay_determinism

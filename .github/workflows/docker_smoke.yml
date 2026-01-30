@@ -1,0 +1,63 @@
+name: Docker Smoke
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    paths:
+      - "Dockerfile"
+      - "docker-compose.yml"
+      - "monitoring/**"
+      - "src/**"
+      - "scripts/**"
+
+jobs:
+  docker-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build Docker image
+        run: docker build -t grinder:test .
+
+      - name: Start container
+        run: |
+          docker run -d --name grinder-smoke -p 9090:9090 \
+            grinder:test --symbols BTCUSDT,ETHUSDT --duration-s 30 --metrics-port 9090 --mode dry-run
+          sleep 15
+
+      - name: Check /healthz
+        run: |
+          HTTP_CODE=$(curl -s -o /tmp/healthz.json -w "%{http_code}" http://localhost:9090/healthz)
+          echo "HTTP status: $HTTP_CODE"
+          cat /tmp/healthz.json | python -m json.tool
+          test "$HTTP_CODE" = "200"
+          python -c "import json; d=json.load(open('/tmp/healthz.json')); assert 'status' in d, 'missing status'"
+
+      - name: Check /readyz
+        run: |
+          HTTP_CODE=$(curl -s -o /tmp/readyz.json -w "%{http_code}" http://localhost:9090/readyz)
+          echo "HTTP status: $HTTP_CODE"
+          cat /tmp/readyz.json | python -m json.tool
+          # After 15s warmup, expect 200 or 503 (if data not ready)
+          test "$HTTP_CODE" = "200" || test "$HTTP_CODE" = "503"
+          python -c "import json; d=json.load(open('/tmp/readyz.json')); assert 'ready' in d, 'missing ready'"
+
+      - name: Check /metrics
+        run: |
+          HTTP_CODE=$(curl -s -o /tmp/metrics.txt -w "%{http_code}" http://localhost:9090/metrics)
+          echo "HTTP status: $HTTP_CODE"
+          test "$HTTP_CODE" = "200"
+          for m in grinder_pnl_total_usd \
+                   grinder_round_trips_total \
+                   grinder_order_latency_ms \
+                   grinder_drawdown_pct \
+                   grinder_toxicity_score \
+                   grinder_state; do
+            grep -q "$m" /tmp/metrics.txt || { echo "MISSING: $m"; exit 1; }
+            echo "FOUND: $m"
+          done
+
+      - name: Stop container
+        if: always()
+        run: docker rm -f grinder-smoke || true

@@ -1,0 +1,19 @@
+# GRINDER Code Owners
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owners for everything
+* @trading-team
+
+# Risk management - requires additional review
+/src/grinder/risk/ @risk-team @trading-team
+
+# ML models
+/src/grinder/ml/ @ml-team @trading-team
+
+# Infrastructure
+/.github/ @devops-team
+/monitoring/ @devops-team @trading-team
+/k8s/ @devops-team
+
+# Documentation
+/docs/ @trading-team

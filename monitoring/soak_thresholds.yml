@@ -1,0 +1,44 @@
+# Soak test thresholds for GRINDER
+# Used by scripts/check_soak_thresholds.py
+
+baseline:
+  # Latency thresholds (ms)
+  decision_latency_p99_ms: 50
+  order_latency_p99_ms: 200
+
+  # Queue thresholds
+  event_queue_depth_max: 100
+  snapshot_queue_depth_max: 50
+
+  # Error thresholds
+  errors_total: 0
+  events_dropped: 0
+
+  # Memory (MB)
+  rss_mb_max: 512
+
+  # Fill rate
+  fill_rate:
+    min: 0.4
+    max: 1.0
+
+overload:
+  # More lenient for overload test
+  decision_latency_p99_ms: 100
+  order_latency_p99_ms: 500
+
+  # Allow some queue buildup
+  event_queue_depth_max: 500
+  snapshot_queue_depth_max: 200
+
+  # Allow some drops under extreme load
+  events_dropped: 100
+  errors_total: 10
+
+  # Memory
+  rss_mb_max: 1024
+
+  # Fill rate (lower expected under load)
+  fill_rate:
+    min: 0.2
+    max: 1.0

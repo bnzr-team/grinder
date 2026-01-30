@@ -1,0 +1,592 @@
+# GRINDER - Observability
+
+> Metrics, logging, tracing, and alerting specifications
+
+---
+
+## 13.1 Observability Stack
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    OBSERVABILITY STACK                           │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐             │
+│  │   Metrics   │  │    Logs     │  │   Traces    │             │
+│  │ (Prometheus)│  │ (Structured)│  │   (OTLP)    │             │
+│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘             │
+│         │                │                │                     │
+│         ▼                ▼                ▼                     │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐             │
+│  │   Grafana   │  │    Loki     │  │   Jaeger    │             │
+│  │ Dashboards  │  │   (Store)   │  │   (Traces)  │             │
+│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘             │
+│         │                │                │                     │
+│         └────────────────┴────────────────┘                     │
+│                          │                                      │
+│                          ▼                                      │
+│                   ┌─────────────┐                               │
+│                   │   Alerting  │                               │
+│                   │ (PagerDuty) │                               │
+│                   └─────────────┘                               │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 13.2 Metrics
+
+### Metric Categories
+
+| Category | Examples | Purpose |
+|----------|----------|---------|
+| Business | PnL, RT count, Sharpe | Trading performance |
+| System | Latency, throughput, errors | System health |
+| Data | Staleness, gaps, outliers | Data quality |
+| Risk | DD, inventory, exposure | Risk monitoring |
+| ML | Prediction accuracy, drift | Model health |
+
+### Core Metrics
+
+```python
+from prometheus_client import Counter, Gauge, Histogram, Summary
+
+# Business Metrics
+pnl_total = Gauge(
+    "grinder_pnl_total_usd",
+    "Total P&L in USD",
+    ["symbol", "policy"]
+)
+
+round_trips_total = Counter(
+    "grinder_round_trips_total",
+    "Total round-trips completed",
+    ["symbol", "policy", "outcome"]  # outcome: win/loss
+)
+
+rt_pnl_bps = Histogram(
+    "grinder_rt_pnl_bps",
+    "Round-trip P&L in basis points",
+    ["symbol", "policy"],
+    buckets=[-50, -20, -10, -5, 0, 5, 10, 20, 50, 100]
+)
+
+# System Metrics
+order_latency_ms = Histogram(
+    "grinder_order_latency_ms",
+    "Order placement latency in milliseconds",
+    ["exchange", "operation"],  # operation: place/cancel/amend
+    buckets=[10, 25, 50, 100, 250, 500, 1000, 2500]
+)
+
+decision_latency_ms = Histogram(
+    "grinder_decision_latency_ms",
+    "Policy decision latency in milliseconds",
+    ["policy"],
+    buckets=[1, 2, 5, 10, 25, 50, 100]
+)
+
+errors_total = Counter(
+    "grinder_errors_total",
+    "Total errors by type",
+    ["error_type", "module"]
+)
+
+# Data Metrics
+data_staleness_ms = Gauge(
+    "grinder_data_staleness_ms",
+    "Data staleness in milliseconds",
+    ["stream", "symbol"]
+)
+
+data_gaps_total = Counter(
+    "grinder_data_gaps_total",
+    "Total data gaps detected",
+    ["stream", "symbol"]
+)
+
+# Risk Metrics
+drawdown_pct = Gauge(
+    "grinder_drawdown_pct",
+    "Current drawdown percentage",
+    ["period"]  # session/daily/weekly
+)
+
+inventory_notional = Gauge(
+    "grinder_inventory_notional_usd",
+    "Inventory notional in USD",
+    ["symbol", "side"]
+)
+
+toxicity_score = Gauge(
+    "grinder_toxicity_score",
+    "Current toxicity score",
+    ["symbol"]
+)
+```
+
+### Custom Metrics
+
+```python
+class MetricsCollector:
+    """Collect and export custom metrics."""
+
+    def __init__(self):
+        self.fill_rate = Gauge(
+            "grinder_fill_rate",
+            "Order fill rate",
+            ["symbol", "side"]
+        )
+        self.spread_bps = Gauge(
+            "grinder_spread_bps",
+            "Current spread in bps",
+            ["symbol"]
+        )
+
+    def record_fill(self, symbol: str, side: str,
+                    filled: bool) -> None:
+        """Record fill for rate calculation."""
+        # Using moving average
+        current = self.fill_rate.labels(symbol=symbol, side=side)._value.get()
+        new_val = 0.95 * current + 0.05 * (1 if filled else 0)
+        self.fill_rate.labels(symbol=symbol, side=side).set(new_val)
+
+    def record_spread(self, symbol: str, spread_bps: float) -> None:
+        """Record current spread."""
+        self.spread_bps.labels(symbol=symbol).set(spread_bps)
+```
+
+---
+
+## 13.3 Structured Logging
+
+### Log Format
+
+```python
+import structlog
+
+# Configure structlog
+structlog.configure(
+    processors=[
+        structlog.stdlib.filter_by_level,
+        structlog.stdlib.add_logger_name,
+        structlog.stdlib.add_log_level,
+        structlog.stdlib.PositionalArgumentsFormatter(),
+        structlog.processors.TimeStamper(fmt="iso"),
+        structlog.processors.StackInfoRenderer(),
+        structlog.processors.format_exc_info,
+        structlog.processors.UnicodeDecoder(),
+        structlog.processors.JSONRenderer(),
+    ],
+    wrapper_class=structlog.stdlib.BoundLogger,
+    context_class=dict,
+    logger_factory=structlog.stdlib.LoggerFactory(),
+    cache_logger_on_first_use=True,
+)
+
+logger = structlog.get_logger()
+```
+
+### Log Events
+
+```python
+# Trading events
+logger.info("order_placed",
+    symbol="BTCUSDT",
+    side="BUY",
+    price=50000.0,
+    quantity=0.1,
+    order_id="abc123",
+    policy="RANGE",
+)
+
+logger.info("fill_received",
+    symbol="BTCUSDT",
+    side="BUY",
+    price=49999.5,
+    quantity=0.1,
+    order_id="abc123",
+    is_maker=True,
+    latency_ms=45,
+)
+
+logger.info("round_trip_completed",
+    symbol="BTCUSDT",
+    policy="RANGE",
+    entry_price=49999.5,
+    exit_price=50010.0,
+    pnl_bps=2.1,
+    hold_time_s=120,
+)
+
+# State changes
+logger.info("state_transition",
+    from_state="ACTIVE",
+    to_state="THROTTLED",
+    trigger="TOX_MID",
+    toxicity_score=1.5,
+)
+
+# Risk events
+logger.warning("risk_alert",
+    alert_type="DRAWDOWN_WARNING",
+    current_dd_pct=3.5,
+    limit_dd_pct=5.0,
+    action="THROTTLE",
+)
+
+logger.critical("emergency_exit",
+    reason="DD_BREACH",
+    dd_pct=5.2,
+    positions={"BTCUSDT": 0.5, "ETHUSDT": -0.3},
+)
+
+# Errors
+logger.error("order_failed",
+    symbol="BTCUSDT",
+    error="INSUFFICIENT_MARGIN",
+    order_id="abc123",
+    retry_count=2,
+)
+```
+
+### Log Levels
+
+| Level | Use Case | Examples |
+|-------|----------|----------|
+| DEBUG | Detailed flow | Feature values, calculations |
+| INFO | Normal operations | Orders, fills, state changes |
+| WARNING | Concerning but handled | High toxicity, rate limits |
+| ERROR | Failures requiring attention | Order failures, data gaps |
+| CRITICAL | Immediate action needed | Emergency exit, kill switch |
+
+---
+
+## 13.4 Distributed Tracing
+
+```python
+from opentelemetry import trace
+from opentelemetry.sdk.trace import TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
+
+# Setup
+provider = TracerProvider()
+processor = BatchSpanProcessor(OTLPSpanExporter())
+provider.add_span_processor(processor)
+trace.set_tracer_provider(provider)
+
+tracer = trace.get_tracer("grinder")
+
+# Usage
+class PolicyEngine:
+    async def evaluate(self, symbol: str, features: dict) -> GridPlan:
+        with tracer.start_as_current_span("policy_evaluate") as span:
+            span.set_attribute("symbol", symbol)
+            span.set_attribute("toxicity", features.get("tox_score", 0))
+
+            # Compute features
+            with tracer.start_as_current_span("compute_features"):
+                enhanced_features = self._enhance_features(features)
+
+            # Select policy
+            with tracer.start_as_current_span("select_policy"):
+                policy = self._select_policy(enhanced_features)
+                span.set_attribute("policy", policy.name)
+
+            # Generate plan
+            with tracer.start_as_current_span("generate_plan"):
+                plan = policy.evaluate(enhanced_features)
+
+            span.set_attribute("grid_mode", plan.mode.value)
+            return plan
+```
+
+---
+
+## 13.5 Alerting
+
+### Alert Definitions
+
+```yaml
+# alerts/grinder.yaml
+groups:
+  - name: grinder_critical
+    rules:
+      - alert: GrinderEmergencyExit
+        expr: grinder_state == 6  # EMERGENCY
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "GRINDER emergency exit triggered"
+          description: "System entered emergency state"
+
+      - alert: GrinderHighDrawdown
+        expr: grinder_drawdown_pct{period="daily"} > 0.08
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Daily drawdown > 8%"
+
+  - name: grinder_warning
+    rules:
+      - alert: GrinderHighToxicity
+        expr: grinder_toxicity_score > 2.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High toxicity for {{ $labels.symbol }}"
+
+      - alert: GrinderDataStale
+        expr: grinder_data_staleness_ms > 5000
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Stale data for {{ $labels.stream }}"
+
+      - alert: GrinderHighLatency
+        expr: histogram_quantile(0.99, grinder_order_latency_ms_bucket) > 500
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "P99 order latency > 500ms"
+
+  - name: grinder_info
+    rules:
+      - alert: GrinderStateChange
+        expr: changes(grinder_state[5m]) > 3
+        for: 0m
+        labels:
+          severity: info
+        annotations:
+          summary: "Frequent state changes"
+```
+
+### Alert Routing
+
+```python
+class AlertManager:
+    """Route alerts to appropriate channels."""
+
+    def __init__(self, config: AlertConfig):
+        self.config = config
+        self.pagerduty = PagerDutyClient(config.pagerduty_key)
+        self.slack = SlackClient(config.slack_webhook)
+
+    async def send_alert(self, alert: Alert) -> None:
+        """Send alert to appropriate channels."""
+
+        if alert.severity == "critical":
+            # PagerDuty for critical
+            await self.pagerduty.trigger(
+                summary=alert.message,
+                source="grinder",
+                severity="critical",
+                custom_details=alert.context,
+            )
+            # Also Slack
+            await self.slack.send(
+                channel="#trading-alerts",
+                text=f"🚨 CRITICAL: {alert.message}",
+                attachments=[{"fields": alert.context}],
+            )
+
+        elif alert.severity == "warning":
+            await self.slack.send(
+                channel="#trading-alerts",
+                text=f"⚠️ WARNING: {alert.message}",
+            )
+
+        else:
+            await self.slack.send(
+                channel="#trading-info",
+                text=f"ℹ️ {alert.message}",
+            )
+```
+
+---
+
+## 13.6 Dashboards
+
+### Main Dashboard Panels
+
+| Panel | Metrics | Purpose |
+|-------|---------|---------|
+| P&L Chart | `pnl_total` | Track performance |
+| Equity Curve | Calculated from P&L | Visualize growth |
+| Drawdown | `drawdown_pct` | Risk monitoring |
+| State Timeline | `state` | System status |
+| Toxicity Heatmap | `toxicity_score` | Per-symbol toxicity |
+| Fill Rate | `fill_rate` | Execution quality |
+| Latency | `order_latency_ms` | System performance |
+| Round Trips | `round_trips_total` | Activity level |
+
+### Dashboard JSON (Grafana)
+
+```json
+{
+  "dashboard": {
+    "title": "GRINDER Main",
+    "panels": [
+      {
+        "title": "Session P&L",
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "sum(grinder_pnl_total_usd)",
+            "legendFormat": "Total P&L"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "unit": "currencyUSD",
+            "thresholds": {
+              "mode": "absolute",
+              "steps": [
+                {"color": "red", "value": -500},
+                {"color": "yellow", "value": 0},
+                {"color": "green", "value": 100}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "title": "Drawdown",
+        "type": "gauge",
+        "targets": [
+          {
+            "expr": "grinder_drawdown_pct{period='session'}",
+            "legendFormat": "Session DD"
+          }
+        ],
+        "fieldConfig": {
+          "defaults": {
+            "max": 10,
+            "thresholds": {
+              "steps": [
+                {"color": "green", "value": 0},
+                {"color": "yellow", "value": 3},
+                {"color": "red", "value": 5}
+              ]
+            }
+          }
+        }
+      },
+      {
+        "title": "System State",
+        "type": "state-timeline",
+        "targets": [
+          {
+            "expr": "grinder_state"
+          }
+        ]
+      },
+      {
+        "title": "Order Latency P99",
+        "type": "timeseries",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.99, rate(grinder_order_latency_ms_bucket[5m]))"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+---
+
+## 13.7 Health Checks
+
+```python
+from fastapi import FastAPI
+from prometheus_client import generate_latest
+
+app = FastAPI()
+
+@app.get("/health")
+async def health():
+    """Kubernetes liveness probe."""
+    return {"status": "healthy"}
+
+@app.get("/ready")
+async def ready():
+    """Kubernetes readiness probe."""
+    checks = {
+        "exchange_connected": connector.is_connected(),
+        "data_fresh": max(data_staleness.values()) < 5000,
+        "risk_ok": not risk_manager.is_breached(),
+    }
+    all_ok = all(checks.values())
+    return {"ready": all_ok, "checks": checks}
+
+@app.get("/metrics")
+async def metrics():
+    """Prometheus metrics endpoint."""
+    return Response(
+        generate_latest(),
+        media_type="text/plain"
+    )
+```
+
+---
+
+## 13.8 Runbooks
+
+### Runbook: High Toxicity
+
+```markdown
+## Alert: GrinderHighToxicity
+
+### Symptoms
+- Toxicity score > 2.5 for > 5 minutes
+- Grid in THROTTLED or PAUSED state
+
+### Diagnosis
+1. Check which symbols are toxic: `grinder_toxicity_score > 2`
+2. Check toxicity components in logs
+3. Check market conditions (news, liquidations)
+
+### Resolution
+1. If isolated to 1-2 symbols: wait for decay
+2. If widespread: consider manual PAUSE
+3. If persistent: investigate data quality
+
+### Escalation
+- If > 30 minutes: notify trading lead
+- If > 1 hour: consider manual intervention
+```
+
+### Runbook: Emergency Exit
+
+```markdown
+## Alert: GrinderEmergencyExit
+
+### Immediate Actions
+1. Check positions: `kubectl exec grinder -- grinder-cli positions`
+2. Check if exit completed: all positions should be flat
+3. Check P&L impact
+
+### Diagnosis
+1. Check trigger reason in logs
+2. Check drawdown at time of trigger
+3. Review recent trades for anomalies
+
+### Recovery
+1. Wait for manual review
+2. Reset state: `kubectl exec grinder -- grinder-cli reset-emergency`
+3. Gradual restart with reduced limits
+
+### Post-Incident
+- Create incident report
+- Review risk limits
+- Update if necessary
+```

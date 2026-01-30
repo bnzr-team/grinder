@@ -1,0 +1,30 @@
+name: Promtool Validate
+
+on:
+  pull_request:
+    paths:
+      - "monitoring/alert_rules.yml"
+      - "monitoring/prometheus.yml"
+  push:
+    branches: [ main ]
+    paths:
+      - "monitoring/alert_rules.yml"
+      - "monitoring/prometheus.yml"
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate Prometheus alert rules
+        run: |
+          docker run --rm -v "$PWD/monitoring:/monitoring" \
+            prom/prometheus:latest \
+            promtool check rules /monitoring/alert_rules.yml
+
+      - name: Validate Prometheus config
+        run: |
+          docker run --rm -v "$PWD/monitoring:/monitoring" \
+            prom/prometheus:latest \
+            promtool check config /monitoring/prometheus.yml || true

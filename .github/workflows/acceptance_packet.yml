@@ -1,0 +1,190 @@
+name: Acceptance Packet
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR number to generate acceptance packet for'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  pull-requests: write
+  checks: read
+
+jobs:
+  acceptance-packet:
+    runs-on: ubuntu-latest
+    # Anti-loop: skip if triggered by bot updating PR body
+    if: github.actor != 'github-actions[bot]'
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install -e ".[dev]"
+
+      - name: Run acceptance packet
+        id: packet
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+        run: |
+          set +e
+          mkdir -p artifacts
+
+          # Run acceptance packet and capture output
+          ./scripts/acceptance_packet.sh "$PR_NUMBER" 2>&1 | tee "artifacts/acceptance_packet_pr${PR_NUMBER}.txt"
+          PACKET_EXIT=${PIPESTATUS[0]}
+
+          set -e
+
+          # Compute artifact metadata
+          ARTIFACT_FILE="artifacts/acceptance_packet_pr${PR_NUMBER}.txt"
+          SHA256=$(sha256sum "$ARTIFACT_FILE" | awk '{print $1}')
+          BYTES=$(wc -c < "$ARTIFACT_FILE")
+
+          echo "packet_exit=$PACKET_EXIT" >> "$GITHUB_OUTPUT"
+          echo "artifact_file=$ARTIFACT_FILE" >> "$GITHUB_OUTPUT"
+          echo "sha256=$SHA256" >> "$GITHUB_OUTPUT"
+          echo "bytes=$BYTES" >> "$GITHUB_OUTPUT"
+
+      - name: Get PR number for artifact naming
+        id: pr_info
+        run: echo "pr_number=${{ github.event.pull_request.number || inputs.pr_number }}" >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: acceptance_packet_pr${{ steps.pr_info.outputs.pr_number }}
+          path: artifacts/acceptance_packet_pr${{ steps.pr_info.outputs.pr_number }}.txt
+          retention-days: 90
+
+      - name: Get HEAD SHA
+        id: head_sha
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+        run: |
+          if [[ -n "${{ github.event.pull_request.head.sha }}" ]]; then
+            echo "sha=${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
+          else
+            # For workflow_dispatch, get HEAD SHA from PR
+            SHA=$(gh pr view "$PR_NUMBER" --json headRefOid -q '.headRefOid')
+            echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update PR body
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ github.event.pull_request.number || inputs.pr_number }}
+          PACKET_EXIT: ${{ steps.packet.outputs.packet_exit }}
+          SHA256: ${{ steps.packet.outputs.sha256 }}
+          BYTES: ${{ steps.packet.outputs.bytes }}
+          HEAD_SHA: ${{ steps.head_sha.outputs.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          ARTIFACT_FILE="artifacts/acceptance_packet_pr${PR_NUMBER}.txt"
+          ARTIFACT_NAME="acceptance_packet_pr${PR_NUMBER}"
+          CHECK_NAME="acceptance-packet"
+
+          # Save current PR body to file
+          gh pr view "$PR_NUMBER" --json body -q '.body' > /tmp/current_body.txt || echo "" > /tmp/current_body.txt
+
+          # Use Python for all the complex string handling
+          python3 << 'PYEOF'
+          import os
+          import re
+
+          pr_number = os.environ['PR_NUMBER']
+          sha256 = os.environ['SHA256']
+          bytes_size = os.environ['BYTES']
+          head_sha = os.environ['HEAD_SHA']
+          run_url = os.environ['RUN_URL']
+          artifact_file = f"artifacts/acceptance_packet_pr{pr_number}.txt"
+          artifact_name = f"acceptance_packet_pr{pr_number}"
+          check_name = "acceptance-packet"
+
+          # Read current body
+          with open('/tmp/current_body.txt', 'r') as f:
+              current_body = f.read()
+
+          # Read packet content
+          with open(artifact_file, 'r') as f:
+              packet_content = f.read()
+
+          # Determine mode: FULL VERBATIM or CI ARTIFACT
+          pattern = r'<!-- ACCEPTANCE_PACKET_START -->.*?<!-- ACCEPTANCE_PACKET_END -->'
+          base_body = re.sub(pattern, '', current_body, flags=re.DOTALL).strip()
+
+          base_body_bytes = len(base_body.encode('utf-8'))
+          packet_content_bytes = len(packet_content.encode('utf-8'))
+          overhead_bytes = 200
+
+          full_verbatim_bytes = base_body_bytes + packet_content_bytes + overhead_bytes
+
+          print(f"Size check: base_body={base_body_bytes}B, packet={packet_content_bytes}B, total={full_verbatim_bytes}B")
+
+          use_full_verbatim = (
+              full_verbatim_bytes < 50000 and
+              packet_content_bytes < 45000 and
+              'diff --git' in packet_content
+          )
+
+          print(f"Mode: {'FULL VERBATIM' if use_full_verbatim else 'CI ARTIFACT'}")
+
+          if use_full_verbatim:
+              new_block = f'''<!-- ACCEPTANCE_PACKET_START -->
+          ```
+          {packet_content}
+          ```
+          <!-- ACCEPTANCE_PACKET_END -->'''
+          else:
+              new_block = f'''<!-- ACCEPTANCE_PACKET_START -->
+          == ACCEPTANCE PACKET: CI ARTIFACT ==
+          RUN_URL: {run_url}
+          ARTIFACT_NAME: {artifact_name}
+          SHA256: {sha256}
+          BYTES: {bytes_size}
+          CHECK_NAME: {check_name}
+          HEAD_SHA: {head_sha}
+          <!-- ACCEPTANCE_PACKET_END -->'''
+
+          start_marker = '<!-- ACCEPTANCE_PACKET_START -->'
+          end_marker = '<!-- ACCEPTANCE_PACKET_END -->'
+
+          if start_marker in current_body:
+              pattern = r'<!-- ACCEPTANCE_PACKET_START -->.*?<!-- ACCEPTANCE_PACKET_END -->'
+              new_body = re.sub(pattern, lambda m: new_block.strip(), current_body, flags=re.DOTALL)
+          else:
+              new_body = current_body + '\n\n' + new_block.strip()
+
+          if new_body.strip() == current_body.strip():
+              print("Body unchanged, skipping update")
+          else:
+              with open('/tmp/new_body.txt', 'w') as f:
+                  f.write(new_body)
+              print("Body will be updated")
+          PYEOF
+
+          # Apply update if new body was written
+          if [[ -f /tmp/new_body.txt ]]; then
+            gh pr edit "$PR_NUMBER" --body-file /tmp/new_body.txt
+            echo "PR body updated with acceptance packet"
+          else
+            echo "PR body unchanged, no update needed"
+          fi
+
+      - name: Fail if packet failed
+        if: steps.packet.outputs.packet_exit != '0'
+        run: |
+          echo "Acceptance packet failed with exit code ${{ steps.packet.outputs.packet_exit }}"
+          exit 1

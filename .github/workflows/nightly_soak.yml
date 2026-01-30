@@ -1,0 +1,68 @@
+name: Nightly Soak
+
+on:
+  schedule:
+    # Run daily at 03:00 UTC
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      baseline_duration:
+        description: 'Baseline soak duration (seconds)'
+        required: false
+        default: '300'
+      overload_duration:
+        description: 'Overload soak duration (seconds)'
+        required: false
+        default: '180'
+
+jobs:
+  soak-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install
+        run: pip install -e ".[dev]"
+
+      - name: Baseline soak test
+        env:
+          ALLOW_FAULTS: "1"
+        run: |
+          DURATION="${{ github.event.inputs.baseline_duration || '300' }}"
+          python -m scripts.run_soak \
+            --symbols BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,DOGEUSDT \
+            --duration-s "$DURATION" \
+            --cadence-ms 1000 \
+            --mode baseline \
+            --output artifacts/soak_baseline.json
+
+      - name: Overload soak test
+        env:
+          ALLOW_FAULTS: "1"
+        run: |
+          DURATION="${{ github.event.inputs.overload_duration || '180' }}"
+          python -m scripts.run_soak \
+            --symbols BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT,DOGEUSDT,BNBUSDT,ADAUSDT,AVAXUSDT,DOTUSDT,MATICUSDT,LINKUSDT,LTCUSDT,ATOMUSDT,UNIUSDT,XLMUSDT,FILUSDT,AAVEUSDT,ALGOUSDT,VETUSDT,TRXUSDT \
+            --duration-s "$DURATION" \
+            --cadence-ms 500 \
+            --slow-consumer-lag-ms 200 \
+            --mode overload \
+            --output artifacts/soak_overload.json
+
+      - name: Validate thresholds
+        run: |
+          python scripts/check_soak_thresholds.py \
+            --baseline artifacts/soak_baseline.json \
+            --overload artifacts/soak_overload.json \
+            --thresholds monitoring/soak_thresholds.yml
+
+      - name: Upload soak summaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak-summaries-${{ github.run_number }}
+          path: artifacts/soak_*.json
+          retention-days: 30

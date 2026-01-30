@@ -1,0 +1,270 @@
+name: Proof Guard
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+  workflow_run:
+    workflows: ["Acceptance Packet"]
+    types: [completed]
+
+jobs:
+  proof-guard:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+      contents: read
+      checks: read
+    if: |
+      github.event_name == 'pull_request' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+    steps:
+      - name: Wait for acceptance-packet (pull_request events only)
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          echo "Waiting for acceptance-packet workflow to complete..."
+          MAX_WAIT=120
+          INTERVAL=10
+          ELAPSED=0
+
+          while [ $ELAPSED -lt $MAX_WAIT ]; do
+            RESPONSE=$(curl --fail-with-body -sS \
+              --connect-timeout 5 --max-time 20 \
+              --retry 3 --retry-delay 2 --retry-connrefused \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              "https://api.github.com/repos/$REPO/commits/$HEAD_SHA/check-runs" 2>&1) || {
+                echo "WARNING: curl failed: $RESPONSE"
+                sleep $INTERVAL
+                ELAPSED=$((ELAPSED + INTERVAL))
+                continue
+            }
+
+            STATUS=$(echo "$RESPONSE" | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          for cr in data.get('check_runs', []):
+              if cr.get('name') == 'acceptance-packet':
+                  status = cr.get('status')
+                  conclusion = cr.get('conclusion')
+                  if status == 'completed':
+                      print(f'completed:{conclusion}')
+                  else:
+                      print(f'running:{status}')
+                  sys.exit(0)
+          print('not_found')
+          ")
+
+            echo "acceptance-packet status: $STATUS"
+
+            if [[ "$STATUS" == completed:* ]]; then
+              echo "acceptance-packet completed, proceeding with proof-guard validation"
+              break
+            fi
+
+            if [[ "$STATUS" == "not_found" ]] && [ $ELAPSED -gt 30 ]; then
+              echo "WARNING: acceptance-packet check-run not found after 30s, proceeding anyway"
+              break
+            fi
+
+            sleep $INTERVAL
+            ELAPSED=$((ELAPSED + INTERVAL))
+          done
+
+          if [ $ELAPSED -ge $MAX_WAIT ]; then
+            echo "WARNING: Timed out waiting for acceptance-packet, proceeding with validation"
+          fi
+
+      - name: Get PR number for workflow_run events
+        if: github.event_name == 'workflow_run'
+        id: get_pr
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          RESPONSE=$(curl --fail-with-body -sS \
+            --connect-timeout 5 --max-time 20 \
+            --retry 3 --retry-delay 2 --retry-connrefused \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/$REPO/actions/runs/$RUN_ID" 2>&1) || {
+              echo "WARNING: curl failed to fetch workflow run: $RESPONSE"
+              echo "pr_number=" >> "$GITHUB_OUTPUT"
+              exit 0
+          }
+
+          PR_NUMBER=$(echo "$RESPONSE" | python3 -c "
+          import sys, json
+          data = json.load(sys.stdin)
+          prs = data.get('pull_requests', [])
+          if prs:
+              print(prs[0].get('number', ''))
+          else:
+              print('')
+          ")
+
+          if [ -z "$PR_NUMBER" ]; then
+            echo "WARNING: No PR associated with workflow run $RUN_ID, skipping validation"
+            echo "pr_number=" >> "$GITHUB_OUTPUT"
+          else
+            echo "INFO: Found PR #$PR_NUMBER for workflow run $RUN_ID"
+            echo "pr_number=$PR_NUMBER" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Early exit if no PR to validate (workflow_run)
+        if: github.event_name == 'workflow_run' && steps.get_pr.outputs.pr_number == ''
+        run: |
+          echo "INFO: No PR number found for workflow_run event, nothing to validate"
+          exit 0
+
+      - name: Validate PR body has required proof bundle markers
+        if: github.event_name == 'pull_request' || (github.event_name == 'workflow_run' && steps.get_pr.outputs.pr_number != '')
+        env:
+          GITHUB_EVENT_PATH: ${{ github.event_path }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WORKFLOW_RUN_PR_NUMBER: ${{ steps.get_pr.outputs.pr_number }}
+        run: |
+          python - << 'PY'
+          import json, os, re, sys, urllib.request
+
+          with open(os.environ["GITHUB_EVENT_PATH"], "r", encoding="utf-8") as f:
+            event = json.load(f)
+
+          pr = event.get("pull_request") or {}
+          number = pr.get("number")
+          head_sha = pr.get("head", {}).get("sha", "")
+          repo = (event.get("repository") or {}).get("full_name")
+          token = os.environ.get("GITHUB_TOKEN", "")
+
+          workflow_run_pr = os.environ.get("WORKFLOW_RUN_PR_NUMBER", "")
+          if workflow_run_pr and not number:
+            number = int(workflow_run_pr)
+            print(f"INFO: Using PR number from workflow_run event: {number}")
+
+          def gh_get(url: str):
+            req = urllib.request.Request(url)
+            req.add_header("Accept", "application/vnd.github+json")
+            if token:
+              req.add_header("Authorization", f"Bearer {token}")
+            with urllib.request.urlopen(req) as r:
+              return json.loads(r.read().decode("utf-8"))
+
+          if number and repo:
+            try:
+              pr_data = gh_get(f"https://api.github.com/repos/{repo}/pulls/{number}")
+              body = (pr_data.get("body") or "").strip()
+              head_sha = pr_data.get("head", {}).get("sha", head_sha)
+              print(f"INFO: Fetched PR body from API (bytes: {len(body.encode('utf-8'))})")
+            except Exception as e:
+              fallback_body = (pr.get("body") or "").strip().replace("\r\n", "\n")
+              has_pending = "== ACCEPTANCE PACKET: PENDING ==" in fallback_body
+              has_proof_markers = ("== ACCEPTANCE PACKET: CI ARTIFACT ==" in fallback_body or
+                                   "== ACCEPTANCE PACKET: IDENTITY ==" in fallback_body)
+              if has_pending or not has_proof_markers:
+                print(f"ERROR: API fetch failed and payload body is not valid proof: {e}")
+                sys.exit(1)
+              print(f"WARNING: API fetch failed ({e}), using payload body")
+              body = fallback_body
+          else:
+            body = (pr.get("body") or "").strip()
+
+          body = body.replace("\r\n", "\n")
+
+          if not number or not repo:
+            print("ERROR: Cannot determine PR number or repository from event payload.")
+            sys.exit(1)
+
+          if not body:
+            print("ERROR: PR description is empty. Proof bundle is REQUIRED.")
+            sys.exit(1)
+
+          # Check for PENDING marker
+          pending_pattern = r'^== ACCEPTANCE PACKET: PENDING ==\s*$'
+          if re.search(pending_pattern, body, re.MULTILINE):
+            print("ERROR: PR body still has PENDING marker - no proof yet.")
+            print("Wait for Acceptance Packet workflow to complete.")
+            sys.exit(1)
+
+          # CI ARTIFACT mode
+          ci_artifact_pattern = r'^== ACCEPTANCE PACKET: CI ARTIFACT ==\s*$'
+          is_ci_artifact_mode = bool(re.search(ci_artifact_pattern, body, re.MULTILINE))
+
+          if is_ci_artifact_mode:
+            print("INFO: CI ARTIFACT mode detected, validating via check-run API...")
+            ci_artifact_fields = {}
+            required_ci_fields = ["RUN_URL", "ARTIFACT_NAME", "SHA256", "BYTES", "CHECK_NAME", "HEAD_SHA"]
+
+            for line in body.split("\n"):
+              for field in required_ci_fields:
+                if line.strip().startswith(f"{field}:"):
+                  ci_artifact_fields[field] = line.split(":", 1)[1].strip()
+
+            missing_fields = [f for f in required_ci_fields if f not in ci_artifact_fields]
+            if missing_fields:
+              print(f"ERROR: CI ARTIFACT mode missing required fields: {missing_fields}")
+              sys.exit(1)
+
+            artifact_head_sha = ci_artifact_fields["HEAD_SHA"]
+            check_name = ci_artifact_fields["CHECK_NAME"]
+
+            try:
+              check_runs_url = f"https://api.github.com/repos/{repo}/commits/{artifact_head_sha}/check-runs"
+              check_runs_response = gh_get(check_runs_url)
+              check_runs = check_runs_response.get("check_runs", [])
+
+              matching_check = None
+              for cr in check_runs:
+                if cr.get("name") == check_name:
+                  matching_check = cr
+                  break
+
+              if not matching_check:
+                print(f"ERROR: No check-run named '{check_name}' found for commit {artifact_head_sha}")
+                sys.exit(1)
+
+              conclusion = matching_check.get("conclusion")
+              if conclusion != "success":
+                print(f"ERROR: Check-run '{check_name}' has conclusion '{conclusion}', expected 'success'")
+                sys.exit(1)
+
+              print(f"OK: CI ARTIFACT mode validated. Check-run '{check_name}' passed for {artifact_head_sha[:8]}")
+
+            except urllib.error.HTTPError as e:
+              print(f"ERROR: Failed to query check-runs API: {e}")
+              sys.exit(1)
+
+          else:
+            # FULL VERBATIM mode
+            acceptance_packet_markers = [
+              "== ACCEPTANCE PACKET: IDENTITY ==",
+              "== ACCEPTANCE PACKET: CI ==",
+              "== ACCEPTANCE PACKET: GATES ==",
+              "== ACCEPTANCE PACKET: PR DIFF ==",
+              "== ACCEPTANCE PACKET: END",
+            ]
+
+            if "== ACCEPTANCE PACKET:" not in body:
+              print("ERROR: PR body must include verbatim acceptance packet output.")
+              sys.exit(1)
+
+            missing = [m for m in acceptance_packet_markers if m not in body]
+            if missing:
+              print(f"ERROR: Missing required markers in PR body:")
+              for m in missing:
+                print(f" - {m}")
+              sys.exit(1)
+
+            if "diff --git" not in body:
+              print("ERROR: Acceptance packet must include full PR diff.")
+              sys.exit(1)
+
+            print(f"OK: FULL VERBATIM mode validated.")
+
+          mode_desc = "CI ARTIFACT" if is_ci_artifact_mode else "FULL VERBATIM"
+          print(f"OK: Proof bundle requirements satisfied (mode: {mode_desc}).")
+          PY
