@@ -2,6 +2,8 @@
 
 Цель: фиксировать **что реально работает сейчас** (а не что хотелось бы). Обновлять в каждом PR, если изменилось.
 
+Next steps and progress tracker: `docs/ROADMAP.md`.
+
 ## Works now
 - `grinder --help` / `grinder-paper --help` / `grinder-backtest --help` — CLI entrypoints работают.
 - `python -m scripts.run_live` поднимает `/healthz` и `/metrics`.

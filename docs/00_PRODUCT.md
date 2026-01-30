@@ -7,6 +7,9 @@
 > **Version**: 1.0.0-enterprise
 > **Status**: Production-ready specification
 
+> **Implementation status is tracked in:** `docs/STATE.md`
+> **Plan + progress is tracked in:** `docs/ROADMAP.md`
+
 ---
 
 ## 0.1 Mission Statement
