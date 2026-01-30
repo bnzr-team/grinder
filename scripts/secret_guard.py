@@ -26,31 +26,24 @@ SECRET_PATTERNS = [
     # API Keys
     (r"(?i)api[_-]?key['\"]?\s*[:=]\s*['\"]?([a-zA-Z0-9]{20,})", "API_KEY"),
     (r"(?i)apikey['\"]?\s*[:=]\s*['\"]?([a-zA-Z0-9]{20,})", "API_KEY"),
-
     # API Secrets
     (r"(?i)api[_-]?secret['\"]?\s*[:=]\s*['\"]?([a-zA-Z0-9]{20,})", "API_SECRET"),
     (r"(?i)secret[_-]?key['\"]?\s*[:=]\s*['\"]?([a-zA-Z0-9]{20,})", "SECRET_KEY"),
-
     # AWS
     (r"AKIA[0-9A-Z]{16}", "AWS_ACCESS_KEY"),
     (r"(?i)aws[_-]?secret['\"]?\s*[:=]\s*['\"]?([a-zA-Z0-9/+=]{40})", "AWS_SECRET"),
-
     # Private Keys
     (r"-----BEGIN (RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----", "PRIVATE_KEY"),
     (r"-----BEGIN PGP PRIVATE KEY BLOCK-----", "PGP_PRIVATE_KEY"),
-
     # Tokens
     (r"(?i)bearer\s+[a-zA-Z0-9\-_.]+", "BEARER_TOKEN"),
     (r"ghp_[a-zA-Z0-9]{36}", "GITHUB_TOKEN"),
     (r"gho_[a-zA-Z0-9]{36}", "GITHUB_OAUTH"),
     (r"github_pat_[a-zA-Z0-9]{22}_[a-zA-Z0-9]{59}", "GITHUB_PAT"),
-
     # Database URLs
     (r"(?i)(postgres|mysql|mongodb)://[^:]+:[^@]+@", "DATABASE_URL"),
-
     # Generic passwords
     (r"(?i)password['\"]?\s*[:=]\s*['\"]([^'\"]{8,})['\"]", "PASSWORD"),
-
     # Binance specific
     (r"[a-zA-Z0-9]{64}", "POSSIBLE_BINANCE_SECRET"),  # Only flag if near api/secret keyword
 ]
@@ -102,7 +95,7 @@ def is_false_positive(match: str) -> bool:
 
 def scan_file(file_path: Path) -> list[SecretMatch]:
     """Scan a file for secrets."""
-    matches = []
+    matches: list[SecretMatch] = []
 
     try:
         content = file_path.read_text(encoding="utf-8", errors="ignore")
@@ -119,17 +112,20 @@ def scan_file(file_path: Path) -> list[SecretMatch]:
                     continue
 
                 # For generic patterns, require context
-                if pattern_name == "POSSIBLE_BINANCE_SECRET":
-                    # Only flag if near api/secret keyword
-                    if not re.search(r"(?i)(api|secret|key)", line):
-                        continue
+                # Only flag POSSIBLE_BINANCE_SECRET if near api/secret keyword
+                if pattern_name == "POSSIBLE_BINANCE_SECRET" and not re.search(
+                    r"(?i)(api|secret|key)", line
+                ):
+                    continue
 
-                matches.append(SecretMatch(
-                    file=file_path,
-                    line_num=line_num,
-                    pattern_name=pattern_name,
-                    match=matched_text[:50] + "..." if len(matched_text) > 50 else matched_text
-                ))
+                matches.append(
+                    SecretMatch(
+                        file=file_path,
+                        line_num=line_num,
+                        pattern_name=pattern_name,
+                        match=matched_text[:50] + "..." if len(matched_text) > 50 else matched_text,
+                    )
+                )
 
     return matches
 
@@ -149,10 +145,10 @@ def scan_directory(root: Path, verbose: bool = False) -> list[SecretMatch]:
     return all_matches
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Scan for secrets in codebase")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose output")
-    parser.add_argument("--path", type=Path, default=Path("."), help="Path to scan")
+    parser.add_argument("--path", type=Path, default=Path(), help="Path to scan")
     args = parser.parse_args()
 
     print(f"Scanning {args.path.absolute()} for secrets...")

@@ -9,7 +9,6 @@ Usage:
 
 import argparse
 import hashlib
-import json
 import subprocess
 import sys
 import tempfile
@@ -21,14 +20,11 @@ def run_replay(fixture_dir: Path, run_id: int) -> str:
     print(f"\n--- Replay run #{run_id} ---")
 
     result = subprocess.run(
-        [
-            sys.executable, "-m", "scripts.run_replay",
-            "--fixture", str(fixture_dir),
-            "-v"
-        ],
+        [sys.executable, "-m", "scripts.run_replay", "--fixture", str(fixture_dir), "-v"],
         capture_output=True,
         text=True,
-        cwd=Path(__file__).parent.parent
+        cwd=Path(__file__).parent.parent,
+        check=False,
     )
 
     print(result.stdout)
@@ -47,13 +43,13 @@ def run_replay(fixture_dir: Path, run_id: int) -> str:
     return hashlib.sha256(result.stdout.encode()).hexdigest()[:16]
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser(description="Verify replay determinism")
     parser.add_argument(
         "--fixture",
         type=Path,
         default=Path("tests/fixtures/sample_day"),
-        help="Fixture directory to replay"
+        help="Fixture directory to replay",
     )
     args = parser.parse_args()
 
@@ -66,14 +62,20 @@ def main():
         fixture_dir = Path(tempfile.mkdtemp())
         result = subprocess.run(
             [
-                sys.executable, "-m", "scripts.generate_fixture",
-                "--symbols", "BTCUSDT",
-                "--duration-s", "2",
-                "--out-dir", str(fixture_dir)
+                sys.executable,
+                "-m",
+                "scripts.generate_fixture",
+                "--symbols",
+                "BTCUSDT",
+                "--duration-s",
+                "2",
+                "--out-dir",
+                str(fixture_dir),
             ],
             capture_output=True,
             text=True,
-            cwd=Path(__file__).parent.parent
+            cwd=Path(__file__).parent.parent,
+            check=False,
         )
 
         if result.returncode != 0:
