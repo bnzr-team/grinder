@@ -94,9 +94,9 @@ grinder-backtest = "grinder.backtest.cli:main"
 grinder-paper = "grinder.paper.cli:main"
 
 [project.urls]
-Documentation = "https://github.com/grinder/grinder#readme"
-Repository = "https://github.com/grinder/grinder"
-Issues = "https://github.com/grinder/grinder/issues"
+Documentation = "https://github.com/bnzr-hub/grinder#readme"
+Repository = "https://github.com/bnzr-hub/grinder"
+Issues = "https://github.com/bnzr-hub/grinder/issues"
 
 # ============================================================================
 # Hatch Configuration
