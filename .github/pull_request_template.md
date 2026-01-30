@@ -1,46 +1,99 @@
-## Summary
-<!-- Brief description of changes (1-3 sentences) -->
+# PR Checklist (MUST)
 
-## Type of Change
-- [ ] Bug fix (non-breaking change that fixes an issue)
-- [ ] New feature (non-breaking change that adds functionality)
-- [ ] Breaking change (fix or feature that would cause existing functionality to change)
-- [ ] Performance improvement
-- [ ] Refactoring (no functional changes)
-- [ ] Documentation update
-- [ ] CI/CD or infrastructure change
+> **No Proof Bundle = no review.**  
+> Paste raw command outputs (not screenshots). If something is not applicable, explain why.
+
+---
+
+## What
+<!-- 1–5 bullets: what changed -->
+
+## Why
+<!-- The reason / problem being solved -->
 
 ## Changes
-<!-- List main changes -->
--
--
--
+<!-- Concrete list of code/docs/infra changes -->
+- 
+- 
+- 
 
-## Risk Assessment
-<!-- LOW / MEDIUM / HIGH with brief explanation -->
+## Risks
+**Risk level:** LOW / MEDIUM / HIGH  
+<!-- Explain impact radius + failure modes -->
 
-**Risk Level:** LOW / MEDIUM / HIGH
+## Rollback plan
+<!-- Exact steps to revert/disable -->
 
-**Rollback Plan:**
-<!-- How to revert if something goes wrong -->
+---
 
-## Testing
-<!-- How was this tested? -->
-- [ ] Unit tests added/updated
-- [ ] Integration tests added/updated
-- [ ] Backtest validation passed
-- [ ] Manual testing performed
+## Proof (required)
+Paste command output under each item.
 
-## Checklist
-- [ ] Code follows project style guidelines (ruff, mypy clean)
-- [ ] Self-review completed
-- [ ] Documentation updated (if applicable)
-- [ ] No new warnings introduced
-- [ ] Tests pass locally
-- [ ] Coverage maintained/improved
+- [ ] `PYTHONPATH=src python -m pytest -q`
+<details><summary>pytest output</summary>
 
-## Related Issues
-<!-- Link related issues: Closes #123, Fixes #456 -->
+```text
+
+```
+
+</details>
+
+- [ ] `ruff check .` and `ruff format --check .`
+<details><summary>ruff output</summary>
+
+```text
+
+```
+
+</details>
+
+- [ ] `python -m scripts.secret_guard --verbose` (required for docs/infra/config changes)
+<details><summary>secret_guard output</summary>
+
+```text
+
+```
+
+</details>
+
+- [ ] Replay determinism (required if touching policy/risk/execution/fixtures):
+  - `python -m scripts.verify_replay_determinism`
+<details><summary>determinism output</summary>
+
+```text
+
+```
+
+</details>
+
+- [ ] Docker/Compose (required if touching Docker/compose/monitoring):
+  - `docker build -t grinder:test .`
+  - `docker run --rm -p 9090:9090 grinder:test --duration-s 10 --metrics-port 9090`
+  - `curl -fsS http://localhost:9090/healthz`
+  - `curl -fsS http://localhost:9090/metrics | head`
+  - `docker compose up -d` (if compose changed)
+<details><summary>docker output</summary>
+
+```text
+
+```
+
+</details>
+
+---
+
+## SSOT updates (required when behavior/contracts change)
+Check what you updated.
+
+- [ ] `docs/STATE.md`
+- [ ] `docs/DECISIONS.md`
+- [ ] Other docs (list):
+  - 
+
+---
+
+## Notes for reviewer
+<!-- Anything that helps review quickly: tradeoffs, known gaps, follow-ups -->
 
 ---
 
