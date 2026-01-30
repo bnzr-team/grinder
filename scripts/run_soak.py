@@ -29,11 +29,11 @@ def _compute_metrics(symbols_count: int, cadence_ms: int, mode: str) -> dict[str
     order_latency_p99_ms = round(50.0 + 5.0 * load, 2)
 
     # Deterministic queue depth proxies
-    event_queue_depth_max = int(round(load * 5))
-    snapshot_queue_depth_max = int(round(load * 2))
+    event_queue_depth_max = round(load * 5)
+    snapshot_queue_depth_max = round(load * 2)
 
     # Drops/errors under high load (overload allows some)
-    events_dropped = max(0, int(round((load - 30) * 2)))
+    events_dropped = max(0, round((load - 30) * 2))
     errors_total = 0
 
     # Deterministic RSS proxy (MB)

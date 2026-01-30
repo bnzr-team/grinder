@@ -16,7 +16,7 @@ def main() -> None:
     parser.add_argument("--metrics-port", type=int, default=9090, help="Port for /healthz and /metrics")
     args = parser.parse_args()
 
-    from scripts.run_live import main as live_main  # type: ignore
+    from scripts.run_live import main as live_main  # type: ignore  # noqa: PLC0415
 
     old_argv = sys.argv
     try:
