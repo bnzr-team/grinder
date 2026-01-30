@@ -26,6 +26,14 @@
 
 ---
 
+## Milestone
+- [ ] None
+- [ ] M1 (Vertical Slice v0.1)
+- [ ] M2 (Beta v0.5)
+- [ ] M3 (Production v1.0)
+
+---
+
 ## Proof (required)
 Paste command output under each item.
 
