@@ -58,6 +58,9 @@ Last updated: 2026-01-31
 **Work items (recommended PR sequence)**
 - ✅ Adaptive Controller spec (docs-only): `docs/16_ADAPTIVE_GRID_CONTROLLER_SPEC.md` — merged 2026-01-31
 - ✅ PR-019: Paper Loop v0 + Gating (rate limit + risk gate) — merged 2026-01-31
+- ✅ PR-020: Gating metrics contract (GatingMetrics, labels, contract tests) — merged 2026-01-31
+- ✅ PR-021: Observability /metrics endpoint (gating metrics via HTTP) — merged 2026-01-31
+- ⏳ PR-022: Allowed-orders fixture + fill coverage — ready for review
 - ⬜ Adaptive Controller implementation (regime + step + reset)
 - ⬜ Top-K prefilter working from fixtures/live data
 - ⬜ Toxicity gating enabled (`docs/06_TOXICITY_SPEC.md`)
@@ -187,3 +190,44 @@ This is the checklist that must be satisfied for each PR in M1 to be considered 
 - `ruff check .` + `ruff format --check .`
 - `mypy .`
 - `python3 scripts/check_unicode.py --all`
+
+---
+
+### PR-020 — Gating metrics contract
+**DoD**
+- `GatingMetrics` class with `record_allowed()`, `record_blocked()`, `to_prometheus_lines()`
+- `GateName` and `GateReason` enums with stable values for metric labels
+- Contract tests ensuring label values don't change
+- Update `STATE.md` (gating metrics documented)
+
+**Proof**
+- `pytest tests/unit/test_gating_contracts.py`
+- Verify metric format: `grinder_gating_allowed_total{gate="..."}`, `grinder_gating_blocked_total{gate="...",reason="..."}`
+
+---
+
+### PR-021 — Observability /metrics endpoint
+**DoD**
+- `/metrics` endpoint exports system metrics + gating metrics in Prometheus format
+- `MetricsBuilder` consolidates all metrics
+- Contract tests for metric names and labels
+- Update `STATE.md` (observability documented)
+
+**Proof**
+- `curl localhost:9090/metrics` shows gating metrics
+- `pytest tests/unit/test_observability.py`
+
+---
+
+### PR-022 — Allowed-orders fixture + fill coverage
+**DoD**
+- New fixture `tests/fixtures/sample_day_allowed/` with events that pass prefilter + gating
+- At least 1 order placed (not blocked)
+- Canonical digest locked in config.json and tests
+- Determinism verified across runs
+- Update `STATE.md` and `ROADMAP.md`
+
+**Proof**
+- `grinder paper --fixture tests/fixtures/sample_day_allowed` → orders_placed > 0
+- Digest matches `f78930356488da3e`
+- `pytest tests/unit/test_paper.py::TestAllowedOrdersFixture` passes

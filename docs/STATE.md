@@ -10,13 +10,19 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - `/healthz`: JSON health check (status, uptime)
   - `/metrics`: Prometheus format including system metrics + gating metrics
 - `python -m scripts.run_soak` генерирует synthetic soak metrics JSON.
+- **Test fixtures** (`tests/fixtures/`):
+  - `sample_day/`: BTC/ETH prices, orders blocked by gating (notional too high)
+    - Replay digest: `453ebd0f655e4920`
+    - Paper digest: `55921a9bd855e1bd`
+  - `sample_day_allowed/`: Low-price assets (~$1), orders pass prefilter + gating
+    - Replay digest: `03253d84cd2604e7`
+    - Paper digest: `f78930356488da3e`
+  - Fixture format: SNAPSHOT events (see ADR-006 for migration from BOOK_TICKER)
 - **End-to-end replay**:
   - CLI: `grinder replay --fixture <path> [-v] [--out <path>]`
   - Script: `python -m scripts.run_replay --fixture <path> [-v] [--out <path>]`
   - Determinism check: `python -m scripts.verify_replay_determinism --fixture <path>`
   - Output format: `Replay completed. Events processed: N\nOutput digest: <16-char-hex>`
-  - Expected digest for `tests/fixtures/sample_day`: `453ebd0f655e4920`
-  - Fixture format: SNAPSHOT events (see ADR-006 for migration from BOOK_TICKER)
 - `python -m scripts.secret_guard` проверяет repo на утечки секретов.
 - `python scripts/check_unicode.py` сканирует docs на опасный Unicode (bidi, zero-width). См. ADR-005.
 - Docker build + healthcheck работают (Dockerfile использует `urllib.request` вместо `curl`).
