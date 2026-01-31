@@ -26,6 +26,7 @@ from grinder.paper import SCHEMA_VERSION, PaperEngine
 FIXTURES = [
     Path("tests/fixtures/sample_day"),
     Path("tests/fixtures/sample_day_allowed"),
+    Path("tests/fixtures/sample_day_toxic"),
 ]
 
 # Report schema version

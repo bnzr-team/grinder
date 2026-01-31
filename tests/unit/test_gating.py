@@ -1,8 +1,9 @@
-"""Tests for gating module (rate limiter + risk gate).
+"""Tests for gating module (rate limiter + risk gate + toxicity gate).
 
 Tests:
 - RateLimiter: rate limit enforcement, cooldown, recording
 - RiskGate: notional limits, daily loss limit, recording
+- ToxicityGate: spread spike, price impact detection
 - GatingResult: serialization, factory methods
 """
 
@@ -10,7 +11,7 @@ from __future__ import annotations
 
 from decimal import Decimal
 
-from grinder.gating import GateReason, GatingResult, RateLimiter, RiskGate
+from grinder.gating import GateReason, GatingResult, RateLimiter, RiskGate, ToxicityGate
 
 
 class TestGatingResult:
@@ -265,3 +266,114 @@ class TestRiskGate:
         gate.update_unrealized_pnl(Decimal("-5"))
 
         assert gate.total_pnl == Decimal("15")  # 20 - 5
+
+
+class TestToxicityGate:
+    """Test ToxicityGate."""
+
+    def test_allow_within_spread_limit(self) -> None:
+        """Test that normal spread is allowed."""
+        gate = ToxicityGate(max_spread_bps=50.0)
+        result = gate.check(ts=1000, symbol="BTCUSDT", spread_bps=30.0, mid_price=Decimal("100"))
+        assert result.allowed is True
+        assert result.reason == GateReason.PASS
+
+    def test_block_spread_spike(self) -> None:
+        """Test that spread exceeding threshold is blocked."""
+        gate = ToxicityGate(max_spread_bps=50.0)
+        result = gate.check(ts=1000, symbol="BTCUSDT", spread_bps=75.0, mid_price=Decimal("100"))
+        assert result.allowed is False
+        assert result.reason == GateReason.SPREAD_SPIKE
+        assert result.details is not None
+        assert result.details["spread_bps"] == 75.0
+        assert result.details["max_spread_bps"] == 50.0
+        assert result.details["excess_bps"] == 25.0
+
+    def test_allow_within_price_impact_limit(self) -> None:
+        """Test that small price moves are allowed."""
+        gate = ToxicityGate(max_price_impact_bps=100.0, lookback_window_ms=5000)
+
+        # Record initial price
+        gate.record_price(ts=1000, symbol="BTCUSDT", mid_price=Decimal("100"))
+
+        # Check with small price move (0.5% = 50 bps)
+        result = gate.check(ts=2000, symbol="BTCUSDT", spread_bps=10.0, mid_price=Decimal("100.5"))
+        assert result.allowed is True
+        assert result.reason == GateReason.PASS
+
+    def test_block_price_impact_high(self) -> None:
+        """Test that large price moves are blocked."""
+        gate = ToxicityGate(max_price_impact_bps=100.0, lookback_window_ms=5000)
+
+        # Record initial price
+        gate.record_price(ts=1000, symbol="BTCUSDT", mid_price=Decimal("100"))
+
+        # Check with large price move (2% = 200 bps)
+        result = gate.check(ts=2000, symbol="BTCUSDT", spread_bps=10.0, mid_price=Decimal("102"))
+        assert result.allowed is False
+        assert result.reason == GateReason.PRICE_IMPACT_HIGH
+        assert result.details is not None
+        assert result.details["price_change_bps"] == 200.0
+        assert result.details["max_price_impact_bps"] == 100.0
+
+    def test_price_impact_window_expiry(self) -> None:
+        """Test that old prices outside window are ignored."""
+        gate = ToxicityGate(max_price_impact_bps=100.0, lookback_window_ms=5000)
+
+        # Record price at t=0
+        gate.record_price(ts=0, symbol="BTCUSDT", mid_price=Decimal("100"))
+
+        # At t=6000 (outside 5000ms window), old price should be ignored
+        # Even with 10% price move, should pass because no history in window
+        result = gate.check(ts=6000, symbol="BTCUSDT", spread_bps=10.0, mid_price=Decimal("110"))
+        assert result.allowed is True
+        assert result.reason == GateReason.PASS
+
+    def test_reset_clears_price_history(self) -> None:
+        """Test reset clears price history."""
+        gate = ToxicityGate(max_price_impact_bps=100.0)
+
+        gate.record_price(ts=1000, symbol="BTCUSDT", mid_price=Decimal("100"))
+        assert gate.prices_in_window("BTCUSDT") == 1
+
+        gate.reset()
+        assert gate.prices_in_window("BTCUSDT") == 0
+
+    def test_prices_in_window_method(self) -> None:
+        """Test prices_in_window method."""
+        gate = ToxicityGate()
+        assert gate.prices_in_window("BTCUSDT") == 0
+
+        gate.record_price(ts=1000, symbol="BTCUSDT", mid_price=Decimal("100"))
+        gate.record_price(ts=2000, symbol="BTCUSDT", mid_price=Decimal("101"))
+        assert gate.prices_in_window("BTCUSDT") == 2
+
+    def test_spread_check_takes_priority(self) -> None:
+        """Test that spread spike is checked before price impact."""
+        gate = ToxicityGate(max_spread_bps=50.0, max_price_impact_bps=100.0)
+
+        # Record price that would trigger price impact
+        gate.record_price(ts=1000, symbol="BTCUSDT", mid_price=Decimal("100"))
+
+        # Both spread and price impact exceed thresholds
+        # Should get SPREAD_SPIKE (checked first)
+        result = gate.check(ts=2000, symbol="BTCUSDT", spread_bps=100.0, mid_price=Decimal("110"))
+        assert result.allowed is False
+        assert result.reason == GateReason.SPREAD_SPIKE
+
+    def test_per_symbol_price_history(self) -> None:
+        """Test that price history is tracked per-symbol."""
+        gate = ToxicityGate(max_price_impact_bps=100.0, lookback_window_ms=5000)
+
+        # Record different prices for different symbols
+        gate.record_price(ts=1000, symbol="BTCUSDT", mid_price=Decimal("50000"))
+        gate.record_price(ts=1000, symbol="ETHUSDT", mid_price=Decimal("3000"))
+
+        # Check ETHUSDT - should compare against ETH's history, not BTC's
+        result = gate.check(ts=2000, symbol="ETHUSDT", spread_bps=10.0, mid_price=Decimal("3000"))
+        assert result.allowed is True  # No price change for ETH
+
+        # Large move in BTC should be detected
+        result = gate.check(ts=2000, symbol="BTCUSDT", spread_bps=10.0, mid_price=Decimal("51000"))
+        assert result.allowed is False
+        assert result.reason == GateReason.PRICE_IMPACT_HIGH

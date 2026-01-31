@@ -236,11 +236,11 @@ class TestFixtureRunCounts:
         report = run_backtest()
         assert report.fixtures_passed + report.fixtures_failed == report.fixtures_run
 
-    def test_runs_exactly_two_fixtures(self) -> None:
-        """Verify backtest runs exactly 2 registered fixtures."""
+    def test_runs_exactly_three_fixtures(self) -> None:
+        """Verify backtest runs exactly 3 registered fixtures."""
         report = run_backtest()
-        assert report.fixtures_run == 2
-        assert len(FIXTURES) == 2
+        assert report.fixtures_run == 3
+        assert len(FIXTURES) == 3
 
 
 class TestErrorHandling:

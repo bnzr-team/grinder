@@ -19,6 +19,7 @@ class GateName(Enum):
 
     RATE_LIMITER = "rate_limiter"
     RISK_GATE = "risk_gate"
+    TOXICITY_GATE = "toxicity_gate"
 
 
 class GateReason(Enum):
@@ -34,6 +35,9 @@ class GateReason(Enum):
     MAX_NOTIONAL_EXCEEDED = "MAX_NOTIONAL_EXCEEDED"
     DAILY_LOSS_LIMIT_EXCEEDED = "DAILY_LOSS_LIMIT_EXCEEDED"
     MAX_ORDERS_EXCEEDED = "MAX_ORDERS_EXCEEDED"
+    # Toxicity gate reasons (v0)
+    SPREAD_SPIKE = "SPREAD_SPIKE"
+    PRICE_IMPACT_HIGH = "PRICE_IMPACT_HIGH"
 
 
 # Canonical list of all gate names for contract testing
