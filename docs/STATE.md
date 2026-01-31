@@ -10,6 +10,7 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
 - `python -m scripts.run_soak` генерирует synthetic soak metrics JSON.
 - Replay utilities: `python -m scripts.run_replay` и `python -m scripts.verify_replay_determinism`.
 - `python -m scripts.secret_guard` проверяет repo на утечки секретов.
+- `python scripts/check_unicode.py` сканирует docs на опасный Unicode (bidi, zero-width). См. ADR-005.
 - Docker build + healthcheck работают (Dockerfile использует `urllib.request` вместо `curl`).
 - Grafana provisioning: `monitoring/grafana/provisioning/` содержит datasource + dashboard.
 - Branch protection на `main`: все PR требуют 5 зелёных checks.
