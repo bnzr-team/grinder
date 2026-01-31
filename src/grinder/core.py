@@ -59,3 +59,29 @@ class OrderState(Enum):
     CANCELLED = "CANCELLED"
     REJECTED = "REJECTED"
     EXPIRED = "EXPIRED"
+
+
+class MarketRegime(Enum):
+    """Market regime inferred by Adaptive Controller.
+
+    See: docs/16_ADAPTIVE_GRID_CONTROLLER_SPEC.md section 16.4.1
+    """
+
+    RANGE = "RANGE"
+    TREND_UP = "TREND_UP"
+    TREND_DOWN = "TREND_DOWN"
+    VOL_SHOCK = "VOL_SHOCK"
+    THIN_BOOK = "THIN_BOOK"
+    TOXIC = "TOXIC"
+    PAUSED = "PAUSED"
+
+
+class ResetAction(Enum):
+    """Auto-reset action requested by controller.
+
+    See: docs/16_ADAPTIVE_GRID_CONTROLLER_SPEC.md section 16.8
+    """
+
+    NONE = "NONE"  # No reset needed
+    SOFT = "SOFT"  # Cancel only non-conforming orders
+    HARD = "HARD"  # Cancel all orders, rebuild grid
