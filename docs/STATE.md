@@ -8,7 +8,7 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
 - `grinder --help` / `grinder-paper --help` / `grinder-backtest --help` — CLI entrypoints работают.
 - `python -m scripts.run_live` поднимает `/healthz` и `/metrics`.
 - `python -m scripts.run_soak` генерирует synthetic soak metrics JSON.
-- **End-to-end replay** (PR-018 pending):
+- **End-to-end replay**:
   - CLI: `grinder replay --fixture <path> [-v] [--out <path>]`
   - Script: `python -m scripts.run_replay --fixture <path> [-v] [--out <path>]`
   - Determinism check: `python -m scripts.verify_replay_determinism --fixture <path>`
@@ -24,7 +24,7 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
 - **Prefilter v0** (`src/grinder/prefilter/`): rule-based hard gates returning ALLOW/BLOCK + reason. Limitations: only hard gates, no scoring/ranking/top-K, no stability controls.
 - **GridPolicy v0** (`src/grinder/policies/grid/static.py`): StaticGridPolicy producing symmetric bilateral grids. GridPlan includes: regime, width_bps, reset_action, reason_codes. Limitations: no adaptive step, no inventory skew, no regime switching.
 - **Execution stub v0** (`src/grinder/execution/`): ExchangePort protocol + NoOpExchangePort stub, ExecutionEngine with reconcile logic (PAUSE/EMERGENCY -> cancel all, HARD reset -> rebuild grid, SOFT reset -> replace non-conforming, NONE -> reconcile). Deterministic order ID generation. ExecutionMetrics for observability. Limitations: no live exchange writes, no rate limiting, no error recovery.
-- **Replay engine v0** (`src/grinder/replay/`, PR-018 pending):
+- **Replay engine v0** (`src/grinder/replay/`):
   - **Responsibilities:** Load fixture -> parse SNAPSHOT events -> apply prefilter gates -> evaluate policy -> execute via ExecutionEngine -> compute deterministic digest
   - **Components:** `ReplayEngine` (orchestrator), `ReplayOutput` (per-tick output), `ReplayResult` (full run result)
   - **Pipeline:** `Snapshot` -> `hard_filter()` -> `StaticGridPolicy.evaluate()` -> `ExecutionEngine.evaluate()` -> `ReplayOutput`
