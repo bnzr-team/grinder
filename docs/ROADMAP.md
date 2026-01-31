@@ -55,11 +55,12 @@ Last updated: 2026-01-31
 ### M2 — Beta v0.5
 **Goal:** paper loop with gating + observability maturity
 
+**Work items (recommended PR sequence)**
 - ✅ Adaptive Controller spec (docs-only): `docs/16_ADAPTIVE_GRID_CONTROLLER_SPEC.md` — merged 2026-01-31
+- ⏳ PR-019: Paper Loop v0 + Gating (rate limit + risk gate) — ready for review 2026-01-31
 - ⬜ Adaptive Controller implementation (regime + step + reset)
 - ⬜ Top-K prefilter working from fixtures/live data
 - ⬜ Toxicity gating enabled (`docs/06_TOXICITY_SPEC.md`)
-- ⬜ Paper loop validated (no exchange writes)
 - ⬜ Backtest protocol applied to at least 2 fixtures
 - ⬜ Dashboards and alerts usable for daily ops
 
@@ -165,3 +166,24 @@ This is the checklist that must be satisfied for each PR in M1 to be considered 
 **Proof**
 - `pytest`, `mypy`
 - `python -m scripts.verify_replay_determinism --fixture ...` (stable digest)
+
+---
+
+## 5) Definition of Done (DoD) for M2 PRs
+
+### PR-019 — Paper Loop v0 + Gating
+**DoD**
+- PaperExecutionPort/PaperEngine: execution without real orders
+- Gating v0: at least 2 gates (rate limit + risk limit)
+- CLI: `grinder paper --fixture <path>` runs paper trading on fixture
+- Unit tests for gates (allow/block paths)
+- E2E test for paper loop with deterministic digest
+- Update `STATE.md` (paper loop + gating implemented)
+
+**Proof**
+- `pip install -e .`
+- `grinder --help` + `grinder paper --help`
+- `PYTHONPATH=src python3 -m pytest -q`
+- `ruff check .` + `ruff format --check .`
+- `mypy .`
+- `python3 scripts/check_unicode.py --all`

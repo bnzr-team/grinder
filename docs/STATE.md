@@ -31,6 +31,18 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - **Digest:** SHA256 of JSON-serialized outputs, truncated to 16 hex chars
   - **Expected digest:** `453ebd0f655e4920` for `tests/fixtures/sample_day`
   - **Limitations:** single policy (StaticGridPolicy), no custom feature injection, volume/OI assumed sufficient for replay
+- **Gating v0** (`src/grinder/gating/`):
+  - `RateLimiter`: sliding window rate limit (max orders/minute) + cooldown between orders
+  - `RiskGate`: per-symbol and total notional limits + daily loss limit
+  - `GatingResult`: standardized result type with allowed/blocked + reason + details
+  - **Limitations:** no circuit breakers, no position-level checks, PnL tracking is simulated
+- **Paper trading v0** (`src/grinder/paper/`):
+  - CLI: `grinder paper --fixture <path> [-v] [--out <path>]`
+  - **Pipeline:** `Snapshot` -> `hard_filter()` -> `gating check` -> `StaticGridPolicy.evaluate()` -> `ExecutionEngine.evaluate()` -> `PaperOutput`
+  - **Gating gates:** rate limit (orders/minute, cooldown) + risk limits (notional, daily loss)
+  - Output format: `Paper trading completed. Events processed: N\nOutput digest: <16-char-hex>`
+  - Deterministic digest for fixture-based runs
+  - **Limitations:** no live feed, no real orders, simulated fills
 
 ## Partially implemented
 - Структура пакета `src/grinder/*` (core, protocols/interfaces) — каркас.
