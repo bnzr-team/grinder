@@ -35,6 +35,13 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - `RateLimiter`: sliding window rate limit (max orders/minute) + cooldown between orders
   - `RiskGate`: per-symbol and total notional limits + daily loss limit
   - `GatingResult`: standardized result type with allowed/blocked + reason + details
+  - `GateName`: stable enum for gate identifiers (metric labels)
+  - `GateReason`: stable enum for block reasons (metric labels)
+  - **Metrics** (`GatingMetrics`):
+    - `grinder_gating_allowed_total{gate=...}`: counter of allowed decisions
+    - `grinder_gating_blocked_total{gate=...,reason=...}`: counter of blocked decisions
+    - Export: `to_prometheus_lines()` for /metrics endpoint
+  - **Contract tests**: `tests/unit/test_gating_contracts.py` fails if reason codes or metric labels change
   - **Limitations:** no circuit breakers, no position-level checks, PnL tracking is simulated
 - **Paper trading v0** (`src/grinder/paper/`):
   - CLI: `grinder paper --fixture <path> [-v] [--out <path>]`
