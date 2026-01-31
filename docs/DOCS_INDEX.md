@@ -38,6 +38,7 @@ Where to find information:
 - `docs/10_RISK_SPEC.md`
 - `docs/11_BACKTEST_PROTOCOL.md`
 - `docs/12_ML_SPEC.md`
+- `docs/16_ADAPTIVE_GRID_CONTROLLER_SPEC.md`
 - `docs/13_OBSERVABILITY.md`
 - `docs/14_GITHUB_WORKFLOW.md`
 

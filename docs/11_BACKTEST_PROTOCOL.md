@@ -621,3 +621,33 @@ class DeterministicBacktest:
             self._hash_result(result1) == self._hash_result(result2)
         )
 ```
+
+---
+
+## 11.10 Baselines for Adaptive Controller changes
+
+Any PR that changes **regime selection**, **adaptive step**, **auto-reset**, or **policy parameters** must include a baseline comparison.
+
+**Baseline A — Static Grid (control)**
+- fixed `spacing_bps`
+- fixed levels
+- no regime selection
+- `reset_action = NONE`
+
+**Baseline B — Adaptive Controller (treatment)**
+- regime selection enabled
+- adaptive `spacing_bps`
+- reset behavior enabled (SOFT/HARD)
+
+### Required metrics
+
+In addition to PnL/Sharpe/Drawdown, report execution-quality metrics:
+- Fill rate (per side)
+- Cancel/replace rate (order churn)
+- Adverse selection proxy (e.g., mid-move after fill)
+- Slippage vs mid (bps)
+
+### Reporting format
+
+- `metrics.json` MUST include both baselines keyed by `baseline_id`.
+- If Baseline B improves PnL but degrades execution quality (churn/adverse selection), the PR must explain why it is acceptable.

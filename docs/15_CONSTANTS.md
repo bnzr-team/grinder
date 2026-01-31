@@ -232,6 +232,51 @@ THROTTLE_SIZE_MULT = 0.5
 THROTTLE_LEVELS_DIV = 2
 ```
 
+
+### 3.7 Adaptive Grid Controller (planned)
+
+| Constant | Default | Range | Description |
+|----------|---------|-------|-------------|
+| `STEP_BASE_BPS` | 8.0 | 4-20 | Base grid step floor |
+| `STEP_MIN_BPS` | 4.0 | 2-10 | Hard min step |
+| `STEP_MAX_BPS` | 40.0 | 20-100 | Hard max step |
+| `STEP_VOL_MULT` | 100.0 | 50-200 | Convert NATR units to bps |
+| `STEP_SPREAD_MULT` | 1.0 | 0.5-2.0 | Spread contribution multiplier |
+| `STEP_EMA_ALPHA` | 0.2 | 0.05-0.5 | Smoothing factor for step |
+| `CENTER_DRIFT_BPS` | 15.0 | 5-50 | Center drift threshold |
+| `STEP_RESET_DELTA_BPS` | 6.0 | 2-20 | Step delta threshold for SOFT reset |
+| `REGIME_MIN_HOLD_TICKS` | 10 | 5-50 | Min ticks to hold regime |
+| `REGIME_SWITCH_COOLDOWN_TICKS` | 5 | 3-30 | Cooldown ticks after switch |
+| `TOX_PAUSE` | 60.0 | 50-80 | Tox score that forces pause/toxic regime |
+| `SPREAD_PAUSE_BPS` | 12.0 | 8-25 | Spread that forces thin book / pause |
+| `DEPTH_MIN_USD` | 250000 | 50k-1M | Top-5 depth min USD for normal ops |
+| `SHOCK_BPS` | 80.0 | 30-200 | 1m jump bps that triggers shock regime |
+| `TREND_SLOPE_TH` | 0.0005 | 0.0002-0.002 | Trend slope threshold |
+
+```python
+# controller/constants.py  (planned)
+
+STEP_BASE_BPS = 8.0
+STEP_MIN_BPS = 4.0
+STEP_MAX_BPS = 40.0
+STEP_VOL_MULT = 100.0
+STEP_SPREAD_MULT = 1.0
+STEP_EMA_ALPHA = 0.2
+
+CENTER_DRIFT_BPS = 15.0
+STEP_RESET_DELTA_BPS = 6.0
+
+REGIME_MIN_HOLD_TICKS = 10
+REGIME_SWITCH_COOLDOWN_TICKS = 5
+
+TOX_PAUSE = 60.0
+SPREAD_PAUSE_BPS = 12.0
+DEPTH_MIN_USD = 250_000
+
+SHOCK_BPS = 80.0
+TREND_SLOPE_TH = 0.0005
+```
+
 ---
 
 ## 4. Risk Management Constants

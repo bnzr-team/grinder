@@ -52,6 +52,8 @@ Last updated: 2026-01-31
 
 ### M2 — Beta v0.5
 **Goal:** paper loop with gating + observability maturity
+
+- ⬜ Adaptive Controller spec (regime + adaptive step + auto-reset) implemented: `docs/16_ADAPTIVE_GRID_CONTROLLER_SPEC.md`
 - ⬜ Top-K prefilter working from fixtures/live data
 - ⬜ Toxicity gating enabled (`docs/06_TOXICITY_SPEC.md`)
 - ⬜ Paper loop validated (no exchange writes)
