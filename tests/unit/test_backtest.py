@@ -242,11 +242,11 @@ class TestFixtureRunCounts:
         report = run_backtest()
         assert report.fixtures_passed + report.fixtures_failed == report.fixtures_run
 
-    def test_runs_exactly_four_fixtures(self) -> None:
-        """Verify backtest runs exactly 4 registered fixtures."""
+    def test_runs_exactly_five_fixtures(self) -> None:
+        """Verify backtest runs exactly 5 registered fixtures."""
         report = run_backtest()
-        assert report.fixtures_run == 4
-        assert len(FIXTURES) == 4
+        assert report.fixtures_run == 5
+        assert len(FIXTURES) == 5
 
 
 class TestErrorHandling:
@@ -366,15 +366,17 @@ class TestControllerContract:
     When enabled, controller decisions are recorded for each symbol.
     """
 
-    def test_controller_disabled_by_default(self) -> None:
-        """Verify controller is disabled by default in backtest."""
+    def test_controller_respects_fixture_config(self) -> None:
+        """Verify controller_enabled is read from fixture config.json."""
         report = run_backtest()
 
         for result in report.results:
-            # Default backtest runs with controller disabled
-            # So controller_enabled should be False (if the field exists)
             result_dict = result.to_dict()
-            if "controller_enabled" in result_dict:
+            if "sample_day_controller" in result_dict["fixture_path"]:
+                # sample_day_controller has controller_enabled=true in config
+                assert result_dict["controller_enabled"] is True
+            else:
+                # Other fixtures don't have controller_enabled set, default is False
                 assert result_dict["controller_enabled"] is False
 
     def test_controller_fixture_canonical_digest(self) -> None:

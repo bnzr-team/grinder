@@ -8,5 +8,6 @@
     "TIGHTENUSDT": "TIGHTEN",
     "BASEUSDT": "BASE"
   },
-  "canonical_digest": "f3a0a321c39cc411"
+  "canonical_digest": "f3a0a321c39cc411",
+  "expected_paper_digest": "f3a0a321c39cc411"
 }
