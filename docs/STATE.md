@@ -14,6 +14,7 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
 - Grafana provisioning: `monitoring/grafana/provisioning/` содержит datasource + dashboard.
 - Branch protection на `main`: все PR требуют 5 зелёных checks.
 - **Domain contracts** (`src/grinder/contracts.py`): Snapshot, Position, PolicyContext, OrderIntent, Decision — typed, frozen, JSON-serializable. См. ADR-003.
+- **Prefilter v0** (`src/grinder/prefilter/`): rule-based hard gates returning ALLOW/BLOCK + reason. Limitations: only hard gates, no scoring/ranking/top-K, no stability controls.
 
 ## Partially implemented
 - Структура пакета `src/grinder/*` (core, protocols/interfaces) — каркас.
@@ -21,6 +22,7 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
 
 ## Known gaps / mismatches
 - Нет реальной торговой логики — только skeleton/stubs.
+- Adaptive Grid Controller (regime selection, adaptive step, auto-reset) — **not implemented**; see `docs/16_ADAPTIVE_GRID_CONTROLLER_SPEC.md` (Planned).
 - Нет интеграции с Binance API (только интерфейсы).
 - ML pipeline (`src/grinder/ml/`) — пустой placeholder.
 

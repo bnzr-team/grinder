@@ -126,6 +126,47 @@ toxicity_score = Gauge(
 )
 ```
 
+
+### Adaptive Controller Metrics (planned)
+
+```python
+regime_state = Gauge(
+    "grinder_regime",
+    "Current market regime (label holds the state)",
+    ["symbol", "regime"]
+)
+
+grid_step_bps = Gauge(
+    "grinder_grid_step_bps",
+    "Current grid step in bps",
+    ["symbol"]
+)
+
+grid_width_bps = Gauge(
+    "grinder_grid_width_bps",
+    "Current grid width in bps",
+    ["symbol"]
+)
+
+reset_total = Counter(
+    "grinder_reset_total",
+    "Total grid resets",
+    ["symbol", "type", "reason_code"]
+)
+
+gate_state = Gauge(
+    "grinder_gate_state",
+    "Gate state (0=OPEN,1=THROTTLE,2=PAUSE)",
+    ["symbol", "state"]
+)
+
+reason_code_total = Counter(
+    "grinder_reason_code_total",
+    "Reason code emissions",
+    ["code"]
+)
+```
+
 ### Custom Metrics
 
 ```python

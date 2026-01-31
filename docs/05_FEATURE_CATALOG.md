@@ -55,7 +55,11 @@ class FeatureSpec:
 | `wall_ask_dist` | L2 | depth | instant | 250ms | [0, 500] | 3000ms |
 | `liq_imbalance` | LIQ | forceOrder | 1m | tick | [-1, 1] | 60000ms |
 | `liq_surge` | LIQ | forceOrder | 1m | tick | {0, 1} | 60000ms |
-| `tox_score` | DERIVED | multiple | instant | 1s | [0, 10] | 5000ms |
+| `trend_slope_5m` | DERIVED | mid | 5m | 1s | (-∞, ∞) | 5000ms |
+| `price_jump_bps_1m` | DERIVED | mid | 1m | 1s | [-5000, 5000] | 5000ms |
+| `depth_top5_usd` | DERIVED | depth | instant | 250ms | [0, ∞) | 3000ms |
+| `wall_persistence_score` | DERIVED | depth | 10 ticks | 250ms | [0, 1] | 3000ms |
+| `tox_score` | DERIVED | multiple | instant | 1s | [0, 100] | 5000ms |
 
 ---
 
@@ -315,10 +319,15 @@ def calc_depth_slope(levels: list[tuple[float, float]], n_levels: int = 5) -> fl
 
 ```python
 def detect_walls(depth: DepthData,
-                 threshold_mult: float = 5.0,
+                 threshold_mult: float = WALL_SIZE_MULT,
+                 max_distance_bps: float = WALL_MAX_DISTANCE_BPS,
                  max_walls: int = 3) -> dict:
     """
     Detect significant liquidity walls in order book.
+
+    Notes:
+    - Defaults are SSOT-aligned with `docs/15_CONSTANTS.md` (WALL_* constants).
+    - Distance filter is mandatory to avoid counting far-away liquidity.
 
     Returns:
         wall_bid_nearest_bps: Distance to nearest bid wall
@@ -332,14 +341,20 @@ def detect_walls(depth: DepthData,
     avg_bid = np.mean([l.qty for l in depth.bids[:10]])
     bid_walls = [
         l for l in depth.bids
-        if l.qty > avg_bid * threshold_mult
+        if (
+            l.qty > avg_bid * threshold_mult
+            and ((mid - l.price)/ mid * 10000) <= max_distance_bps
+        )
     ][:max_walls]
 
     # Ask side
     avg_ask = np.mean([l.qty for l in depth.asks[:10]])
     ask_walls = [
         l for l in depth.asks
-        if l.qty > avg_ask * threshold_mult
+        if (
+            l.qty > avg_ask * threshold_mult
+            and ((l.price - mid)/ mid * 10000) <= max_distance_bps
+        )
     ][:max_walls]
 
     return {
@@ -350,6 +365,50 @@ def detect_walls(depth: DepthData,
         "wall_bid_count": len(bid_walls),
         "wall_ask_count": len(ask_walls),
     }
+```
+
+### Wall Persistence (anti-spoof proxy)
+
+```python
+def wall_persistence_score(wall_present_flags: list[bool]) -> float:
+    """
+    Persistence score in [0,1].
+
+    Inputs:
+        wall_present_flags: recent N-ticks boolean series (N=WALL_PERSISTENCE_TICKS)
+    Returns:
+        fraction of ticks where a valid wall existed.
+    """
+    if not wall_present_flags:
+        return 0.0
+    return sum(1 for f in wall_present_flags if f) / len(wall_present_flags)
+```
+
+### Regime Inputs (Derived)
+
+```python
+def calc_trend_slope_5m(prices: list[tuple[int, float]]) -> float:
+    """
+    Deterministic slope proxy over last 5m.
+
+    Recommendation: linear regression slope on (t, log(price)).
+    Implementation must be deterministic (no randomness).
+    """
+    ...
+
+
+def calc_price_jump_bps_1m(mid_now: float, mid_1m_ago: float) -> float:
+    """Signed 1m jump in bps."""
+    if mid_1m_ago <= 0:
+        return 0.0
+    return (mid_now - mid_1m_ago) / mid_1m_ago * 10000
+
+
+def calc_depth_top5_usd(depth: "DepthData") -> float:
+    """USD notional liquidity in top-5 levels (both sides)."""
+    bid = sum(l.price * l.qty for l in depth.bids[:5])
+    ask = sum(l.price * l.qty for l in depth.asks[:5])
+    return float(bid + ask)
 ```
 
 ### Price Impact Estimation

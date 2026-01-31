@@ -14,6 +14,22 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Protocol
 
+class MarketRegime(Enum):
+    """Market regime inferred by Adaptive Controller."""
+    RANGE = "RANGE"
+    TREND_UP = "TREND_UP"
+    TREND_DOWN = "TREND_DOWN"
+    VOL_SHOCK = "VOL_SHOCK"
+    THIN_BOOK = "THIN_BOOK"
+    TOXIC = "TOXIC"
+    PAUSED = "PAUSED"
+
+class ResetAction(Enum):
+    """Auto-reset action requested by controller."""
+    NONE = "NONE"
+    SOFT = "SOFT"
+    HARD = "HARD"
+
 class GridMode(Enum):
     """Grid operating mode."""
     PAUSE = "PAUSE"
@@ -26,14 +42,17 @@ class GridMode(Enum):
 @dataclass(frozen=True)
 class GridPlan:
     """Output of grid policy decision."""
+    regime: MarketRegime
     mode: GridMode
     center: float
     spacing_bps: float
+    width_bps: float
     levels_long: int
     levels_short: int
     size_per_level: float
     skew_bps: float  # Inventory-based center adjustment
-    reason: str  # Machine-readable reason code
+    reset_action: ResetAction
+    reason_codes: list[str]  # Machine-readable reason codes
 
 @dataclass(frozen=True)
 class PolicyContext:
@@ -47,6 +66,13 @@ class PolicyContext:
     toxicity_score: float
     momentum_1m: float
     momentum_5m: float
+
+    # Regime inputs (derived)
+    natr_14_5m: float | None
+    trend_slope_5m: float | None
+    price_jump_bps_1m: float | None
+    depth_top5_usd: float | None
+
     cvd_change_1m: float
     ofi_zscore: float | None
     depth_imbalance: float | None
@@ -77,6 +103,13 @@ class GridPolicy(Protocol):
         ...
 ```
 
+### 1.1.1 Adaptive Controller integration (SSOT)
+
+- Regime selection, adaptive step, and reset rules are defined in: `docs/16_ADAPTIVE_GRID_CONTROLLER_SPEC.md`
+- Policies MUST treat `spacing_bps` as controller-owned (adaptive).
+- Policies MUST emit `regime`, `width_bps`, `reset_action`, and `reason_codes` in `GridPlan`.
+- **Migration note:** many pseudocode examples below still show the legacy `reason: str` field. Treat it as `reason_codes=[reason]` until the implementation PR migrates the examples.
+
 ### 1.2 Policy Selection Logic
 
 ```python
@@ -88,7 +121,7 @@ def select_policy(ctx: PolicyContext, policies: list[GridPolicy]) -> GridPolicy:
     1. Emergency (risk limits breached)
     2. Pause (toxicity too high, data stale)
     3. Specific regime policy (funding, liquidation, etc.)
-    4. Default policy (bilateral or trend)
+    4. Default policy (range vs trend)
     """
     # Check emergency conditions first
     if ctx.daily_dd_pct >= DD_MAX_DAILY:
@@ -1072,6 +1105,13 @@ class TestRangeGridPolicy:
             toxicity_score=20.0,
             momentum_1m=0.5,
             momentum_5m=0.3,
+
+            # Regime inputs (derived)
+            natr_14_5m=None,
+            trend_slope_5m=None,
+            price_jump_bps_1m=None,
+            depth_top5_usd=None,
+
             cvd_change_1m=100.0,
             ofi_zscore=0.5,
             depth_imbalance=0.1,
@@ -1089,7 +1129,7 @@ class TestRangeGridPolicy:
         assert plan.mode == GridMode.BILATERAL
         assert plan.levels_long == 5
         assert plan.levels_short == 5
-        assert "RANGE" in plan.reason
+        assert "RANGE" in plan.reason_codes[0]
 
     def test_throttle_on_high_toxicity(self):
         ctx = PolicyContext(
@@ -1099,6 +1139,13 @@ class TestRangeGridPolicy:
             toxicity_score=55.0,  # MID toxicity
             momentum_1m=0.5,
             momentum_5m=0.3,
+
+            # Regime inputs (derived)
+            natr_14_5m=None,
+            trend_slope_5m=None,
+            price_jump_bps_1m=None,
+            depth_top5_usd=None,
+
             cvd_change_1m=100.0,
             ofi_zscore=0.5,
             depth_imbalance=0.1,
@@ -1114,7 +1161,7 @@ class TestRangeGridPolicy:
         plan = self.policy.decide(ctx)
 
         assert plan.mode == GridMode.THROTTLE
-        assert "THROTTLE" in plan.reason
+        assert "THROTTLE" in plan.reason_codes[0]
 
     def test_inventory_skew_adjustment(self):
         ctx = PolicyContext(
@@ -1124,6 +1171,13 @@ class TestRangeGridPolicy:
             toxicity_score=20.0,
             momentum_1m=0.5,
             momentum_5m=0.3,
+
+            # Regime inputs (derived)
+            natr_14_5m=None,
+            trend_slope_5m=None,
+            price_jump_bps_1m=None,
+            depth_top5_usd=None,
+
             cvd_change_1m=100.0,
             ofi_zscore=0.5,
             depth_imbalance=0.1,
