@@ -218,7 +218,8 @@ class ExecutionEngine:
         current_orders = [
             order
             for order in state.open_orders.values()
-            if order.symbol == symbol and order.state in (OrderState.OPEN, OrderState.PARTIALLY_FILLED)
+            if order.symbol == symbol
+            and order.state in (OrderState.OPEN, OrderState.PARTIALLY_FILLED)
         ]
 
         # Handle PAUSE/EMERGENCY mode - cancel all
@@ -304,9 +305,7 @@ class ExecutionEngine:
                 )
             else:
                 # Check if order needs update (SOFT reset or price/qty mismatch)
-                matching_level = next(
-                    (lv for lv in levels if lv.key() == order_key), None
-                )
+                matching_level = next((lv for lv in levels if lv.key() == order_key), None)
                 if (
                     matching_level
                     and not self._orders_match(matching_level, order)

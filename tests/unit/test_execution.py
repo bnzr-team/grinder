@@ -366,7 +366,8 @@ class TestSoftReset:
 
         # Should have cancel for mismatched order
         cancel_actions = [
-            a for a in result.actions
+            a
+            for a in result.actions
             if a.action_type == ActionType.CANCEL and a.reason == "SOFT_RESET_REPLACE"
         ]
         assert len(cancel_actions) == 1
@@ -374,7 +375,8 @@ class TestSoftReset:
 
         # Should have place for replacement
         place_replace = [
-            a for a in result.actions
+            a
+            for a in result.actions
             if a.action_type == ActionType.PLACE and a.reason == "SOFT_RESET_REPLACE"
         ]
         assert len(place_replace) == 1
@@ -492,8 +494,7 @@ class TestReconcileLogic:
 
         # Should have no actions (grid is already correct)
         actions_with_impact = [
-            a for a in result2.actions
-            if a.action_type in (ActionType.PLACE, ActionType.CANCEL)
+            a for a in result2.actions if a.action_type in (ActionType.PLACE, ActionType.CANCEL)
         ]
         assert len(actions_with_impact) == 0
 
@@ -590,7 +591,9 @@ class TestNoOpExchangePort:
     def test_cancel_order_returns_true_for_existing(self, port: NoOpExchangePort) -> None:
         """Test cancel_order returns True for existing open order."""
         # First place an order
-        order_id = port.place_order("BTCUSDT", OrderSide.BUY, Decimal("50000"), Decimal("0.1"), 1, 1000)
+        order_id = port.place_order(
+            "BTCUSDT", OrderSide.BUY, Decimal("50000"), Decimal("0.1"), 1, 1000
+        )
 
         # Then cancel it
         result = port.cancel_order(order_id)
@@ -604,7 +607,9 @@ class TestNoOpExchangePort:
     def test_replace_order_returns_new_id(self, port: NoOpExchangePort) -> None:
         """Test replace_order returns new order ID."""
         # First place an order
-        old_id = port.place_order("BTCUSDT", OrderSide.BUY, Decimal("50000"), Decimal("0.1"), 1, 1000)
+        old_id = port.place_order(
+            "BTCUSDT", OrderSide.BUY, Decimal("50000"), Decimal("0.1"), 1, 1000
+        )
 
         # Then replace it
         new_id = port.replace_order(

@@ -195,7 +195,8 @@ class NoOpExchangePort:
         return [
             order
             for order in self._orders.values()
-            if order.symbol == symbol and order.state in (OrderState.OPEN, OrderState.PARTIALLY_FILLED)
+            if order.symbol == symbol
+            and order.state in (OrderState.OPEN, OrderState.PARTIALLY_FILLED)
         ]
 
     def reset(self) -> None:

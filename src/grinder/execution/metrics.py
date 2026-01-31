@@ -50,8 +50,7 @@ class ExecutionMetrics:
             "grinder_intents_total": dict(self.intents_total),
             "grinder_exec_events_total": dict(self.exec_events_total),
             "grinder_orders_open": {
-                f"{sym}:{side}": count
-                for (sym, side), count in self.orders_open.items()
+                f"{sym}:{side}": count for (sym, side), count in self.orders_open.items()
             },
         }
 
