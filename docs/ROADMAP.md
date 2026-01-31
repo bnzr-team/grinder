@@ -45,7 +45,7 @@ Last updated: 2026-01-31
 - ✅ PR-013: Domain contracts (events/state/order_intents) — merged 2026-01-31
 - ✅ PR-014: Prefilter v0 (rule-based gating) — merged 2026-01-31
 - ✅ PR-015: Adaptive Controller spec + unicode scanner — merged 2026-01-31
-- ⬜ PR-016: GridPolicy v0 (static symmetric grid)
+- ✅ PR-016: GridPolicy v0 (static symmetric grid) — merged 2026-01-31
 - ⬜ PR-017: Execution stub v0 (apply intents, no exchange)
 - ⬜ PR-018: CLI wiring for one end-to-end replay run
 
