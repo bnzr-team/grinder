@@ -22,8 +22,9 @@ FIXTURE_DIR = Path(__file__).parent.parent / "fixtures" / "sample_day"
 FIXTURE_ALLOWED_DIR = Path(__file__).parent.parent / "fixtures" / "sample_day_allowed"
 
 # Canonical digests (locked for determinism)
-EXPECTED_PAPER_DIGEST_SAMPLE_DAY = "55921a9bd855e1bd"
-EXPECTED_PAPER_DIGEST_ALLOWED = "f78930356488da3e"
+# v1 schema: includes fills and pnl_snapshot in output
+EXPECTED_PAPER_DIGEST_SAMPLE_DAY = "66b29a4e92192f8f"
+EXPECTED_PAPER_DIGEST_ALLOWED = "ec223bce78d7926f"
 
 
 class TestPaperOutput:

@@ -6,7 +6,8 @@ This module provides a paper trading loop that:
 3. Applies gating controls (rate limit, risk limits)
 4. Evaluates policy to get GridPlan
 5. Executes via ExecutionEngine (no real orders)
-6. Produces deterministic output digest
+6. Simulates fills and tracks positions/PnL
+7. Produces deterministic output digest
 
 See: docs/10_RISK_SPEC.md for gating limits
 """
@@ -23,14 +24,22 @@ from typing import Any
 from grinder.contracts import Snapshot
 from grinder.execution import ExecutionEngine, ExecutionState, NoOpExchangePort
 from grinder.gating import GatingResult, RateLimiter, RiskGate
+from grinder.paper.fills import simulate_fills
+from grinder.paper.ledger import Ledger
 from grinder.policies.base import GridPlan  # noqa: TC001 - used at runtime
 from grinder.policies.grid.static import StaticGridPolicy
 from grinder.prefilter import hard_filter
 
+# Output schema version for contract stability
+SCHEMA_VERSION = "v1"
+
 
 @dataclass
 class PaperOutput:
-    """Single paper trading cycle output."""
+    """Single paper trading cycle output.
+
+    Schema v1 contract - adding new fields is allowed, removing/renaming is breaking.
+    """
 
     ts: int
     symbol: str
@@ -40,6 +49,9 @@ class PaperOutput:
     actions: list[dict[str, Any]]
     events: list[dict[str, Any]]
     blocked_by_gating: bool
+    # v1 additions: fills and PnL
+    fills: list[dict[str, Any]] = field(default_factory=list)
+    pnl_snapshot: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to JSON-serializable dict."""
@@ -52,12 +64,17 @@ class PaperOutput:
             "actions": self.actions,
             "events": self.events,
             "blocked_by_gating": self.blocked_by_gating,
+            "fills": self.fills,
+            "pnl_snapshot": self.pnl_snapshot,
         }
 
 
 @dataclass
 class PaperResult:
-    """Complete paper trading result."""
+    """Complete paper trading result.
+
+    Schema v1 contract - adding new fields is allowed, removing/renaming is breaking.
+    """
 
     fixture_path: str
     outputs: list[PaperOutput] = field(default_factory=list)
@@ -67,10 +84,17 @@ class PaperResult:
     orders_placed: int = 0
     orders_blocked: int = 0
     errors: list[str] = field(default_factory=list)
+    # v1 additions
+    schema_version: str = SCHEMA_VERSION
+    total_fills: int = 0
+    final_positions: dict[str, dict[str, Any]] = field(default_factory=dict)
+    total_realized_pnl: str = "0"
+    total_unrealized_pnl: str = "0"
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to JSON-serializable dict."""
         return {
+            "schema_version": self.schema_version,
             "fixture_path": self.fixture_path,
             "outputs": [o.to_dict() for o in self.outputs],
             "digest": self.digest,
@@ -78,6 +102,10 @@ class PaperResult:
             "events_gated": self.events_gated,
             "orders_placed": self.orders_placed,
             "orders_blocked": self.orders_blocked,
+            "total_fills": self.total_fills,
+            "final_positions": self.final_positions,
+            "total_realized_pnl": self.total_realized_pnl,
+            "total_unrealized_pnl": self.total_unrealized_pnl,
             "errors": self.errors,
         }
 
@@ -147,9 +175,16 @@ class PaperEngine:
         # Per-symbol execution state
         self._states: dict[str, ExecutionState] = {}
 
+        # Position and PnL tracking
+        self._ledger = Ledger()
+
         # Metrics
         self._orders_placed = 0
         self._orders_blocked = 0
+        self._total_fills = 0
+
+        # Last prices for unrealized PnL calculation
+        self._last_prices: dict[str, Decimal] = {}
 
     def _get_state(self, symbol: str) -> ExecutionState:
         """Get or create execution state for symbol."""
@@ -219,10 +254,13 @@ class PaperEngine:
             snapshot: Market data snapshot
 
         Returns:
-            PaperOutput with prefilter, gating, plan, and execution results
+            PaperOutput with prefilter, gating, plan, execution, fills, and PnL
         """
         symbol = snapshot.symbol
         ts = snapshot.ts
+
+        # Track last price for unrealized PnL
+        self._last_prices[symbol] = snapshot.mid_price
 
         # Step 1: Prefilter
         features = {
@@ -231,6 +269,9 @@ class PaperEngine:
             "vol_1h_usd": 10_000_000.0,
         }
         filter_result = hard_filter(symbol, features)
+
+        # Get PnL snapshot even if blocked (mark-to-market)
+        pnl_snap = self._ledger.get_pnl_snapshot(ts, symbol, snapshot.mid_price)
 
         # If blocked by prefilter, return early
         if not filter_result.allowed:
@@ -243,6 +284,8 @@ class PaperEngine:
                 actions=[],
                 events=[],
                 blocked_by_gating=False,
+                fills=[],
+                pnl_snapshot=pnl_snap.to_dict(),
             )
 
         # Step 2: Policy evaluation (to estimate notional for gating)
@@ -266,6 +309,8 @@ class PaperEngine:
                 actions=[],
                 events=[],
                 blocked_by_gating=True,
+                fills=[],
+                pnl_snapshot=pnl_snap.to_dict(),
             )
 
         # Step 4: Execution
@@ -285,15 +330,28 @@ class PaperEngine:
         # Update state
         self._states[symbol] = result.state
 
+        # Step 5: Simulate fills for PLACE actions
+        action_dicts = [a.to_dict() for a in result.actions]
+        fills = simulate_fills(ts, symbol, action_dicts)
+
+        # Step 6: Apply fills to ledger and get updated PnL
+        self._ledger.apply_fills(fills)
+        self._total_fills += len(fills)
+
+        # Get updated PnL snapshot after fills
+        pnl_snap = self._ledger.get_pnl_snapshot(ts, symbol, snapshot.mid_price)
+
         return PaperOutput(
             ts=ts,
             symbol=symbol,
             prefilter_result=filter_result.to_dict(),
             gating_result=gating_result.to_dict(),
             plan=self._plan_to_dict(plan),
-            actions=[a.to_dict() for a in result.actions],
+            actions=action_dicts,
             events=[e.to_dict() for e in result.events],
             blocked_by_gating=False,
+            fills=[f.to_dict() for f in fills],
+            pnl_snapshot=pnl_snap.to_dict(),
         )
 
     def run(self, fixture_path: Path) -> PaperResult:
@@ -332,6 +390,25 @@ class PaperEngine:
         result.outputs = outputs
         result.orders_placed = self._orders_placed
         result.orders_blocked = self._orders_blocked
+        result.total_fills = self._total_fills
+
+        # Compute final positions and PnL
+        final_positions = {}
+        total_unrealized = Decimal("0")
+        for symbol, pos_state in self._ledger.get_all_positions().items():
+            last_price = self._last_prices.get(symbol, Decimal("0"))
+            unrealized = self._ledger.get_unrealized_pnl(symbol, last_price)
+            total_unrealized += unrealized
+            final_positions[symbol] = {
+                "quantity": str(pos_state.quantity),
+                "avg_entry_price": str(pos_state.avg_entry_price),
+                "realized_pnl": str(pos_state.realized_pnl),
+                "unrealized_pnl": str(unrealized),
+            }
+
+        result.final_positions = final_positions
+        result.total_realized_pnl = str(self._ledger.get_total_realized_pnl())
+        result.total_unrealized_pnl = str(total_unrealized)
         result.digest = self._compute_digest([o.to_dict() for o in outputs])
         return result
 
@@ -381,6 +458,9 @@ class PaperEngine:
         self._port.reset()
         self._rate_limiter.reset()
         self._risk_gate.reset()
+        self._ledger.reset()
         self._states.clear()
+        self._last_prices.clear()
         self._orders_placed = 0
         self._orders_blocked = 0
+        self._total_fills = 0
