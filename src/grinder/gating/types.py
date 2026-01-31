@@ -10,8 +10,23 @@ from enum import Enum
 from typing import Any
 
 
+class GateName(Enum):
+    """Identifier for which gate made the decision.
+
+    These values are stable and used as metric labels.
+    DO NOT rename or remove values without updating metric contracts.
+    """
+
+    RATE_LIMITER = "rate_limiter"
+    RISK_GATE = "risk_gate"
+
+
 class GateReason(Enum):
-    """Reason for gating decision."""
+    """Reason for gating decision.
+
+    These values are stable and used as metric labels.
+    DO NOT rename or remove values without updating metric contracts.
+    """
 
     PASS = "PASS"
     RATE_LIMIT_EXCEEDED = "RATE_LIMIT_EXCEEDED"
@@ -19,6 +34,13 @@ class GateReason(Enum):
     MAX_NOTIONAL_EXCEEDED = "MAX_NOTIONAL_EXCEEDED"
     DAILY_LOSS_LIMIT_EXCEEDED = "DAILY_LOSS_LIMIT_EXCEEDED"
     MAX_ORDERS_EXCEEDED = "MAX_ORDERS_EXCEEDED"
+
+
+# Canonical list of all gate names for contract testing
+ALL_GATE_NAMES: frozenset[str] = frozenset(g.value for g in GateName)
+
+# Canonical list of all gate reasons for contract testing
+ALL_GATE_REASONS: frozenset[str] = frozenset(r.value for r in GateReason)
 
 
 @dataclass(frozen=True)

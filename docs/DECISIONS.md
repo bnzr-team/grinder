@@ -82,3 +82,21 @@
 - **Alternatives:**
   - Support both formats with adapter — rejected for complexity and non-determinism risk
   - Keep BOOK_TICKER and adapt Snapshot contract — rejected because BOOK_TICKER lacks required fields
+
+## ADR-007 — Gating metrics contract
+- **Date:** 2026-01-31
+- **Status:** accepted
+- **Context:** Gating decisions (allow/block) need observability for production monitoring and debugging. Metric names and label keys become implicit contracts once Grafana dashboards and alerts depend on them.
+- **Decision:**
+  - Stable enums for gate identifiers (`GateName`) and block reasons (`GateReason`)
+  - Metric names are constants: `grinder_gating_allowed_total`, `grinder_gating_blocked_total`
+  - Label keys are constants: `gate`, `reason`
+  - Contract tests in `tests/unit/test_gating_contracts.py` fail if any of these change
+  - Breaking changes require: (1) update contract tests, (2) add ADR entry, (3) update dashboards
+- **Consequences:**
+  - Adding new gates/reasons is safe (append-only)
+  - Renaming or removing existing values is a breaking change
+  - Dashboards can rely on stable label values
+- **Alternatives:**
+  - Free-text reasons — rejected for label cardinality explosion
+  - No contract tests — rejected because silent breaks are worse than loud failures
