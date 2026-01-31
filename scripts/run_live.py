@@ -15,6 +15,8 @@ import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any
 
+from grinder.observability import build_metrics_output
+
 
 class HealthHandler(BaseHTTPRequestHandler):
     """Simple HTTP handler for health checks."""
@@ -41,19 +43,11 @@ class HealthHandler(BaseHTTPRequestHandler):
 
     def _send_metrics(self) -> None:
         """Send Prometheus metrics."""
-        uptime = time.time() - self.start_time
-        metrics = [
-            "# HELP grinder_up Whether grinder is running",
-            "# TYPE grinder_up gauge",
-            "grinder_up 1",
-            "# HELP grinder_uptime_seconds Uptime in seconds",
-            "# TYPE grinder_uptime_seconds gauge",
-            f"grinder_uptime_seconds {uptime:.2f}",
-        ]
+        metrics_output = build_metrics_output()
         self.send_response(200)
         self.send_header("Content-Type", "text/plain; charset=utf-8")
         self.end_headers()
-        self.wfile.write("\n".join(metrics).encode())
+        self.wfile.write(metrics_output.encode())
 
     def _send_json(self, data: dict[str, Any]) -> None:
         """Send JSON response."""

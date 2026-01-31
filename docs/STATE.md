@@ -6,7 +6,9 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
 
 ## Works now
 - `grinder --help` / `grinder-paper --help` / `grinder-backtest --help` — CLI entrypoints работают.
-- `python -m scripts.run_live` поднимает `/healthz` и `/metrics`.
+- `python -m scripts.run_live` поднимает `/healthz` и `/metrics`:
+  - `/healthz`: JSON health check (status, uptime)
+  - `/metrics`: Prometheus format including system metrics + gating metrics
 - `python -m scripts.run_soak` генерирует synthetic soak metrics JSON.
 - **End-to-end replay**:
   - CLI: `grinder replay --fixture <path> [-v] [--out <path>]`
@@ -50,6 +52,11 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - Output format: `Paper trading completed. Events processed: N\nOutput digest: <16-char-hex>`
   - Deterministic digest for fixture-based runs
   - **Limitations:** no live feed, no real orders, simulated fills
+- **Observability v0** (`src/grinder/observability/`):
+  - `MetricsBuilder`: consolidates all metrics into Prometheus format
+  - `build_metrics_output()`: convenience function for /metrics endpoint
+  - **Exported via `/metrics`**: system metrics (grinder_up, grinder_uptime_seconds) + gating metrics
+  - **Contract tests**: `tests/unit/test_observability.py` verifies metric names and labels
 
 ## Partially implemented
 - Структура пакета `src/grinder/*` (core, protocols/interfaces) — каркас.
