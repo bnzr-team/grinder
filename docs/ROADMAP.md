@@ -57,7 +57,7 @@ Last updated: 2026-01-31
 
 **Work items (recommended PR sequence)**
 - ✅ Adaptive Controller spec (docs-only): `docs/16_ADAPTIVE_GRID_CONTROLLER_SPEC.md` — merged 2026-01-31
-- ⏳ PR-019: Paper Loop v0 + Gating (rate limit + risk gate) — ready for review 2026-01-31
+- ✅ PR-019: Paper Loop v0 + Gating (rate limit + risk gate) — merged 2026-01-31
 - ⬜ Adaptive Controller implementation (regime + step + reset)
 - ⬜ Top-K prefilter working from fixtures/live data
 - ⬜ Toxicity gating enabled (`docs/06_TOXICITY_SPEC.md`)
