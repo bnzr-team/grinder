@@ -45,7 +45,7 @@ Last updated: 2026-01-31
 - ✅ PR-013: Domain contracts (events/state/order_intents) — merged 2026-01-31
 - ✅ PR-014: Prefilter v0 (rule-based gating) — merged 2026-01-31
 - ✅ PR-015: Adaptive Controller spec + unicode scanner — merged 2026-01-31
-- ⬜ PR-016: GridPolicy v0 (static symmetric grid)
+- ✅ PR-016: GridPolicy v0 (static symmetric grid) — merged 2026-01-31 (GitHub PR #17)
 - ⬜ PR-017: Execution stub v0 (apply intents, no exchange)
 - ⬜ PR-018: CLI wiring for one end-to-end replay run
 
@@ -118,7 +118,19 @@ This is the checklist that must be satisfied for each PR in M1 to be considered 
 
 ---
 
-### PR-015 — GridPolicy v0 (static symmetric grid)
+### PR-015 — Adaptive Controller spec + unicode scanner
+**DoD**
+- Add `docs/16_ADAPTIVE_GRID_CONTROLLER_SPEC.md` (regime/step/reset spec)
+- Add `scripts/check_unicode.py` with `--all` flag for Python files
+- Docs-only + tooling, no production code
+
+**Proof**
+- `python scripts/check_unicode.py --all` passes
+- Spec reviewed and merged
+
+---
+
+### PR-016 — GridPolicy v0 (static symmetric grid)
 **DoD**
 - Implement one minimal policy that produces deterministic intents from a snapshot
 - Unit tests for levels/spacing/edge cases
@@ -130,7 +142,7 @@ This is the checklist that must be satisfied for each PR in M1 to be considered 
 
 ---
 
-### PR-016 — Execution stub v0 (apply intents)
+### PR-017 — Execution stub v0 (apply intents)
 **DoD**
 - Executor applies intents in replay/paper mode without exchange writes
 - Structured logs + basic metrics updated (as per `13_OBSERVABILITY.md` minimal set)
@@ -143,7 +155,7 @@ This is the checklist that must be satisfied for each PR in M1 to be considered 
 
 ---
 
-### PR-017 — CLI wiring end-to-end (replay-first)
+### PR-018 — CLI wiring end-to-end (replay-first)
 **DoD**
 - `grinder replay ...` runs end-to-end on a fixture and produces deterministic output
 - `verify_replay_determinism` passes on at least one fixture
