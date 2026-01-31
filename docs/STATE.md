@@ -65,6 +65,16 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - Deterministic digest for fixture-based runs
   - **Canonical digests:** `sample_day` = `66b29a4e92192f8f`, `sample_day_allowed` = `ec223bce78d7926f`
   - **Limitations:** no live feed, no real orders, no slippage, no partial fills
+- **Backtest protocol v1** (`scripts/run_backtest.py`):
+  - CLI: `python -m scripts.run_backtest [--out <path>] [--quiet]`
+  - Runs paper trading on registered fixtures and generates JSON report
+  - **Registered fixtures:** `sample_day`, `sample_day_allowed`
+  - **Report schema v1:** `report_schema_version`, `paper_schema_version`, `fixtures_run`, `fixtures_passed`, `fixtures_failed`, `all_digests_match`, `results`, `report_digest`
+  - **Per-fixture result:** `fixture_path`, `schema_version`, `paper_digest`, `expected_paper_digest`, `digest_match`, `total_fills`, `final_positions`, `total_realized_pnl`, `total_unrealized_pnl`, `events_processed`, `orders_placed`, `orders_blocked`, `errors`
+  - **Digest validation:** Compares paper_digest against expected_paper_digest in fixture config.json
+  - **Exit code:** 0 if all fixtures pass, 1 if any fail or digest mismatch
+  - **Contract tests:** `tests/unit/test_backtest.py` verifies schema stability and determinism
+  - **Limitations:** no custom fixture list (hardcoded), no parallel execution
 - **Observability v0** (`src/grinder/observability/`):
   - `MetricsBuilder`: consolidates all metrics into Prometheus format
   - `build_metrics_output()`: convenience function for /metrics endpoint
