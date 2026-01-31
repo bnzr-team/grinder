@@ -13,6 +13,7 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
 - Docker build + healthcheck работают (Dockerfile использует `urllib.request` вместо `curl`).
 - Grafana provisioning: `monitoring/grafana/provisioning/` содержит datasource + dashboard.
 - Branch protection на `main`: все PR требуют 5 зелёных checks.
+- **Domain contracts** (`src/grinder/contracts.py`): Snapshot, Position, PolicyContext, OrderIntent, Decision — typed, frozen, JSON-serializable. См. ADR-003.
 
 ## Partially implemented
 - Структура пакета `src/grinder/*` (core, protocols/interfaces) — каркас.
