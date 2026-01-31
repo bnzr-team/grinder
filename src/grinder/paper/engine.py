@@ -22,6 +22,7 @@ from pathlib import Path  # noqa: TC003 - used at runtime
 from typing import Any
 
 from grinder.contracts import Snapshot
+from grinder.controller import AdaptiveController, ControllerMode
 from grinder.execution import ExecutionEngine, ExecutionState, NoOpExchangePort
 from grinder.gating import GatingResult, RateLimiter, RiskGate, ToxicityGate
 from grinder.paper.fills import simulate_fills
@@ -96,6 +97,11 @@ class PaperResult:
     topk_selected_symbols: list[str] = field(default_factory=list)
     topk_k: int = 0
     topk_scores: list[dict[str, Any]] = field(default_factory=list)
+    # Controller results (v1 addition - ADR-011)
+    # Note: These fields are NOT included in digest computation.
+    # Controller is opt-in; when disabled, these fields are empty/defaults.
+    controller_enabled: bool = False
+    controller_decisions: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to JSON-serializable dict."""
@@ -116,6 +122,8 @@ class PaperResult:
             "topk_selected_symbols": self.topk_selected_symbols,
             "topk_k": self.topk_k,
             "topk_scores": self.topk_scores,
+            "controller_enabled": self.controller_enabled,
+            "controller_decisions": self.controller_decisions,
         }
 
     def to_json(self) -> str:
@@ -147,6 +155,14 @@ class PaperEngine:
         toxicity_lookback_ms: int = 5000,
         topk_k: int = 3,
         topk_window_size: int = 10,
+        # Adaptive Controller parameters (ADR-011)
+        controller_enabled: bool = False,
+        controller_window_size: int = 10,
+        controller_spread_pause_bps: int = 50,
+        controller_vol_widen_bps: int = 300,
+        controller_vol_tighten_bps: int = 50,
+        controller_widen_multiplier: float = 1.5,
+        controller_tighten_multiplier: float = 0.8,
     ) -> None:
         """Initialize paper trading engine.
 
@@ -166,6 +182,13 @@ class PaperEngine:
             toxicity_lookback_ms: Lookback window for price impact calculation
             topk_k: Number of top symbols to select (default 3)
             topk_window_size: Window size for volatility scoring (default 10)
+            controller_enabled: Enable adaptive controller (default False for backward compatibility)
+            controller_window_size: Window size for controller metrics (default 10)
+            controller_spread_pause_bps: Spread threshold for PAUSE mode (default 50)
+            controller_vol_widen_bps: Volatility threshold for WIDEN mode (default 300)
+            controller_vol_tighten_bps: Volatility threshold for TIGHTEN mode (default 50)
+            controller_widen_multiplier: Spacing multiplier for WIDEN mode (default 1.5)
+            controller_tighten_multiplier: Spacing multiplier for TIGHTEN mode (default 0.8)
         """
         # Policy and execution
         self._policy = StaticGridPolicy(
@@ -198,6 +221,18 @@ class PaperEngine:
 
         # Top-K symbol selector (ADR-010)
         self._topk_selector = TopKSelector(k=topk_k, window_size=topk_window_size)
+
+        # Adaptive Controller (ADR-011)
+        self._controller_enabled = controller_enabled
+        self._controller = AdaptiveController(
+            window_size=controller_window_size,
+            spread_pause_bps=controller_spread_pause_bps,
+            vol_widen_bps=controller_vol_widen_bps,
+            vol_tighten_bps=controller_vol_tighten_bps,
+            widen_multiplier=controller_widen_multiplier,
+            tighten_multiplier=controller_tighten_multiplier,
+        )
+        self._base_spacing_bps = spacing_bps  # Store for controller adjustment
 
         # Per-symbol execution state
         self._states: dict[str, ExecutionState] = {}
@@ -331,11 +366,48 @@ class PaperEngine:
                 pnl_snapshot=pnl_snap.to_dict(),
             )
 
-        # Step 2: Policy evaluation (to estimate notional for gating)
+        # Step 2: Controller decision (if enabled) and policy evaluation
+        # Record for controller before decision
+        if self._controller_enabled:
+            self._controller.record(ts, symbol, snapshot.mid_price, snapshot.spread_bps)
+
+        # Get controller decision
+        controller_decision = None
+        effective_spacing_bps = self._base_spacing_bps
+        if self._controller_enabled:
+            controller_decision = self._controller.decide(symbol)
+            # If controller says PAUSE, block this event
+            if controller_decision.mode == ControllerMode.PAUSE:
+                self._orders_blocked += 1
+                return PaperOutput(
+                    ts=ts,
+                    symbol=symbol,
+                    prefilter_result=filter_result.to_dict(),
+                    gating_result=GatingResult.allow().to_dict(),
+                    plan=None,
+                    actions=[],
+                    events=[],
+                    blocked_by_gating=True,  # Treat controller PAUSE like gating block
+                    fills=[],
+                    pnl_snapshot=pnl_snap.to_dict(),
+                )
+            # Apply spacing multiplier
+            effective_spacing_bps = self._base_spacing_bps * controller_decision.spacing_multiplier
+
+        # Policy evaluation with effective spacing
         policy_features = {
             "mid_price": snapshot.mid_price,
         }
-        plan = self._policy.evaluate(policy_features)
+        # Create a temporary policy with adjusted spacing if controller is active
+        if self._controller_enabled and effective_spacing_bps != self._base_spacing_bps:
+            temp_policy = StaticGridPolicy(
+                spacing_bps=effective_spacing_bps,
+                levels=self._policy.levels,
+                size_per_level=self._policy.size_per_level,
+            )
+            plan = temp_policy.evaluate(policy_features)
+        else:
+            plan = self._policy.evaluate(policy_features)
 
         # Step 3: Gating check (includes toxicity)
         # Record price for toxicity tracking before check
@@ -485,6 +557,22 @@ class PaperEngine:
         result.final_positions = final_positions
         result.total_realized_pnl = str(self._ledger.get_total_realized_pnl())
         result.total_unrealized_pnl = str(total_unrealized)
+
+        # Controller results (ADR-011)
+        result.controller_enabled = self._controller_enabled
+        if self._controller_enabled:
+            # Compute final controller decisions for each symbol
+            controller_decisions = []
+            for symbol in self._controller.get_all_symbols():
+                decision = self._controller.decide(symbol)
+                controller_decisions.append(
+                    {
+                        "symbol": symbol,
+                        **decision.to_dict(),
+                    }
+                )
+            result.controller_decisions = controller_decisions
+
         result.digest = self._compute_digest([o.to_dict() for o in outputs])
         return result
 
@@ -536,6 +624,7 @@ class PaperEngine:
         self._risk_gate.reset()
         self._toxicity_gate.reset()
         self._topk_selector.reset()
+        self._controller.reset()
         self._ledger.reset()
         self._states.clear()
         self._last_prices.clear()

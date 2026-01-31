@@ -24,6 +24,11 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - Paper digest (v1): `7c4f4b07ec7b391f`
     - Expected Top-K selection: AAAUSDT, BBBUSDT, CCCUSDT (highest volatility)
     - DDDUSDT, EEEUSDT filtered out (lower volatility scores)
+  - `sample_day_controller/`: 3 symbols to test Adaptive Controller modes
+    - Paper digest (v1, controller enabled): `f3a0a321c39cc411`
+    - WIDENUSDT: triggers WIDEN mode (high volatility)
+    - TIGHTENUSDT: triggers TIGHTEN mode (low volatility)
+    - BASEUSDT: triggers BASE mode (normal volatility)
   - Fixture format: SNAPSHOT events (see ADR-006 for migration from BOOK_TICKER)
   - Schema version: v1 (see ADR-008)
 - **End-to-end replay**:
@@ -84,6 +89,23 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - Deterministic digest for fixture-based runs
   - **Canonical digests:** `sample_day` = `66b29a4e92192f8f`, `sample_day_allowed` = `ec223bce78d7926f`, `sample_day_toxic` = `66d57776b7be4797`, `sample_day_multisymbol` = `7c4f4b07ec7b391f`
   - **Limitations:** no live feed, no real orders, no slippage, no partial fills
+- **Adaptive Controller v0** (`src/grinder/controller/`):
+  - Rule-based controller that adjusts policy parameters based on recent market conditions
+  - **Controller modes:**
+    - `BASE` — Normal operation, no adjustment (spacing_multiplier = 1.0)
+    - `WIDEN` — High volatility (> 300 bps), widen grid (spacing_multiplier = 1.5)
+    - `TIGHTEN` — Low volatility (< 50 bps), tighten grid (spacing_multiplier = 0.8)
+    - `PAUSE` — Wide spread (> 50 bps), no new orders
+  - **Priority order:** PAUSE > WIDEN > TIGHTEN > BASE
+  - **Window-based metrics:** vol_bps (sum of abs mid returns), spread_bps_max (max spread in window)
+  - **Determinism:** All metrics use integer basis points (no floats)
+  - **Opt-in:** Disabled by default (`controller_enabled=False`) to preserve backward compatibility
+  - **Integration:** Runs after Top-K selection, before policy evaluation
+  - **Test fixture:** `sample_day_controller` with 3 symbols triggering WIDEN/TIGHTEN/BASE modes
+    - Paper digest (v1, controller enabled): `f3a0a321c39cc411`
+  - **Contract tests:** `tests/unit/test_controller.py` (20 tests), `tests/unit/test_backtest.py::TestControllerContract` (6 tests)
+  - See ADR-011 for design decisions
+  - **Limitations:** no EMA-based adaptive step, no trend detection, no DRAWDOWN mode
 - **Backtest protocol v1** (`scripts/run_backtest.py`):
   - CLI: `python -m scripts.run_backtest [--out <path>] [--quiet]`
   - Runs paper trading on registered fixtures and generates JSON report
@@ -107,7 +129,7 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
 
 ## Known gaps / mismatches
 - Нет реальной торговой логики — только skeleton/stubs.
-- Adaptive Grid Controller (regime selection, adaptive step, auto-reset) — **not implemented**; see `docs/16_ADAPTIVE_GRID_CONTROLLER_SPEC.md` (Planned).
+- Adaptive Grid Controller v1+ (EMA-based adaptive step, trend detection, DRAWDOWN mode, auto-reset) — **not implemented**; see `docs/16_ADAPTIVE_GRID_CONTROLLER_SPEC.md` (Planned). Controller v0 implemented with rule-based modes (see ADR-011).
 - Нет интеграции с Binance API (только интерфейсы).
 - ML pipeline (`src/grinder/ml/`) — пустой placeholder.
 
@@ -119,4 +141,4 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
 ## Planned next
 - Реализовать минимальный data connector (Binance WebSocket mock).
 - Расширить тесты до >50% coverage.
-- Adaptive Controller implementation (regime + step + reset).
+- Adaptive Controller v1 (EMA-based adaptive step, trend detection, DRAWDOWN mode).

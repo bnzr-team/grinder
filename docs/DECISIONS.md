@@ -177,3 +177,42 @@
   - Activity proxy (event count) — rejected for being less "market-y"
   - ML-based scoring — deferred for v1, rule-based is deterministic and sufficient for v0
   - Include Top-K in digest — rejected to preserve backward compatibility
+
+## ADR-011 — Adaptive Controller v0 with rule-based parameter adjustment
+- **Date:** 2026-01-31
+- **Status:** accepted
+- **Context:** Grid spacing must adapt to changing market conditions. Static spacing leads to suboptimal performance: too tight in volatile markets (fills too fast, adverse selection), too wide in calm markets (misses opportunities). Need a controller that adjusts policy parameters based on recent market conditions.
+- **Decision:**
+  - Introduce `AdaptiveController` class in `src/grinder/controller/adaptive.py`
+  - **Controller modes:**
+    - `BASE` — Normal operation, no adjustment (spacing_multiplier = 1.0)
+    - `WIDEN` — High volatility, widen grid (spacing_multiplier = 1.5)
+    - `TIGHTEN` — Low volatility, tighten grid (spacing_multiplier = 0.8)
+    - `PAUSE` — Wide spread, no new orders
+  - **Decision reasons:**
+    - `NORMAL` — Metrics within normal thresholds
+    - `HIGH_VOL` — Volatility above threshold (> 300 bps)
+    - `LOW_VOL` — Volatility below threshold (< 50 bps)
+    - `WIDE_SPREAD` — Spread above threshold (> 50 bps)
+  - **Priority order:** PAUSE > WIDEN > TIGHTEN > BASE
+  - **Window-based metrics:**
+    - `vol_bps` = sum of absolute mid-price returns in integer bps over window
+    - `spread_bps_max` = maximum spread observed in window
+    - Window size default = 10 events per symbol
+  - **Determinism:** All metrics use integer basis points (no floats)
+  - **Opt-in:** Controller disabled by default (`controller_enabled=False`) to preserve backward compatibility
+  - New fixture `sample_day_controller` tests all three volatility modes
+- **Consequences:**
+  - Controller is wired into paper engine after prefilter/Top-K, before policy evaluation
+  - When enabled, controller applies spacing_multiplier to base spacing
+  - Controller decisions recorded in `PaperResult.controller_decisions` (NOT in digest)
+  - Existing fixture digests UNCHANGED (controller disabled by default):
+    - `sample_day` = `66b29a4e92192f8f`
+    - `sample_day_allowed` = `ec223bce78d7926f`
+    - `sample_day_toxic` = `66d57776b7be4797`
+    - `sample_day_multisymbol` = `7c4f4b07ec7b391f`
+  - New fixture: `sample_day_controller` = `f3a0a321c39cc411`
+- **Alternatives:**
+  - EMA-based adaptive step (as per spec 16) — deferred for v1, rule-based is simpler and sufficient for v0
+  - ML-based regime detection — rejected for determinism concerns
+  - Controller always-on — rejected to preserve backward compatibility with existing digests

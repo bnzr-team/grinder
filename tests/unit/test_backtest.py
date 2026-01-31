@@ -34,7 +34,7 @@ from scripts.run_backtest import (
     run_fixture,
 )
 
-from grinder.paper import SCHEMA_VERSION
+from grinder.paper import SCHEMA_VERSION, PaperEngine
 
 
 class TestReportSchemaVersion:
@@ -356,4 +356,105 @@ class TestTopKContract:
             selections = [r.results[i].topk_selected_symbols for r in reports]
             assert all(s == selections[0] for s in selections), (
                 f"Non-deterministic Top-K for fixture {reports[0].results[i].fixture_path}"
+            )
+
+
+class TestControllerContract:
+    """Tests for Adaptive Controller contract (ADR-011).
+
+    Controller is opt-in; when disabled, controller fields are empty/defaults.
+    When enabled, controller decisions are recorded for each symbol.
+    """
+
+    def test_controller_disabled_by_default(self) -> None:
+        """Verify controller is disabled by default in backtest."""
+        report = run_backtest()
+
+        for result in report.results:
+            # Default backtest runs with controller disabled
+            # So controller_enabled should be False (if the field exists)
+            result_dict = result.to_dict()
+            if "controller_enabled" in result_dict:
+                assert result_dict["controller_enabled"] is False
+
+    def test_controller_fixture_canonical_digest(self) -> None:
+        """Verify sample_day_controller fixture has expected digest."""
+        engine = PaperEngine(controller_enabled=True)
+        result = engine.run(Path("tests/fixtures/sample_day_controller"))
+
+        assert result.digest == "f3a0a321c39cc411"
+
+    def test_controller_decisions_schema(self) -> None:
+        """Verify controller decision schema is correct."""
+        engine = PaperEngine(controller_enabled=True)
+        result = engine.run(Path("tests/fixtures/sample_day_controller"))
+
+        assert result.controller_enabled is True
+        assert len(result.controller_decisions) > 0
+
+        # Check decision schema
+        for decision in result.controller_decisions:
+            assert "symbol" in decision
+            assert "mode" in decision
+            assert "reason" in decision
+            assert "spacing_multiplier" in decision
+            assert "vol_bps" in decision
+            assert "spread_bps_max" in decision
+            assert "window_size" in decision
+
+            # Integer fields should be integers
+            assert isinstance(decision["vol_bps"], int)
+            assert isinstance(decision["spread_bps_max"], int)
+            assert isinstance(decision["window_size"], int)
+
+    def test_controller_modes_triggered(self) -> None:
+        """Verify sample_day_controller triggers expected modes."""
+        engine = PaperEngine(controller_enabled=True)
+        result = engine.run(Path("tests/fixtures/sample_day_controller"))
+
+        decisions = {d["symbol"]: d for d in result.controller_decisions}
+
+        # WIDENUSDT should trigger WIDEN mode
+        assert decisions["WIDENUSDT"]["mode"] == "WIDEN"
+        assert decisions["WIDENUSDT"]["reason"] == "HIGH_VOL"
+
+        # TIGHTENUSDT should trigger TIGHTEN mode
+        assert decisions["TIGHTENUSDT"]["mode"] == "TIGHTEN"
+        assert decisions["TIGHTENUSDT"]["reason"] == "LOW_VOL"
+
+        # BASEUSDT should stay in BASE mode
+        assert decisions["BASEUSDT"]["mode"] == "BASE"
+        assert decisions["BASEUSDT"]["reason"] == "NORMAL"
+
+    def test_controller_determinism(self) -> None:
+        """Verify controller decisions are deterministic across runs."""
+        digests = []
+        decisions_list = []
+        for _ in range(3):
+            engine = PaperEngine(controller_enabled=True)
+            result = engine.run(Path("tests/fixtures/sample_day_controller"))
+            digests.append(result.digest)
+            decisions_list.append(result.controller_decisions)
+
+        # All digests should be identical
+        assert all(d == digests[0] for d in digests)
+
+        # All decision lists should be identical
+        for decisions in decisions_list:
+            assert decisions == decisions_list[0]
+
+    def test_existing_digests_preserved_with_controller_disabled(self) -> None:
+        """Verify existing canonical digests unchanged when controller disabled."""
+        expected = {
+            "sample_day": "66b29a4e92192f8f",
+            "sample_day_allowed": "ec223bce78d7926f",
+            "sample_day_toxic": "66d57776b7be4797",
+            "sample_day_multisymbol": "7c4f4b07ec7b391f",
+        }
+
+        for fixture, expected_digest in expected.items():
+            engine = PaperEngine(controller_enabled=False)
+            result = engine.run(Path(f"tests/fixtures/{fixture}"))
+            assert result.digest == expected_digest, (
+                f"Digest mismatch for {fixture}: expected {expected_digest}, got {result.digest}"
             )
