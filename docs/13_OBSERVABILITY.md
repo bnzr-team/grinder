@@ -151,7 +151,7 @@ grid_width_bps = Gauge(
 reset_total = Counter(
     "grinder_reset_total",
     "Total grid resets",
-    ["symbol", "type", "reason"]
+    ["symbol", "type", "reason_code"]
 )
 
 gate_state = Gauge(

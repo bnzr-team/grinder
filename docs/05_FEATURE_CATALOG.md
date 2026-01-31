@@ -59,7 +59,7 @@ class FeatureSpec:
 | `price_jump_bps_1m` | DERIVED | mid | 1m | 1s | [-5000, 5000] | 5000ms |
 | `depth_top5_usd` | DERIVED | depth | instant | 250ms | [0, ∞) | 3000ms |
 | `wall_persistence_score` | DERIVED | depth | 10 ticks | 250ms | [0, 1] | 3000ms |
-| `tox_score` | DERIVED | multiple | instant | 1s | [0, 10] | 5000ms |
+| `tox_score` | DERIVED | multiple | instant | 1s | [0, 100] | 5000ms |
 
 ---
 

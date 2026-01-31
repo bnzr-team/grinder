@@ -233,7 +233,7 @@ Metrics additions (see `docs/13_OBSERVABILITY.md`):
 - `grinder_regime{symbol,regime}`
 - `grinder_grid_step_bps{symbol}`
 - `grinder_grid_width_bps{symbol}`
-- `grinder_reset_total{symbol,type,reason}`
+- `grinder_reset_total{symbol,type,reason_code}`
 - `grinder_gate_state{symbol,state}`
 - `grinder_reason_code_total{code}`
 
