@@ -46,6 +46,9 @@ class TestGateReasonContract:
             "MAX_NOTIONAL_EXCEEDED",
             "DAILY_LOSS_LIMIT_EXCEEDED",
             "MAX_ORDERS_EXCEEDED",
+            # Toxicity gate reasons (v0)
+            "SPREAD_SPIKE",
+            "PRICE_IMPACT_HIGH",
         }
     )
 
@@ -83,6 +86,7 @@ class TestGateNameContract:
         {
             "rate_limiter",
             "risk_gate",
+            "toxicity_gate",
         }
     )
 

@@ -112,7 +112,7 @@
   - **PaperResult v1 contract** (required keys): `schema_version`, `fixture_path`, `outputs`, `digest`, `events_processed`, `events_gated`, `orders_placed`, `orders_blocked`, `total_fills`, `final_positions`, `total_realized_pnl`, `total_unrealized_pnl`, `errors`
   - All monetary values serialized as strings (Decimal → str)
   - Contract tests in `tests/unit/test_paper_contracts.py` fail on breaking changes
-  - Canonical digests locked: `sample_day` = `66b29a4e92192f8f`, `sample_day_allowed` = `ec223bce78d7926f`
+  - Canonical digests locked: `sample_day` = `66b29a4e92192f8f`, `sample_day_allowed` = `ec223bce78d7926f`, `sample_day_toxic` = `66d57776b7be4797`
 - **Consequences:**
   - Adding new fields is safe (append-only)
   - Removing/renaming existing fields is breaking change requiring version bump
@@ -121,3 +121,28 @@
 - **Alternatives:**
   - No versioning — rejected because silent breaks are worse
   - Semantic versioning — deferred, simple "v1" sufficient for now
+
+## ADR-009 — ToxicityGate v0 with per-symbol price tracking
+- **Date:** 2026-01-31
+- **Status:** accepted
+- **Context:** Markets can become "toxic" during periods of stress (flash crashes, spread spikes). Trading during toxic conditions leads to adverse selection and losses. Need a gate to block orders when market conditions are dangerous.
+- **Decision:**
+  - Introduce `ToxicityGate` class in `src/grinder/gating/toxicity_gate.py`
+  - **Spread spike detection**: Block when `spread_bps > max_spread_bps` (default 50 bps)
+  - **Price impact detection**: Block when price moves > `max_price_impact_bps` (default 500 bps = 5%) within `lookback_window_ms` (default 5000ms)
+  - Threshold set high (500 bps) to avoid triggering on normal volatility (existing fixtures have up to 300 bps moves)
+  - Price history is tracked **per-symbol** (not global) to avoid false positives across different assets
+  - ToxicityGate is checked **first** in gating pipeline (fail-fast on market conditions)
+  - Extend `GateName` with `TOXICITY_GATE`, `GateReason` with `SPREAD_SPIKE` and `PRICE_IMPACT_HIGH`
+  - New fixture `sample_day_toxic` tests price impact blocking (600 bps move)
+  - Toxicity details NOT included in allow result to preserve backward compatibility with existing digests
+- **Consequences:**
+  - Paper engine gating order: toxicity → rate limit → risk gate
+  - Existing fixture digests UNCHANGED: `sample_day` = `66b29a4e92192f8f`, `sample_day_allowed` = `ec223bce78d7926f`
+  - New fixture: `sample_day_toxic` = `66d57776b7be4797`
+  - `/metrics` now includes `toxicity_gate` label values
+- **Alternatives:**
+  - Global price history across symbols — rejected because comparing BTC to ETH prices causes false positives
+  - ML-based toxicity detection — deferred for v1, rule-based is deterministic and sufficient for v0
+  - Lower threshold (100 bps) — rejected because it would trigger on existing "happy path" fixtures
+  - Include toxicity details in allow result — rejected to preserve backward compatibility with existing digests

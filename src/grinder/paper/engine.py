@@ -23,7 +23,7 @@ from typing import Any
 
 from grinder.contracts import Snapshot
 from grinder.execution import ExecutionEngine, ExecutionState, NoOpExchangePort
-from grinder.gating import GatingResult, RateLimiter, RiskGate
+from grinder.gating import GatingResult, RateLimiter, RiskGate, ToxicityGate
 from grinder.paper.fills import simulate_fills
 from grinder.paper.ledger import Ledger
 from grinder.policies.base import GridPlan  # noqa: TC001 - used at runtime
@@ -133,6 +133,9 @@ class PaperEngine:
         max_notional_per_symbol: Decimal = Decimal("5000"),
         max_notional_total: Decimal = Decimal("20000"),
         daily_loss_limit: Decimal = Decimal("500"),
+        max_spread_bps: float = 50.0,
+        max_price_impact_bps: float = 500.0,  # 5% - high to avoid triggering on normal volatility
+        toxicity_lookback_ms: int = 5000,
     ) -> None:
         """Initialize paper trading engine.
 
@@ -147,6 +150,9 @@ class PaperEngine:
             max_notional_per_symbol: Max notional per symbol (USD)
             max_notional_total: Max total notional (USD)
             daily_loss_limit: Max daily loss before blocking (USD)
+            max_spread_bps: Max spread in bps before toxicity block
+            max_price_impact_bps: Max price change in bps before toxicity block
+            toxicity_lookback_ms: Lookback window for price impact calculation
         """
         # Policy and execution
         self._policy = StaticGridPolicy(
@@ -170,6 +176,11 @@ class PaperEngine:
             max_notional_per_symbol=max_notional_per_symbol,
             max_notional_total=max_notional_total,
             daily_loss_limit=daily_loss_limit,
+        )
+        self._toxicity_gate = ToxicityGate(
+            max_spread_bps=max_spread_bps,
+            max_price_impact_bps=max_price_impact_bps,
+            lookback_window_ms=toxicity_lookback_ms,
         )
 
         # Per-symbol execution state
@@ -208,17 +219,31 @@ class PaperEngine:
             "reason_codes": plan.reason_codes,
         }
 
-    def _check_gating(self, ts: int, symbol: str, proposed_notional: Decimal) -> GatingResult:
+    def _check_gating(
+        self,
+        ts: int,
+        symbol: str,
+        proposed_notional: Decimal,
+        spread_bps: float,
+        mid_price: Decimal,
+    ) -> GatingResult:
         """Check all gating controls.
 
         Args:
             ts: Timestamp in milliseconds
             symbol: Trading symbol
             proposed_notional: Estimated notional for proposed orders
+            spread_bps: Current spread in basis points
+            mid_price: Current mid price
 
         Returns:
             Combined GatingResult (first failure or allow)
         """
+        # Check toxicity FIRST (market conditions)
+        tox_result = self._toxicity_gate.check(ts, symbol, spread_bps, mid_price)
+        if not tox_result.allowed:
+            return tox_result
+
         # Check rate limit
         rate_result = self._rate_limiter.check(ts)
         if not rate_result.allowed:
@@ -229,6 +254,8 @@ class PaperEngine:
         if not risk_result.allowed:
             return risk_result
 
+        # Note: toxicity_gate details not included in allow result to preserve
+        # backward compatibility with existing canonical digests (ADR-009)
         return GatingResult.allow(
             {
                 "rate_limiter": rate_result.details,
@@ -294,9 +321,14 @@ class PaperEngine:
         }
         plan = self._policy.evaluate(policy_features)
 
-        # Step 3: Gating check
+        # Step 3: Gating check (includes toxicity)
+        # Record price for toxicity tracking before check
+        self._toxicity_gate.record_price(ts, symbol, snapshot.mid_price)
+
         estimated_notional = self._estimate_notional(plan, snapshot.mid_price)
-        gating_result = self._check_gating(ts, symbol, estimated_notional)
+        gating_result = self._check_gating(
+            ts, symbol, estimated_notional, snapshot.spread_bps, snapshot.mid_price
+        )
 
         if not gating_result.allowed:
             self._orders_blocked += 1
@@ -458,6 +490,7 @@ class PaperEngine:
         self._port.reset()
         self._rate_limiter.reset()
         self._risk_gate.reset()
+        self._toxicity_gate.reset()
         self._ledger.reset()
         self._states.clear()
         self._last_prices.clear()

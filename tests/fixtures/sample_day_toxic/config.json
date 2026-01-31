@@ -1,0 +1,9 @@
+{
+  "description": "Fixture with toxic market conditions (price impact spike at ts=3000)",
+  "symbols": ["TESTUSDT"],
+  "duration_ms": 5000,
+  "expected_digest": "",
+  "expected_paper_digest": "66d57776b7be4797",
+  "schema_version": "v1",
+  "notes": "Event at ts=3000 has 6% price jump (1.00 -> 1.06 = 600bps), exceeding default 500bps price_impact threshold"
+}
