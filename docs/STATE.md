@@ -16,6 +16,7 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
 - Branch protection на `main`: все PR требуют 5 зелёных checks.
 - **Domain contracts** (`src/grinder/contracts.py`): Snapshot, Position, PolicyContext, OrderIntent, Decision — typed, frozen, JSON-serializable. См. ADR-003.
 - **Prefilter v0** (`src/grinder/prefilter/`): rule-based hard gates returning ALLOW/BLOCK + reason. Limitations: only hard gates, no scoring/ranking/top-K, no stability controls.
+- **GridPolicy v0** (`src/grinder/policies/grid/static.py`): StaticGridPolicy producing symmetric bilateral grids. GridPlan includes: regime, width_bps, reset_action, reason_codes. Limitations: no adaptive step, no inventory skew, no regime switching.
 
 ## Partially implemented
 - Структура пакета `src/grinder/*` (core, protocols/interfaces) — каркас.
@@ -34,5 +35,6 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
 
 ## Planned next
 - Реализовать минимальный data connector (Binance WebSocket mock).
-- Добавить первую реальную policy (grid baseline).
+- Execution stub v0 (apply intents without exchange writes).
+- CLI wiring for end-to-end replay.
 - Расширить тесты до >50% coverage.

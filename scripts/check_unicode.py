@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
-"""Check docs for dangerous Unicode characters.
+"""Check files for dangerous Unicode characters.
 
-This script scans all markdown files in docs/ for:
+This script scans files for:
 1. Bidi controls (U+202A-202E, U+2066-2069, U+200E-200F) - DANGEROUS
 2. Zero-width chars (U+200B-200D, U+FEFF) - DANGEROUS
 3. Soft hyphen (U+00AD) - DANGEROUS
 4. All Unicode category Cf (Format) and Cc (Control) - SUSPICIOUS
 
 Box-drawing characters (U+2500-257F) are explicitly allowed for diagrams.
+
+Usage:
+  python scripts/check_unicode.py           # Scan docs/ only (default)
+  python scripts/check_unicode.py --all     # Scan docs/, src/, tests/
 
 Exit codes:
   0 - Clean (no dangerous chars, only allowed non-ASCII)
@@ -16,6 +20,7 @@ Exit codes:
 
 from __future__ import annotations
 
+import argparse
 import pathlib
 import sys
 import unicodedata
@@ -70,42 +75,80 @@ def is_allowed(code: int) -> bool:
     return any(start <= code <= end for start, end in ALLOWED_RANGES)
 
 
+def scan_path(
+    base_path: pathlib.Path,
+    extensions: list[str],
+    dangerous_found: list[tuple[pathlib.Path, int, str, str]],
+    suspicious_found: list[tuple[pathlib.Path, int, str, str, str]],
+    box_drawing_files: set[pathlib.Path],
+) -> None:
+    """Scan files in a path for Unicode issues."""
+    for ext in extensions:
+        for p in base_path.rglob(f"*{ext}"):
+            try:
+                content = p.read_text(encoding="utf-8", errors="replace")
+            except (OSError, UnicodeDecodeError):
+                continue
+
+            for i, ch in enumerate(content):
+                code = ord(ch)
+
+                # Skip ASCII
+                if code < 128:
+                    continue
+
+                line_num = content[:i].count("\n") + 1
+
+                # Check dangerous
+                if ch in DANGEROUS:
+                    dangerous_found.append((p, line_num, f"U+{code:04X}", ch))
+                    continue
+
+                # Check category Cf (Format) or Cc (Control)
+                category = unicodedata.category(ch)
+                if category in ("Cf", "Cc"):
+                    suspicious_found.append((p, line_num, f"U+{code:04X}", category, ch))
+                    continue
+
+                # Track box-drawing usage
+                if 0x2500 <= code <= 0x257F:
+                    box_drawing_files.add(p)
+
+
 def main() -> int:  # noqa: PLR0912
-    docs_path = pathlib.Path("docs")
-    if not docs_path.exists():
-        print("ERROR: docs/ directory not found")
-        return 1
+    parser = argparse.ArgumentParser(description="Check files for dangerous Unicode")
+    parser.add_argument(
+        "--all",
+        action="store_true",
+        help="Scan docs/, src/, and tests/ (default: docs/ only)",
+    )
+    args = parser.parse_args()
 
     dangerous_found: list[tuple[pathlib.Path, int, str, str]] = []
     suspicious_found: list[tuple[pathlib.Path, int, str, str, str]] = []
     box_drawing_files: set[pathlib.Path] = set()
 
-    for p in docs_path.rglob("*.md"):
-        content = p.read_text(encoding="utf-8", errors="replace")
+    # Determine paths to scan
+    paths_to_scan: list[tuple[pathlib.Path, list[str]]] = [
+        (pathlib.Path("docs"), [".md"]),
+    ]
+    if args.all:
+        paths_to_scan.extend(
+            [
+                (pathlib.Path("src"), [".py"]),
+                (pathlib.Path("tests"), [".py"]),
+            ]
+        )
 
-        for i, ch in enumerate(content):
-            code = ord(ch)
+    # Verify paths exist
+    for path, _ in paths_to_scan:
+        if not path.exists():
+            print(f"ERROR: {path}/ directory not found")
+            return 1
 
-            # Skip ASCII
-            if code < 128:
-                continue
-
-            line_num = content[:i].count("\n") + 1
-
-            # Check dangerous
-            if ch in DANGEROUS:
-                dangerous_found.append((p, line_num, f"U+{code:04X}", ch))
-                continue
-
-            # Check category Cf (Format) or Cc (Control)
-            category = unicodedata.category(ch)
-            if category in ("Cf", "Cc"):
-                suspicious_found.append((p, line_num, f"U+{code:04X}", category, ch))
-                continue
-
-            # Track box-drawing usage
-            if 0x2500 <= code <= 0x257F:
-                box_drawing_files.add(p)
+    # Scan all paths
+    for path, extensions in paths_to_scan:
+        scan_path(path, extensions, dangerous_found, suspicious_found, box_drawing_files)
 
     # Report
     print("=" * 60)

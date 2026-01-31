@@ -4,7 +4,7 @@ from decimal import Decimal
 
 import pytest
 
-from grinder.core import GridMode
+from grinder.core import GridMode, MarketRegime, ResetAction
 from grinder.policies.base import GridPlan, GridPolicy
 
 
@@ -29,6 +29,11 @@ class TestGridPlan:
         assert plan.levels_down == 3
         assert len(plan.size_schedule) == 3
         assert plan.skew_bps == 0.0  # default
+        # New defaults
+        assert plan.regime == MarketRegime.RANGE
+        assert plan.reset_action == ResetAction.NONE
+        assert plan.reason_codes == []
+        assert plan.width_bps == 0.0
 
     def test_plan_with_skew(self) -> None:
         """Test plan with skew."""
@@ -46,6 +51,26 @@ class TestGridPlan:
         assert plan.mode == GridMode.UNI_LONG
         assert plan.skew_bps == -2.0
         assert plan.reason_codes == ["TREND_UP", "LOW_TOX"]
+
+    def test_plan_with_new_fields(self) -> None:
+        """Test plan with regime, width, reset fields."""
+        plan = GridPlan(
+            mode=GridMode.BILATERAL,
+            center_price=Decimal("50000"),
+            spacing_bps=10.0,
+            levels_up=5,
+            levels_down=5,
+            size_schedule=[Decimal("100")],
+            regime=MarketRegime.RANGE,
+            width_bps=50.0,  # 10 bps * 5 levels
+            reset_action=ResetAction.NONE,
+            reason_codes=["REGIME_RANGE"],
+        )
+
+        assert plan.regime == MarketRegime.RANGE
+        assert plan.width_bps == 50.0
+        assert plan.reset_action == ResetAction.NONE
+        assert plan.reason_codes == ["REGIME_RANGE"]
 
 
 class TestGridPolicyInterface:
