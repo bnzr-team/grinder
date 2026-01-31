@@ -28,7 +28,7 @@ from grinder.paper.fills import simulate_fills
 from grinder.paper.ledger import Ledger
 from grinder.policies.base import GridPlan  # noqa: TC001 - used at runtime
 from grinder.policies.grid.static import StaticGridPolicy
-from grinder.prefilter import hard_filter
+from grinder.prefilter import TopKSelector, hard_filter
 
 # Output schema version for contract stability
 SCHEMA_VERSION = "v1"
@@ -90,6 +90,12 @@ class PaperResult:
     final_positions: dict[str, dict[str, Any]] = field(default_factory=dict)
     total_realized_pnl: str = "0"
     total_unrealized_pnl: str = "0"
+    # Top-K prefilter results (v1 addition - ADR-010)
+    # Note: These fields are NOT included in digest computation to preserve
+    # backward compatibility with existing canonical digests.
+    topk_selected_symbols: list[str] = field(default_factory=list)
+    topk_k: int = 0
+    topk_scores: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to JSON-serializable dict."""
@@ -107,6 +113,9 @@ class PaperResult:
             "total_realized_pnl": self.total_realized_pnl,
             "total_unrealized_pnl": self.total_unrealized_pnl,
             "errors": self.errors,
+            "topk_selected_symbols": self.topk_selected_symbols,
+            "topk_k": self.topk_k,
+            "topk_scores": self.topk_scores,
         }
 
     def to_json(self) -> str:
@@ -136,6 +145,8 @@ class PaperEngine:
         max_spread_bps: float = 50.0,
         max_price_impact_bps: float = 500.0,  # 5% - high to avoid triggering on normal volatility
         toxicity_lookback_ms: int = 5000,
+        topk_k: int = 3,
+        topk_window_size: int = 10,
     ) -> None:
         """Initialize paper trading engine.
 
@@ -153,6 +164,8 @@ class PaperEngine:
             max_spread_bps: Max spread in bps before toxicity block
             max_price_impact_bps: Max price change in bps before toxicity block
             toxicity_lookback_ms: Lookback window for price impact calculation
+            topk_k: Number of top symbols to select (default 3)
+            topk_window_size: Window size for volatility scoring (default 10)
         """
         # Policy and execution
         self._policy = StaticGridPolicy(
@@ -182,6 +195,9 @@ class PaperEngine:
             max_price_impact_bps=max_price_impact_bps,
             lookback_window_ms=toxicity_lookback_ms,
         )
+
+        # Top-K symbol selector (ADR-010)
+        self._topk_selector = TopKSelector(k=topk_k, window_size=topk_window_size)
 
         # Per-symbol execution state
         self._states: dict[str, ExecutionState] = {}
@@ -389,6 +405,13 @@ class PaperEngine:
     def run(self, fixture_path: Path) -> PaperResult:
         """Run paper trading loop on fixture.
 
+        Pipeline:
+        1. Load all events from fixture
+        2. First pass: scan events to populate TopKSelector with prices
+        3. Select Top-K symbols by volatility score
+        4. Filter events to only include selected symbols
+        5. Process filtered events through prefilter -> gating -> policy -> execution
+
         Args:
             fixture_path: Path to fixture directory
 
@@ -406,9 +429,30 @@ class PaperEngine:
             result.digest = self._compute_digest([])
             return result
 
-        # Process events in order
-        outputs: list[PaperOutput] = []
+        # First pass: populate TopKSelector with prices for scoring
+        self._topk_selector.reset()
         for event in events:
+            snapshot = self._parse_snapshot(event)
+            if snapshot:
+                self._topk_selector.record_price(snapshot.ts, snapshot.symbol, snapshot.mid_price)
+
+        # Select Top-K symbols
+        topk_result = self._topk_selector.select()
+        selected_symbols = set(topk_result.selected)
+
+        # Store Top-K results in output
+        result.topk_selected_symbols = topk_result.selected
+        result.topk_k = topk_result.k
+        result.topk_scores = [s.to_dict() for s in topk_result.scores]
+
+        # Filter events to only include selected symbols
+        filtered_events = [
+            e for e in events if e.get("symbol") in selected_symbols or e.get("type") != "SNAPSHOT"
+        ]
+
+        # Process filtered events in order
+        outputs: list[PaperOutput] = []
+        for event in filtered_events:
             try:
                 snapshot = self._parse_snapshot(event)
                 if snapshot:
@@ -491,6 +535,7 @@ class PaperEngine:
         self._rate_limiter.reset()
         self._risk_gate.reset()
         self._toxicity_gate.reset()
+        self._topk_selector.reset()
         self._ledger.reset()
         self._states.clear()
         self._last_prices.clear()

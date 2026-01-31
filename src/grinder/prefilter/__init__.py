@@ -11,6 +11,7 @@ from grinder.prefilter.constants import (
     VOL_MIN_24H_USD,
 )
 from grinder.prefilter.gate import FilterResult, hard_filter
+from grinder.prefilter.topk import SymbolScore, TopKResult, TopKSelector
 
 __all__ = [
     "OI_MIN_USD",
@@ -19,5 +20,8 @@ __all__ = [
     "VOL_MIN_1H_USD",
     "VOL_MIN_24H_USD",
     "FilterResult",
+    "SymbolScore",
+    "TopKResult",
+    "TopKSelector",
     "hard_filter",
 ]

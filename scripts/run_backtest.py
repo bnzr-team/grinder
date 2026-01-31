@@ -27,6 +27,7 @@ FIXTURES = [
     Path("tests/fixtures/sample_day"),
     Path("tests/fixtures/sample_day_allowed"),
     Path("tests/fixtures/sample_day_toxic"),
+    Path("tests/fixtures/sample_day_multisymbol"),
 ]
 
 # Report schema version
@@ -50,6 +51,9 @@ class FixtureResult:
     orders_placed: int
     orders_blocked: int
     errors: list[str] = field(default_factory=list)
+    # Top-K prefilter results (v1 addition - ADR-010)
+    topk_selected_symbols: list[str] = field(default_factory=list)
+    topk_k: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to JSON-serializable dict."""
@@ -67,6 +71,8 @@ class FixtureResult:
             "orders_placed": self.orders_placed,
             "orders_blocked": self.orders_blocked,
             "errors": self.errors,
+            "topk_selected_symbols": self.topk_selected_symbols,
+            "topk_k": self.topk_k,
         }
 
 
@@ -139,6 +145,8 @@ def run_fixture(fixture_path: Path) -> FixtureResult:
         orders_placed=result.orders_placed,
         orders_blocked=result.orders_blocked,
         errors=result.errors,
+        topk_selected_symbols=result.topk_selected_symbols,
+        topk_k=result.topk_k,
     )
 
 
@@ -168,6 +176,8 @@ def run_backtest(fixtures: list[Path] | None = None) -> BacktestReport:
                     orders_placed=0,
                     orders_blocked=0,
                     errors=[f"Fixture not found: {fixture_path}"],
+                    topk_selected_symbols=[],
+                    topk_k=0,
                 )
             )
             failed += 1

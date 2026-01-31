@@ -146,3 +146,34 @@
   - ML-based toxicity detection — deferred for v1, rule-based is deterministic and sufficient for v0
   - Lower threshold (100 bps) — rejected because it would trigger on existing "happy path" fixtures
   - Include toxicity details in allow result — rejected to preserve backward compatibility with existing digests
+
+## ADR-010 — Top-K Prefilter v0 with volatility scoring
+- **Date:** 2026-01-31
+- **Status:** accepted
+- **Context:** Need to select a candidate set of symbols (Top-K) from a multisymbol stream for grid trading. Selection must be deterministic to ensure replay reproducibility.
+- **Decision:**
+  - Introduce `TopKSelector` class in `src/grinder/prefilter/topk.py`
+  - **Scoring method:** Volatility proxy — sum of absolute mid-price returns in integer basis points over a window
+    - `score_bps = int(Σ |(mid_t - mid_{t-1}) / mid_{t-1}| * 10000)` (quantized to int for determinism)
+  - **Tie-breakers (deterministic):**
+    1. Higher score first
+    2. Lexicographic symbol ascending
+  - **Parameters:**
+    - `K` = 3 (default, configurable)
+    - `window_size` = 10 events per symbol (default, configurable)
+  - Top-K runs **before** policy/execution/gating in paper trading pipeline
+  - Top-K results included in `PaperResult` (`topk_selected_symbols`, `topk_k`, `topk_scores`) and `FixtureResult` in backtest report
+  - **NOT** included in paper digest computation to preserve backward compatibility with existing canonicals
+  - New fixture `sample_day_multisymbol` with 5 symbols tests Top-K filtering
+- **Consequences:**
+  - Existing fixture digests UNCHANGED (all have ≤3 symbols, K=3 selects all)
+    - `sample_day` = `66b29a4e92192f8f`
+    - `sample_day_allowed` = `ec223bce78d7926f`
+    - `sample_day_toxic` = `66d57776b7be4797`
+  - New fixture: `sample_day_multisymbol` = `7c4f4b07ec7b391f`
+  - Backtest report now includes `topk_selected_symbols` and `topk_k` per fixture
+  - Report digest changes due to new fixture: `cd622b8e55764b5b`
+- **Alternatives:**
+  - Activity proxy (event count) — rejected for being less "market-y"
+  - ML-based scoring — deferred for v1, rule-based is deterministic and sufficient for v0
+  - Include Top-K in digest — rejected to preserve backward compatibility

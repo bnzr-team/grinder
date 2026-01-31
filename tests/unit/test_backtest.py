@@ -6,11 +6,12 @@ that digest validation works correctly.
 Contract guarantees:
 - FixtureResult: fixture_path, schema_version, paper_digest, expected_paper_digest,
   digest_match, total_fills, final_positions, total_realized_pnl, total_unrealized_pnl,
-  events_processed, orders_placed, orders_blocked, errors
+  events_processed, orders_placed, orders_blocked, errors, topk_selected_symbols, topk_k
 - BacktestReport: report_schema_version, paper_schema_version, fixtures_run,
   fixtures_passed, fixtures_failed, all_digests_match, results, report_digest
 - Digest matching is deterministic (same fixtures -> same report_digest)
 - All monetary values are strings (Decimal serialization)
+- Top-K selection is deterministic and included in results (ADR-010)
 """
 
 from __future__ import annotations
@@ -67,6 +68,9 @@ class TestFixtureResultContract:
         "orders_placed",
         "orders_blocked",
         "errors",
+        # Top-K prefilter results (ADR-010)
+        "topk_selected_symbols",
+        "topk_k",
     }
 
     def test_fixture_result_has_all_required_keys(self) -> None:
@@ -85,6 +89,8 @@ class TestFixtureResultContract:
             orders_placed=5,
             orders_blocked=0,
             errors=[],
+            topk_selected_symbols=["BTCUSDT", "ETHUSDT"],
+            topk_k=3,
         )
         d = result.to_dict()
         missing = self.REQUIRED_KEYS - set(d.keys())
@@ -236,11 +242,11 @@ class TestFixtureRunCounts:
         report = run_backtest()
         assert report.fixtures_passed + report.fixtures_failed == report.fixtures_run
 
-    def test_runs_exactly_three_fixtures(self) -> None:
-        """Verify backtest runs exactly 3 registered fixtures."""
+    def test_runs_exactly_four_fixtures(self) -> None:
+        """Verify backtest runs exactly 4 registered fixtures."""
         report = run_backtest()
-        assert report.fixtures_run == 3
-        assert len(FIXTURES) == 3
+        assert report.fixtures_run == 4
+        assert len(FIXTURES) == 4
 
 
 class TestErrorHandling:
@@ -268,3 +274,86 @@ class TestErrorHandling:
         assert report.fixtures_failed >= 1
         # Second fixture should still be processed
         assert len(report.results) == 2
+
+
+class TestTopKContract:
+    """Contract tests for Top-K prefilter in backtest results.
+
+    These tests verify the Top-K selection contract (ADR-010):
+    - topk_selected_symbols is ordered list of selected symbols
+    - topk_k is the K value used for selection
+    - Selection is deterministic based on volatility scores
+    """
+
+    def test_topk_fields_present_in_results(self) -> None:
+        """Verify topk fields are present in all fixture results."""
+        report = run_backtest()
+
+        for result in report.results:
+            d = result.to_dict()
+            assert "topk_selected_symbols" in d
+            assert "topk_k" in d
+            assert isinstance(d["topk_selected_symbols"], list)
+            assert isinstance(d["topk_k"], int)
+
+    def test_topk_k_is_positive(self) -> None:
+        """Verify topk_k is a positive integer."""
+        report = run_backtest()
+
+        for result in report.results:
+            assert result.topk_k > 0
+
+    def test_topk_selected_symbols_is_list_of_strings(self) -> None:
+        """Verify topk_selected_symbols contains strings."""
+        report = run_backtest()
+
+        for result in report.results:
+            for symbol in result.topk_selected_symbols:
+                assert isinstance(symbol, str)
+
+    def test_multisymbol_fixture_has_expected_topk(self) -> None:
+        """Verify sample_day_multisymbol selects correct top 3 symbols."""
+        report = run_backtest()
+
+        # Find the multisymbol fixture result
+        multisymbol_result = None
+        for result in report.results:
+            if "multisymbol" in result.fixture_path:
+                multisymbol_result = result
+                break
+
+        assert multisymbol_result is not None, "sample_day_multisymbol not found"
+        assert multisymbol_result.topk_k == 3
+        assert multisymbol_result.topk_selected_symbols == [
+            "AAAUSDT",
+            "BBBUSDT",
+            "CCCUSDT",
+        ]
+
+    def test_existing_fixtures_select_all_symbols(self) -> None:
+        """Verify existing fixtures with ≤3 symbols have all selected."""
+        report = run_backtest()
+
+        expected_selections = {
+            "sample_day": {"BTCUSDT", "ETHUSDT"},
+            "sample_day_allowed": {"TESTUSDT", "TEST2USDT"},
+            "sample_day_toxic": {"TESTUSDT"},
+        }
+
+        for result in report.results:
+            fixture_name = Path(result.fixture_path).name
+            if fixture_name in expected_selections:
+                actual = set(result.topk_selected_symbols)
+                expected = expected_selections[fixture_name]
+                assert actual == expected, f"{fixture_name}: expected {expected}, got {actual}"
+
+    def test_topk_selection_is_deterministic(self) -> None:
+        """Verify Top-K selection is identical across backtest runs."""
+        reports = [run_backtest() for _ in range(3)]
+
+        # Compare topk_selected_symbols for each fixture across runs
+        for i in range(len(reports[0].results)):
+            selections = [r.results[i].topk_selected_symbols for r in reports]
+            assert all(s == selections[0] for s in selections), (
+                f"Non-deterministic Top-K for fixture {reports[0].results[i].fixture_path}"
+            )
