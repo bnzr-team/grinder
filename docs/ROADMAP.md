@@ -18,7 +18,8 @@ Last updated: 2026-01-31
 - ✅ PR #11: CODEOWNERS added for critical paths
 
 ### Now
-- ⬜ M1 — Vertical Slice v0.1 (Replay-first)
+- ⏳ M1 — Vertical Slice v0.1 (Replay-first) — PR-018 ready for review
+- ⬜ M2 — Beta v0.5 (paper loop + gating)
 
 ---
 
@@ -47,7 +48,7 @@ Last updated: 2026-01-31
 - ✅ PR-015: Adaptive Controller spec + unicode scanner — merged 2026-01-31
 - ✅ PR-016: GridPolicy v0 (static symmetric grid) — merged 2026-01-31 (GitHub PR #17)
 - ✅ PR-017: Execution stub v0 (apply intents, no exchange) — merged 2026-01-31 (GitHub PR #20)
-- ⬜ PR-018: CLI wiring for one end-to-end replay run
+- ⏳ PR-018: CLI wiring for one end-to-end replay run — ready for review 2026-01-31
 
 ---
 

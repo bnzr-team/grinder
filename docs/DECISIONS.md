@@ -64,3 +64,21 @@
   - Use `scripts/check_unicode.py` to verify before merge
 - **Consequences:** PRs must pass Unicode scan; box-drawing triggers GitHub warning but is allowed.
 - **Alternatives:** replace all box-drawing with ASCII art — rejected for readability.
+
+## ADR-006 — Fixture event format: SNAPSHOT replaces BOOK_TICKER
+- **Date:** 2026-01-31
+- **Status:** accepted
+- **Context:** M1 end-to-end replay requires events that match the `Snapshot` domain contract (`src/grinder/contracts.py`). The old `BOOK_TICKER` format used `bid`/`ask` (floats) and lacked `last_price`/`last_qty` fields required by `Snapshot.from_dict()`. ReplayEngine needs typed Snapshot objects to compute `mid_price` and `spread_bps` for prefilter and policy.
+- **Decision:**
+  - Fixture events use `type: "SNAPSHOT"` with fields matching `Snapshot` contract:
+    - `ts`, `symbol`, `bid_price`, `ask_price`, `bid_qty`, `ask_qty`, `last_price`, `last_qty`
+  - All price/quantity fields are string-encoded Decimals (not floats) for determinism
+  - Old `BOOK_TICKER` format is **not supported** by ReplayEngine
+  - Expected digest for `tests/fixtures/sample_day` is now `453ebd0f655e4920` (was `9397b7200c09a7d2` with old format)
+- **Consequences:**
+  - Existing fixtures must be migrated to SNAPSHOT format
+  - Digest values in `config.json` must be updated after migration
+  - ReplayEngine only processes `type: "SNAPSHOT"` events (other types ignored)
+- **Alternatives:**
+  - Support both formats with adapter — rejected for complexity and non-determinism risk
+  - Keep BOOK_TICKER and adapt Snapshot contract — rejected because BOOK_TICKER lacks required fields
