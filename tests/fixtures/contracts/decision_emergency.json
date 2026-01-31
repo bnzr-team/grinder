@@ -1,0 +1,10 @@
+{
+  "ts": 1706000001000,
+  "symbol": "BTCUSDT",
+  "mode": "EMERGENCY",
+  "reason": "RISK_KILL_SWITCH",
+  "order_intents": [],
+  "cancel_order_ids": ["order-001", "order-002", "order-003"],
+  "policy_name": "EmergencyStop",
+  "context_hash": "e5f6g7h8"
+}

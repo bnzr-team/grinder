@@ -1,0 +1,27 @@
+{
+  "ts": 1706000000000,
+  "symbol": "BTCUSDT",
+  "mode": "BILATERAL",
+  "reason": "POLICY_GRID_NORMAL",
+  "order_intents": [
+    {
+      "symbol": "BTCUSDT",
+      "side": "BUY",
+      "price": "49900.00",
+      "quantity": "0.01",
+      "reason": "POLICY_GRID_NORMAL",
+      "level_id": 1
+    },
+    {
+      "symbol": "BTCUSDT",
+      "side": "SELL",
+      "price": "50100.00",
+      "quantity": "0.01",
+      "reason": "POLICY_GRID_NORMAL",
+      "level_id": 1
+    }
+  ],
+  "cancel_order_ids": [],
+  "policy_name": "RangeMaster",
+  "context_hash": "a1b2c3d4"
+}

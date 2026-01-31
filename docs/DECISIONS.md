@@ -28,4 +28,20 @@
 - **Context:** несостыковки документации и кода ломают онбординг и доверие.
 - **Decision:** любые команды/CLI/пути в README и entrypoints в `pyproject.toml` должны быть реально работоспособны. Всё остальное помечать как Planned.
 - **Consequences:** прежде чем добавить новый entrypoint — добавить модуль+тест.
-- **Alternatives:** “дописать позже”.
+- **Alternatives:** "дописать позже".
+
+## ADR-003 — Domain contracts as SSOT
+- **Date:** 2026-01-31
+- **Status:** accepted
+- **Context:** M1 vertical slice требует единых контрактов данных для pipeline (Snapshot → Policy → Decision → Execution). Без SSOT контрактов легко получить рассинхрон между компонентами.
+- **Decision:**
+  - Контракты живут в `src/grinder/contracts.py`
+  - Все контракты — frozen dataclasses (immutable)
+  - Все контракты имеют `to_dict()`/`from_dict()` для JSON-сериализации
+  - JSON-сериализация детерминистична (`sort_keys=True`)
+  - Breaking changes требуют: (1) обновления fixtures, (2) bump версии, (3) обновления STATE.md
+- **Consequences:**
+  - Prefilter/Policy/Execution импортируют контракты из `contracts.py`
+  - Тесты проверяют roundtrip сериализации
+  - Golden fixtures в `tests/fixtures/contracts/` служат regression-тестами
+- **Alternatives:** "протоколы/интерфейсы без конкретных типов" — отвергнуто, т.к. ломает детерминизм и type safety.
