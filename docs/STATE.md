@@ -13,11 +13,12 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
 - **Test fixtures** (`tests/fixtures/`):
   - `sample_day/`: BTC/ETH prices, orders blocked by gating (notional too high)
     - Replay digest: `453ebd0f655e4920`
-    - Paper digest: `55921a9bd855e1bd`
+    - Paper digest (v1): `66b29a4e92192f8f`
   - `sample_day_allowed/`: Low-price assets (~$1), orders pass prefilter + gating
     - Replay digest: `03253d84cd2604e7`
-    - Paper digest: `f78930356488da3e`
+    - Paper digest (v1): `ec223bce78d7926f`
   - Fixture format: SNAPSHOT events (see ADR-006 for migration from BOOK_TICKER)
+  - Schema version: v1 (see ADR-008)
 - **End-to-end replay**:
   - CLI: `grinder replay --fixture <path> [-v] [--out <path>]`
   - Script: `python -m scripts.run_replay --fixture <path> [-v] [--out <path>]`
@@ -51,13 +52,19 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - Export: `to_prometheus_lines()` for /metrics endpoint
   - **Contract tests**: `tests/unit/test_gating_contracts.py` fails if reason codes or metric labels change
   - **Limitations:** no circuit breakers, no position-level checks, PnL tracking is simulated
-- **Paper trading v0** (`src/grinder/paper/`):
+- **Paper trading v1** (`src/grinder/paper/`):
   - CLI: `grinder paper --fixture <path> [-v] [--out <path>]`
-  - **Pipeline:** `Snapshot` -> `hard_filter()` -> `gating check` -> `StaticGridPolicy.evaluate()` -> `ExecutionEngine.evaluate()` -> `PaperOutput`
+  - **Pipeline:** `Snapshot` -> `hard_filter()` -> `gating check` -> `StaticGridPolicy.evaluate()` -> `ExecutionEngine.evaluate()` -> `simulate_fills()` -> `Ledger.apply_fills()` -> `PaperOutput`
   - **Gating gates:** rate limit (orders/minute, cooldown) + risk limits (notional, daily loss)
+  - **Fill simulation:** All PLACE orders fill immediately at limit price (deterministic)
+  - **Position tracking:** Per-symbol qty + avg_entry_price via `Ledger` class
+  - **PnL tracking:** Realized (on close), Unrealized (mark-to-market), Total
+  - **Output schema v1:** `PaperResult` includes `schema_version`, `total_fills`, `final_positions`, `total_realized_pnl`, `total_unrealized_pnl`
+  - **Contract tests:** `tests/unit/test_paper_contracts.py` (27 tests) verify schema stability
   - Output format: `Paper trading completed. Events processed: N\nOutput digest: <16-char-hex>`
   - Deterministic digest for fixture-based runs
-  - **Limitations:** no live feed, no real orders, simulated fills
+  - **Canonical digests:** `sample_day` = `66b29a4e92192f8f`, `sample_day_allowed` = `ec223bce78d7926f`
+  - **Limitations:** no live feed, no real orders, no slippage, no partial fills
 - **Observability v0** (`src/grinder/observability/`):
   - `MetricsBuilder`: consolidates all metrics into Prometheus format
   - `build_metrics_output()`: convenience function for /metrics endpoint

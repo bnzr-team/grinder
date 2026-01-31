@@ -2,14 +2,32 @@
 
 Provides:
 - PaperEngine: Paper trading loop with rate limiting and risk controls
-- PaperOutput: Per-tick output with gating decisions
-- PaperResult: Full run result with metrics and digest
+- PaperOutput: Per-tick output with gating decisions and fills
+- PaperResult: Full run result with metrics, positions, PnL, and digest
+- Fill: Simulated fill event
+- Ledger: Position and PnL tracking
+- PositionState: Per-symbol position state
+- PnLSnapshot: Point-in-time PnL snapshot
+- SCHEMA_VERSION: Current output schema version
 """
 
-from grinder.paper.engine import PaperEngine, PaperOutput, PaperResult
+from grinder.paper.engine import (
+    SCHEMA_VERSION,
+    PaperEngine,
+    PaperOutput,
+    PaperResult,
+)
+from grinder.paper.fills import Fill, simulate_fills
+from grinder.paper.ledger import Ledger, PnLSnapshot, PositionState
 
 __all__ = [
+    "SCHEMA_VERSION",
+    "Fill",
+    "Ledger",
     "PaperEngine",
     "PaperOutput",
     "PaperResult",
+    "PnLSnapshot",
+    "PositionState",
+    "simulate_fills",
 ]

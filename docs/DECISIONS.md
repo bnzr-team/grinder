@@ -100,3 +100,24 @@
 - **Alternatives:**
   - Free-text reasons — rejected for label cardinality explosion
   - No contract tests — rejected because silent breaks are worse than loud failures
+
+## ADR-008 — Paper trading output schema v1
+- **Date:** 2026-01-31
+- **Status:** accepted
+- **Context:** Paper trading needs stable output schema for: (1) replay determinism verification, (2) downstream analysis tools, (3) dashboard integration. Adding fields without versioning risks silent breaking changes.
+- **Decision:**
+  - Introduce `SCHEMA_VERSION = "v1"` constant in `src/grinder/paper/engine.py`
+  - `PaperResult` includes `schema_version` field in serialized output
+  - **PaperOutput v1 contract** (required keys): `ts`, `symbol`, `prefilter_result`, `gating_result`, `plan`, `actions`, `events`, `blocked_by_gating`, `fills`, `pnl_snapshot`
+  - **PaperResult v1 contract** (required keys): `schema_version`, `fixture_path`, `outputs`, `digest`, `events_processed`, `events_gated`, `orders_placed`, `orders_blocked`, `total_fills`, `final_positions`, `total_realized_pnl`, `total_unrealized_pnl`, `errors`
+  - All monetary values serialized as strings (Decimal → str)
+  - Contract tests in `tests/unit/test_paper_contracts.py` fail on breaking changes
+  - Canonical digests locked: `sample_day` = `66b29a4e92192f8f`, `sample_day_allowed` = `ec223bce78d7926f`
+- **Consequences:**
+  - Adding new fields is safe (append-only)
+  - Removing/renaming existing fields is breaking change requiring version bump
+  - Downstream tools can rely on field presence
+  - Digests change when output structure changes (intentional)
+- **Alternatives:**
+  - No versioning — rejected because silent breaks are worse
+  - Semantic versioning — deferred, simple "v1" sufficient for now
