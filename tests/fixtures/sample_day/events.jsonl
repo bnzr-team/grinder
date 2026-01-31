@@ -1,20 +1,5 @@
-{"ts": 1000, "type": "BOOK_TICKER", "symbol": "BTCUSDT", "bid": 49997.5, "ask": 50002.5, "bid_qty": 6.4303, "ask_qty": 0.3476}
-{"ts": 1100, "type": "BOOK_TICKER", "symbol": "BTCUSDT", "bid": 49997.5, "ask": 50002.5, "bid_qty": 2.8228, "ask_qty": 2.3098}
-{"ts": 1200, "type": "BOOK_TICKER", "symbol": "BTCUSDT", "bid": 49997.5, "ask": 50002.5, "bid_qty": 7.3911, "ask_qty": 6.7993}
-{"ts": 1300, "type": "BOOK_TICKER", "symbol": "BTCUSDT", "bid": 49997.5, "ask": 50002.5, "bid_qty": 8.9326, "ask_qty": 0.9607}
-{"ts": 1400, "type": "BOOK_TICKER", "symbol": "BTCUSDT", "bid": 49997.5, "ask": 50002.5, "bid_qty": 4.277, "ask_qty": 0.395}
-{"ts": 1500, "type": "BOOK_TICKER", "symbol": "BTCUSDT", "bid": 49997.5, "ask": 50002.5, "bid_qty": 2.2645, "ask_qty": 5.103}
-{"ts": 1600, "type": "BOOK_TICKER", "symbol": "BTCUSDT", "bid": 49997.5, "ask": 50002.5, "bid_qty": 0.3627, "ask_qty": 2.0685}
-{"ts": 1700, "type": "BOOK_TICKER", "symbol": "BTCUSDT", "bid": 49997.5, "ask": 50002.5, "bid_qty": 6.5339, "ask_qty": 5.4949}
-{"ts": 1800, "type": "BOOK_TICKER", "symbol": "BTCUSDT", "bid": 49997.5, "ask": 50002.5, "bid_qty": 2.2824, "ask_qty": 5.9337}
-{"ts": 1900, "type": "BOOK_TICKER", "symbol": "BTCUSDT", "bid": 49997.5, "ask": 50002.5, "bid_qty": 8.1134, "ask_qty": 0.1643}
-{"ts": 2000, "type": "BOOK_TICKER", "symbol": "BTCUSDT", "bid": 49997.5, "ask": 50002.5, "bid_qty": 8.0776, "ask_qty": 7.0116}
-{"ts": 2100, "type": "BOOK_TICKER", "symbol": "BTCUSDT", "bid": 49997.5, "ask": 50002.5, "bid_qty": 3.4685, "ask_qty": 1.6392}
-{"ts": 2200, "type": "BOOK_TICKER", "symbol": "BTCUSDT", "bid": 49997.5, "ask": 50002.5, "bid_qty": 9.5764, "ask_qty": 3.4323}
-{"ts": 2300, "type": "BOOK_TICKER", "symbol": "BTCUSDT", "bid": 49997.5, "ask": 50002.5, "bid_qty": 1.0182, "ask_qty": 1.0575}
-{"ts": 2400, "type": "BOOK_TICKER", "symbol": "BTCUSDT", "bid": 49997.5, "ask": 50002.5, "bid_qty": 8.4902, "ask_qty": 6.0769}
-{"ts": 2500, "type": "BOOK_TICKER", "symbol": "BTCUSDT", "bid": 49997.5, "ask": 50002.5, "bid_qty": 8.0906, "ask_qty": 7.3243}
-{"ts": 2600, "type": "BOOK_TICKER", "symbol": "BTCUSDT", "bid": 49997.5, "ask": 50002.5, "bid_qty": 5.4087, "ask_qty": 9.7338}
-{"ts": 2700, "type": "BOOK_TICKER", "symbol": "BTCUSDT", "bid": 49997.5, "ask": 50002.5, "bid_qty": 3.8475, "ask_qty": 5.5652}
-{"ts": 2800, "type": "BOOK_TICKER", "symbol": "BTCUSDT", "bid": 49997.5, "ask": 50002.5, "bid_qty": 8.3111, "ask_qty": 6.2233}
-{"ts": 2900, "type": "BOOK_TICKER", "symbol": "BTCUSDT", "bid": 49997.5, "ask": 50002.5, "bid_qty": 8.6309, "ask_qty": 5.8158}
+{"ts": 1000, "type": "SNAPSHOT", "symbol": "BTCUSDT", "bid_price": "50000.00", "ask_price": "50001.00", "bid_qty": "10.0", "ask_qty": "10.0", "last_price": "50000.50", "last_qty": "0.5"}
+{"ts": 2000, "type": "SNAPSHOT", "symbol": "BTCUSDT", "bid_price": "50005.00", "ask_price": "50006.00", "bid_qty": "10.0", "ask_qty": "10.0", "last_price": "50005.50", "last_qty": "0.5"}
+{"ts": 3000, "type": "SNAPSHOT", "symbol": "BTCUSDT", "bid_price": "50010.00", "ask_price": "50011.00", "bid_qty": "10.0", "ask_qty": "10.0", "last_price": "50010.50", "last_qty": "0.5"}
+{"ts": 4000, "type": "SNAPSHOT", "symbol": "ETHUSDT", "bid_price": "3000.00", "ask_price": "3000.10", "bid_qty": "100.0", "ask_qty": "100.0", "last_price": "3000.05", "last_qty": "1.0"}
+{"ts": 5000, "type": "SNAPSHOT", "symbol": "BTCUSDT", "bid_price": "50015.00", "ask_price": "50016.00", "bid_qty": "10.0", "ask_qty": "10.0", "last_price": "50015.50", "last_qty": "0.5"}

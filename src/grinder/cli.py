@@ -1,14 +1,19 @@
 """Project CLI entrypoint.
 
-This is intentionally minimal for the current skeleton stage.
-The CLI delegates to scripts/* so packaging/UX is consistent.
+Provides CLI commands for GRINDER:
+- grinder replay: End-to-end deterministic replay on fixtures
+- grinder live: Run live loop (skeleton)
+- grinder verify-replay: Verify replay determinism
+- grinder secret-guard: Scan for secrets
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
 
 
 def _pkg_version() -> str:
@@ -36,6 +41,42 @@ def _run_script(module: str, argv: list[str]) -> int:
     return 0
 
 
+def _cmd_replay(args: argparse.Namespace) -> None:
+    """Run end-to-end replay command."""
+    from grinder.replay import ReplayEngine  # noqa: PLC0415 - lazy import for fast CLI startup
+
+    fixture_dir = Path(args.fixture)
+
+    if not fixture_dir.exists():
+        print(f"Fixture directory not found: {fixture_dir}", file=sys.stderr)
+        raise SystemExit(1)
+
+    if args.verbose:
+        print(f"Loading fixture from: {fixture_dir}")
+
+    engine = ReplayEngine()
+    result = engine.run(fixture_dir)
+
+    if args.verbose:
+        print(f"Events processed: {result.events_processed}")
+        print(f"Outputs generated: {len(result.outputs)}")
+        if result.errors:
+            print(f"Errors: {len(result.errors)}")
+            for err in result.errors:
+                print(f"  - {err}")
+
+    if args.out:
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        with out_path.open("w") as f:
+            json.dump(result.to_dict(), f, indent=2)
+        if args.verbose:
+            print(f"Output written to: {out_path}")
+
+    print(f"Replay completed. Events processed: {result.events_processed}")
+    print(f"Output digest: {result.digest}")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="grinder", description="GRINDER CLI")
     parser.add_argument("--version", action="version", version=f"grinder {_pkg_version()}")
@@ -51,9 +92,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--metrics-port", type=int, default=9090, help="Port for /healthz and /metrics"
     )
 
-    p_replay = sub.add_parser("replay", help="Run deterministic replay on fixtures")
-    p_replay.add_argument("--fixture", required=True, help="Path to fixture JSON")
-    p_replay.add_argument("--out", required=True, help="Output path for replay JSON")
+    p_replay = sub.add_parser("replay", help="Run end-to-end deterministic replay on fixtures")
+    p_replay.add_argument("--fixture", required=True, help="Path to fixture directory")
+    p_replay.add_argument("--out", help="Output path for replay JSON (optional)")
+    p_replay.add_argument("-v", "--verbose", action="store_true", help="Verbose output")
 
     sub.add_parser(
         "verify-replay", help="Verify replay determinism (runs twice and compares digests)"
@@ -88,7 +130,7 @@ def main() -> None:
         return
 
     if args.cmd == "replay":
-        _run_script("scripts.run_replay", ["--fixture", args.fixture, "--out", args.out])
+        _cmd_replay(args)
         return
 
     if args.cmd == "verify-replay":

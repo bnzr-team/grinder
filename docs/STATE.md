@@ -8,7 +8,13 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
 - `grinder --help` / `grinder-paper --help` / `grinder-backtest --help` — CLI entrypoints работают.
 - `python -m scripts.run_live` поднимает `/healthz` и `/metrics`.
 - `python -m scripts.run_soak` генерирует synthetic soak metrics JSON.
-- Replay utilities: `python -m scripts.run_replay` и `python -m scripts.verify_replay_determinism`.
+- **End-to-end replay** (PR-018 pending):
+  - CLI: `grinder replay --fixture <path> [-v] [--out <path>]`
+  - Script: `python -m scripts.run_replay --fixture <path> [-v] [--out <path>]`
+  - Determinism check: `python -m scripts.verify_replay_determinism --fixture <path>`
+  - Output format: `Replay completed. Events processed: N\nOutput digest: <16-char-hex>`
+  - Expected digest for `tests/fixtures/sample_day`: `453ebd0f655e4920`
+  - Fixture format: SNAPSHOT events (see ADR-006 for migration from BOOK_TICKER)
 - `python -m scripts.secret_guard` проверяет repo на утечки секретов.
 - `python scripts/check_unicode.py` сканирует docs на опасный Unicode (bidi, zero-width). См. ADR-005.
 - Docker build + healthcheck работают (Dockerfile использует `urllib.request` вместо `curl`).
@@ -18,6 +24,13 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
 - **Prefilter v0** (`src/grinder/prefilter/`): rule-based hard gates returning ALLOW/BLOCK + reason. Limitations: only hard gates, no scoring/ranking/top-K, no stability controls.
 - **GridPolicy v0** (`src/grinder/policies/grid/static.py`): StaticGridPolicy producing symmetric bilateral grids. GridPlan includes: regime, width_bps, reset_action, reason_codes. Limitations: no adaptive step, no inventory skew, no regime switching.
 - **Execution stub v0** (`src/grinder/execution/`): ExchangePort protocol + NoOpExchangePort stub, ExecutionEngine with reconcile logic (PAUSE/EMERGENCY -> cancel all, HARD reset -> rebuild grid, SOFT reset -> replace non-conforming, NONE -> reconcile). Deterministic order ID generation. ExecutionMetrics for observability. Limitations: no live exchange writes, no rate limiting, no error recovery.
+- **Replay engine v0** (`src/grinder/replay/`, PR-018 pending):
+  - **Responsibilities:** Load fixture -> parse SNAPSHOT events -> apply prefilter gates -> evaluate policy -> execute via ExecutionEngine -> compute deterministic digest
+  - **Components:** `ReplayEngine` (orchestrator), `ReplayOutput` (per-tick output), `ReplayResult` (full run result)
+  - **Pipeline:** `Snapshot` -> `hard_filter()` -> `StaticGridPolicy.evaluate()` -> `ExecutionEngine.evaluate()` -> `ReplayOutput`
+  - **Digest:** SHA256 of JSON-serialized outputs, truncated to 16 hex chars
+  - **Expected digest:** `453ebd0f655e4920` for `tests/fixtures/sample_day`
+  - **Limitations:** single policy (StaticGridPolicy), no custom feature injection, volume/OI assumed sufficient for replay
 
 ## Partially implemented
 - Структура пакета `src/grinder/*` (core, protocols/interfaces) — каркас.
@@ -36,5 +49,5 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
 
 ## Planned next
 - Реализовать минимальный data connector (Binance WebSocket mock).
-- CLI wiring for end-to-end replay.
 - Расширить тесты до >50% coverage.
+- Adaptive Controller implementation (regime + step + reset).
