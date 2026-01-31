@@ -1,6 +1,6 @@
 """Hard filter gating logic for prefilter v0.
 
-This module implements rule-based symbol gating as per docs/04_PREFILTER_SPEC.md §4.4.
+This module implements rule-based symbol gating as per docs/04_PREFILTER_SPEC.md section 4.4.
 
 Limitations v0:
 - Only hard gates, no scoring/ranking/top-K

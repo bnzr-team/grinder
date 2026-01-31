@@ -1,6 +1,6 @@
 """Prefilter constants and thresholds.
 
-Default values from docs/15_CONSTANTS.md §1.1 Hard Gates.
+Default values from docs/15_CONSTANTS.md section 1.1 Hard Gates.
 """
 
 # Hard gate thresholds
