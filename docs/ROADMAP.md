@@ -42,18 +42,20 @@ Last updated: 2026-01-31
 - `STATE.md` updated after each PR to reflect what is implemented
 
 **Work items (recommended PR sequence)**
-- ⬜ PR-013: Domain contracts (events/state/order_intents)
-- ⬜ PR-014: Prefilter v0 (rule-based gating)
-- ⬜ PR-015: GridPolicy v0 (static symmetric grid)
-- ⬜ PR-016: Execution stub v0 (apply intents, no exchange)
-- ⬜ PR-017: CLI wiring for one end-to-end replay run
+- ✅ PR-013: Domain contracts (events/state/order_intents) — merged 2026-01-31
+- ✅ PR-014: Prefilter v0 (rule-based gating) — merged 2026-01-31
+- ✅ PR-015: Adaptive Controller spec + unicode scanner — merged 2026-01-31
+- ⬜ PR-016: GridPolicy v0 (static symmetric grid)
+- ⬜ PR-017: Execution stub v0 (apply intents, no exchange)
+- ⬜ PR-018: CLI wiring for one end-to-end replay run
 
 ---
 
 ### M2 — Beta v0.5
 **Goal:** paper loop with gating + observability maturity
 
-- ⬜ Adaptive Controller spec (regime + adaptive step + auto-reset) implemented: `docs/16_ADAPTIVE_GRID_CONTROLLER_SPEC.md`
+- ✅ Adaptive Controller spec (docs-only): `docs/16_ADAPTIVE_GRID_CONTROLLER_SPEC.md` — merged 2026-01-31
+- ⬜ Adaptive Controller implementation (regime + step + reset)
 - ⬜ Top-K prefilter working from fixtures/live data
 - ⬜ Toxicity gating enabled (`docs/06_TOXICITY_SPEC.md`)
 - ⬜ Paper loop validated (no exchange writes)
