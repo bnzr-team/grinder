@@ -336,3 +336,40 @@
   - Gate on latency/memory — rejected; too flaky in CI
   - Only nightly soak — rejected; too slow feedback loop
   - Single run — rejected; doesn't catch non-determinism
+
+## ADR-015 — HA v0 with Redis lease-lock for single-active safety
+- **Date:** 2026-02-01
+- **Status:** accepted
+- **Context:** Production deployments need high availability to avoid single-point-of-failure. Full multi-node HA is complex; v0 focuses on single-host redundancy with single-active safety to prevent split-brain scenarios.
+- **Decision:**
+  - **Architecture:** Single-host redundancy with 2+ instances + Redis for coordination
+  - **Leader election:** TTL-based lease lock using Redis SET with NX/XX and PX options
+    - Lock TTL: 10 seconds
+    - Renewal interval: 3 seconds (< TTL to prevent expiry during normal operation)
+    - Lock key: `grinder:leader:lock`
+  - **HA roles:**
+    - `ACTIVE` — Instance holds the lock, actively trading
+    - `STANDBY` — Instance is healthy but waiting to acquire lock
+    - `UNKNOWN` — Initial state before first lock attempt
+  - **Fail-safe semantics:**
+    - If lock renewal fails → immediately become STANDBY (fail-safe)
+    - Redis unavailable → all instances become STANDBY
+    - Only ACTIVE instance executes trading logic
+  - **Observability:**
+    - `/readyz` endpoint: Returns 200 for ACTIVE, 503 for STANDBY/UNKNOWN
+    - `/healthz` endpoint: Always 200 if process is alive (liveness, not readiness)
+    - `grinder_ha_role` metric: Gauge with `role` label indicating current role
+  - **Deployment:** `docker-compose.ha.yml` with Redis + 2 grinder instances
+  - **Environment variables:**
+    - `GRINDER_REDIS_URL` — Redis connection URL (default: redis://localhost:6379/0)
+    - `GRINDER_HA_ENABLED` — Enable HA mode (default: false)
+- **Consequences:**
+  - Single-active safety: Only one instance is ACTIVE at any time
+  - Failover on leader crash: ~10s (lock TTL expiry)
+  - Redis is SPOF for coordination (acceptable for single-host deployment)
+  - No protection against host/VM failure (that's HA v1 scope)
+- **Alternatives:**
+  - Docs-only (no code) — rejected; need working HA for production readiness
+  - File-based lock — rejected; not atomic, no TTL support
+  - Active-active with partitioning — rejected; too complex for v0
+  - Full Raft/Paxos consensus — rejected; overkill for single-host

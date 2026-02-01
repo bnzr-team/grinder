@@ -4,6 +4,7 @@ Consolidates all metrics into a single Prometheus-compatible text output:
 - System metrics (uptime, status)
 - Gating metrics (allowed/blocked counters)
 - Risk metrics (kill-switch, drawdown)
+- HA metrics (role)
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 
 from grinder.gating import get_gating_metrics
+from grinder.ha.role import get_ha_state
 
 
 @dataclass
@@ -77,6 +79,9 @@ class MetricsBuilder:
 
         # Risk metrics (if available)
         lines.extend(self._build_risk_metrics())
+
+        # HA metrics
+        lines.extend(self._build_ha_metrics())
 
         return "\n".join(lines)
 
@@ -144,6 +149,16 @@ class MetricsBuilder:
         )
 
         return lines
+
+    def _build_ha_metrics(self) -> list[str]:
+        """Build HA (high availability) metrics."""
+        state = get_ha_state()
+        role = state.role.value
+        return [
+            "# HELP grinder_ha_role Current HA role (1 = this role is active)",
+            "# TYPE grinder_ha_role gauge",
+            f'grinder_ha_role{{role="{role}"}} 1',
+        ]
 
 
 class _BuilderHolder:

@@ -1,4 +1,4 @@
-"""Live runtime contract: stable /healthz and /metrics responses.
+"""Live runtime contract: stable /healthz, /readyz, and /metrics responses.
 
 This module provides pure functions for building endpoint responses,
 making them testable without network operations.
@@ -6,9 +6,15 @@ making them testable without network operations.
 Contract (enforced by tests/unit/test_live_contracts.py):
 
 GET /healthz:
-    - Status: 200
+    - Status: 200 (always, if process is alive)
     - Content-Type: application/json
     - Body: {"status": "ok", "uptime_s": <float>}
+
+GET /readyz:
+    - Status: 200 if ACTIVE (ready to handle traffic/trading)
+    - Status: 503 if STANDBY or UNKNOWN (not ready)
+    - Content-Type: application/json
+    - Body: {"ready": true/false, "role": "active"|"standby"|"unknown"}
 
 GET /metrics:
     - Status: 200
@@ -22,6 +28,7 @@ GET /metrics:
         - grinder_kill_switch_trips_total (counter)
         - grinder_drawdown_pct (gauge)
         - grinder_high_water_mark (gauge)
+        - grinder_ha_role (gauge with role label)
 """
 
 from __future__ import annotations
@@ -29,6 +36,7 @@ from __future__ import annotations
 import json
 import time
 
+from grinder.ha.role import HARole, get_ha_state
 from grinder.observability.metrics_builder import build_metrics_output
 
 # Module-level state container (avoids global statement)
@@ -71,6 +79,26 @@ def build_healthz_body() -> str:
     )
 
 
+def build_readyz_body() -> tuple[str, bool]:
+    """Build /readyz response body.
+
+    Returns:
+        Tuple of (JSON string body, is_ready boolean).
+        is_ready is True only if HA role is ACTIVE.
+    """
+    state = get_ha_state()
+    is_ready = state.role == HARole.ACTIVE
+    return (
+        json.dumps(
+            {
+                "ready": is_ready,
+                "role": state.role.value,
+            }
+        ),
+        is_ready,
+    )
+
+
 def build_metrics_body() -> str:
     """Build /metrics response body.
 
@@ -82,6 +110,7 @@ def build_metrics_body() -> str:
 
 # Required metric patterns for contract validation
 REQUIRED_HEALTHZ_KEYS = ["status", "uptime_s"]
+REQUIRED_READYZ_KEYS = ["ready", "role"]
 
 REQUIRED_METRICS_PATTERNS = [
     # System metrics
@@ -108,4 +137,8 @@ REQUIRED_METRICS_PATTERNS = [
     "# HELP grinder_high_water_mark",
     "# TYPE grinder_high_water_mark",
     "grinder_high_water_mark",
+    # HA metrics
+    "# HELP grinder_ha_role",
+    "# TYPE grinder_ha_role",
+    "grinder_ha_role",
 ]
