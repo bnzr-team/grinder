@@ -166,6 +166,33 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - **Marker:** `@pytest.mark.integration` (run with `-m integration` to filter)
   - **Dependencies:** Uses `REQUIRED_HEALTHZ_KEYS` and `REQUIRED_METRICS_PATTERNS` from `live_contract.py`
   - **Included in CI:** runs as part of standard `pytest` invocation
+- **DataConnector v0** (`src/grinder/connectors/data_connector.py`):
+  - Abstract base class (ABC) defining narrow contract: `connect()`, `close()`, `iter_snapshots()`, `reconnect()`
+  - **ConnectorState:** DISCONNECTED → CONNECTING → CONNECTED → RECONNECTING → CLOSED
+  - **RetryConfig:** Exponential backoff with cap (`base_delay_ms`, `backoff_multiplier`, `max_delay_ms`)
+  - **TimeoutConfig:** Connection and read timeouts (`connect_timeout_ms`, `read_timeout_ms`)
+  - **Idempotency:** `last_seen_ts` property for duplicate detection
+  - See ADR-012 for design decisions
+- **BinanceWsMockConnector v0** (`src/grinder/connectors/binance_ws_mock.py`):
+  - Mock connector that reads from fixture files (events.jsonl) and emits `Snapshot`
+  - **Features:**
+    - Fixture loading from `events.jsonl` or `events.json`
+    - Configurable read delay for simulating real-time
+    - Symbol filtering (`symbols` parameter)
+    - Idempotency via timestamp tracking (skips duplicate/old timestamps)
+    - Reconnect with position preservation (`last_seen_ts`)
+    - Statistics tracking (`MockConnectorStats`)
+  - **Usage:**
+    ```python
+    connector = BinanceWsMockConnector(Path("tests/fixtures/sample_day"))
+    await connector.connect()
+    async for snapshot in connector.iter_snapshots():
+        print(f"Got {snapshot.symbol} @ {snapshot.mid_price}")
+    await connector.close()
+    ```
+  - **Unit tests:** `tests/unit/test_data_connector.py` (28 tests)
+  - **Integration tests:** `tests/integration/test_connector_integration.py` (8 tests)
+  - **Limitations:** no live WebSocket, retry logic is interface-only (not used in mock)
 
 ## Partially implemented
 - Структура пакета `src/grinder/*` (core, protocols/interfaces) — каркас.
@@ -183,6 +210,6 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
 - CLAUDE.md + DECISIONS.md + STATE.md — governance docs.
 
 ## Planned next
-- Реализовать минимальный data connector (Binance WebSocket mock).
 - Расширить тесты до >50% coverage.
 - Adaptive Controller v1 (EMA-based adaptive step, trend detection, DRAWDOWN mode).
+- Live Binance WebSocket connector (implementing DataConnector ABC).
