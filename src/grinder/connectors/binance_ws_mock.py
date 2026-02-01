@@ -1,6 +1,6 @@
 """Mock Binance WebSocket connector for testing.
 
-This module provides a mock implementation of the DataConnector protocol
+This module provides a mock implementation of the DataConnector abstract base class
 that reads from fixture files (events.jsonl) and emits Snapshots.
 
 Used for:

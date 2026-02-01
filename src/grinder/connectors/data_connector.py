@@ -1,6 +1,6 @@
 """Data connector protocol for market data streams.
 
-This module defines the DataConnector protocol for streaming market data
+This module defines the DataConnector abstract base class for streaming market data
 (Snapshots) from various sources. Unlike ExchangeConnector which handles
 trading operations, DataConnector focuses purely on data ingestion.
 
