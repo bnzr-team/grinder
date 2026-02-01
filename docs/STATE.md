@@ -132,6 +132,8 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - **Grafana:** http://localhost:3000 (admin/admin), anonymous read access enabled
   - **Dashboard:** GRINDER Overview (auto-provisioned) with status, uptime, gating metrics
   - **Alert rules:** GrinderDown, GrinderTargetDown, HighGatingBlocks, ToxicityTriggers
+  - **Smoke test:** `bash scripts/docker_smoke_observability.sh` validates full stack health
+  - **CI:** `docker_smoke.yml` runs smoke test on PRs touching Dockerfile/compose/monitoring/src/scripts
   - See `docs/OBSERVABILITY_STACK.md` for full documentation
 
 ## Partially implemented

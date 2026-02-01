@@ -15,7 +15,30 @@ docker compose -f docker-compose.observability.yml ps
 docker compose -f docker-compose.observability.yml down -v
 ```
 
+## Smoke Test
+
+Run the automated smoke test to verify the full stack is healthy:
+
+```bash
+bash scripts/docker_smoke_observability.sh
+```
+
+This script:
+1. Starts all services (grinder, prometheus, grafana)
+2. Waits for each service to be healthy
+3. Verifies Prometheus is scraping grinder (`health: "up"`)
+4. Cleans up automatically on exit
+
+The smoke test is also run in CI on every PR that touches:
+- `Dockerfile`
+- `docker-compose.observability.yml`
+- `monitoring/**`
+- `src/**`
+- `scripts/**`
+
 ## Ports
+
+**Note:** Prometheus runs on host port 9091 (mapped from container port 9090) to avoid conflict with grinder's 9090.
 
 | Service | Port | URL |
 |---------|------|-----|
