@@ -16,10 +16,19 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - Paper digest (v1): `66b29a4e92192f8f`
   - `sample_day_allowed/`: Low-price assets (~$1), orders pass prefilter + gating
     - Replay digest: `03253d84cd2604e7`
-    - Paper digest (v1): `e9eff4167a410e2c`
+    - Paper digest (v1): `ec223bce78d7926f`
   - `sample_day_toxic/`: Low-price assets with 6% price jump triggering toxicity gate
     - Paper digest (v1): `66d57776b7be4797`
     - Tests PRICE_IMPACT_HIGH blocking (600 bps > 500 bps threshold)
+  - `sample_day_multisymbol/`: 5 symbols to test Top-K prefilter selection (K=3)
+    - Paper digest (v1): `7c4f4b07ec7b391f`
+    - Expected Top-K selection: AAAUSDT, BBBUSDT, CCCUSDT (highest volatility)
+    - DDDUSDT, EEEUSDT filtered out (lower volatility scores)
+  - `sample_day_controller/`: 3 symbols to test Adaptive Controller modes
+    - Paper digest (v1, controller enabled): `f3a0a321c39cc411`
+    - WIDENUSDT: triggers WIDEN mode (high volatility)
+    - TIGHTENUSDT: triggers TIGHTEN mode (low volatility)
+    - BASEUSDT: triggers BASE mode (normal volatility)
   - Fixture format: SNAPSHOT events (see ADR-006 for migration from BOOK_TICKER)
   - Schema version: v1 (see ADR-008)
 - **End-to-end replay**:
@@ -33,7 +42,14 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
 - Grafana provisioning: `monitoring/grafana/provisioning/` содержит datasource + dashboard.
 - Branch protection на `main`: все PR требуют 5 зелёных checks.
 - **Domain contracts** (`src/grinder/contracts.py`): Snapshot, Position, PolicyContext, OrderIntent, Decision — typed, frozen, JSON-serializable. См. ADR-003.
-- **Prefilter v0** (`src/grinder/prefilter/`): rule-based hard gates returning ALLOW/BLOCK + reason. Limitations: only hard gates, no scoring/ranking/top-K, no stability controls.
+- **Prefilter v0** (`src/grinder/prefilter/`):
+  - **Hard gates:** rule-based gates returning ALLOW/BLOCK + reason
+  - **Top-K selector v0** (`TopKSelector`): selects top K symbols from multisymbol stream
+    - Scoring: volatility proxy — sum of absolute mid-price returns in basis points
+    - Tie-breakers: higher score first, then lexicographic symbol ascending (deterministic)
+    - Default K=3, window_size=10 events per symbol
+    - See ADR-010 for design decisions
+  - **Limitations:** no adaptive scoring, no stability controls
 - **GridPolicy v0** (`src/grinder/policies/grid/static.py`): StaticGridPolicy producing symmetric bilateral grids. GridPlan includes: regime, width_bps, reset_action, reason_codes. Limitations: no adaptive step, no inventory skew, no regime switching.
 - **Execution stub v0** (`src/grinder/execution/`): ExchangePort protocol + NoOpExchangePort stub, ExecutionEngine with reconcile logic (PAUSE/EMERGENCY -> cancel all, HARD reset -> rebuild grid, SOFT reset -> replace non-conforming, NONE -> reconcile). Deterministic order ID generation. ExecutionMetrics for observability. Limitations: no live exchange writes, no rate limiting, no error recovery.
 - **Replay engine v0** (`src/grinder/replay/`):
@@ -61,26 +77,45 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - **Limitations:** no circuit breakers, no position-level checks, PnL tracking is simulated
 - **Paper trading v1** (`src/grinder/paper/`):
   - CLI: `grinder paper --fixture <path> [-v] [--out <path>]`
-  - **Pipeline:** `Snapshot` -> `hard_filter()` -> `gating check (toxicity -> rate limit -> risk)` -> `StaticGridPolicy.evaluate()` -> `ExecutionEngine.evaluate()` -> `simulate_fills()` -> `Ledger.apply_fills()` -> `PaperOutput`
+  - **Pipeline:** `Snapshot` -> `Top-K filter` -> `hard_filter()` -> `gating check (toxicity -> rate limit -> risk)` -> `StaticGridPolicy.evaluate()` -> `ExecutionEngine.evaluate()` -> `simulate_fills()` -> `Ledger.apply_fills()` -> `PaperOutput`
+  - **Top-K prefilter:** Two-pass processing — first scan for volatility scores, then filter to top K symbols
   - **Gating gates:** toxicity (spread spike, price impact) + rate limit (orders/minute, cooldown) + risk limits (notional, daily loss)
   - **Fill simulation:** All PLACE orders fill immediately at limit price (deterministic)
   - **Position tracking:** Per-symbol qty + avg_entry_price via `Ledger` class
   - **PnL tracking:** Realized (on close), Unrealized (mark-to-market), Total
-  - **Output schema v1:** `PaperResult` includes `schema_version`, `total_fills`, `final_positions`, `total_realized_pnl`, `total_unrealized_pnl`
+  - **Output schema v1:** `PaperResult` includes `schema_version`, `total_fills`, `final_positions`, `total_realized_pnl`, `total_unrealized_pnl`, `topk_selected_symbols`, `topk_k`, `topk_scores`
   - **Contract tests:** `tests/unit/test_paper_contracts.py` (27 tests) verify schema stability
   - Output format: `Paper trading completed. Events processed: N\nOutput digest: <16-char-hex>`
   - Deterministic digest for fixture-based runs
-  - **Canonical digests:** `sample_day` = `66b29a4e92192f8f`, `sample_day_allowed` = `ec223bce78d7926f`, `sample_day_toxic` = `66d57776b7be4797`
+  - **Canonical digests:** `sample_day` = `66b29a4e92192f8f`, `sample_day_allowed` = `ec223bce78d7926f`, `sample_day_toxic` = `66d57776b7be4797`, `sample_day_multisymbol` = `7c4f4b07ec7b391f`
   - **Limitations:** no live feed, no real orders, no slippage, no partial fills
+- **Adaptive Controller v0** (`src/grinder/controller/`):
+  - Rule-based controller that adjusts policy parameters based on recent market conditions
+  - **Controller modes:**
+    - `BASE` — Normal operation, no adjustment (spacing_multiplier = 1.0)
+    - `WIDEN` — High volatility (> 300 bps), widen grid (spacing_multiplier = 1.5)
+    - `TIGHTEN` — Low volatility (< 50 bps), tighten grid (spacing_multiplier = 0.8)
+    - `PAUSE` — Wide spread (> 50 bps), no new orders
+  - **Priority order:** PAUSE > WIDEN > TIGHTEN > BASE
+  - **Window-based metrics:** vol_bps (sum of abs mid returns), spread_bps_max (max spread in window)
+  - **Determinism:** All metrics use integer basis points (no floats)
+  - **Opt-in:** Disabled by default (`controller_enabled=False`) to preserve backward compatibility
+  - **Integration:** Runs after Top-K selection, before policy evaluation
+  - **Test fixture:** `sample_day_controller` with 3 symbols triggering WIDEN/TIGHTEN/BASE modes
+    - Paper digest (v1, controller enabled): `f3a0a321c39cc411`
+  - **Contract tests:** `tests/unit/test_controller.py` (20 tests), `tests/unit/test_backtest.py::TestControllerContract` (6 tests)
+  - See ADR-011 for design decisions
+  - **Limitations:** no EMA-based adaptive step, no trend detection, no DRAWDOWN mode
 - **Backtest protocol v1** (`scripts/run_backtest.py`):
   - CLI: `python -m scripts.run_backtest [--out <path>] [--quiet]`
   - Runs paper trading on registered fixtures and generates JSON report
-  - **Registered fixtures:** `sample_day`, `sample_day_allowed`, `sample_day_toxic`
+  - **Registered fixtures:** `sample_day`, `sample_day_allowed`, `sample_day_toxic`, `sample_day_multisymbol`
   - **Report schema v1:** `report_schema_version`, `paper_schema_version`, `fixtures_run`, `fixtures_passed`, `fixtures_failed`, `all_digests_match`, `results`, `report_digest`
-  - **Per-fixture result:** `fixture_path`, `schema_version`, `paper_digest`, `expected_paper_digest`, `digest_match`, `total_fills`, `final_positions`, `total_realized_pnl`, `total_unrealized_pnl`, `events_processed`, `orders_placed`, `orders_blocked`, `errors`
+  - **Per-fixture result:** `fixture_path`, `schema_version`, `paper_digest`, `expected_paper_digest`, `digest_match`, `total_fills`, `final_positions`, `total_realized_pnl`, `total_unrealized_pnl`, `events_processed`, `orders_placed`, `orders_blocked`, `errors`, `topk_selected_symbols`, `topk_k`
+  - **Top-K output:** Each fixture result includes symbols selected by Top-K prefilter and the K value used (see ADR-010)
   - **Digest validation:** Compares paper_digest against expected_paper_digest in fixture config.json
   - **Exit code:** 0 if all fixtures pass, 1 if any fail or digest mismatch
-  - **Contract tests:** `tests/unit/test_backtest.py` verifies schema stability and determinism
+  - **Contract tests:** `tests/unit/test_backtest.py` verifies schema stability, determinism, and Top-K fields
   - **Limitations:** no custom fixture list (hardcoded), no parallel execution
 - **Observability v0** (`src/grinder/observability/`):
   - `MetricsBuilder`: consolidates all metrics into Prometheus format
@@ -94,7 +129,7 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
 
 ## Known gaps / mismatches
 - Нет реальной торговой логики — только skeleton/stubs.
-- Adaptive Grid Controller (regime selection, adaptive step, auto-reset) — **not implemented**; see `docs/16_ADAPTIVE_GRID_CONTROLLER_SPEC.md` (Planned).
+- Adaptive Grid Controller v1+ (EMA-based adaptive step, trend detection, DRAWDOWN mode, auto-reset) — **not implemented**; see `docs/16_ADAPTIVE_GRID_CONTROLLER_SPEC.md` (Planned). Controller v0 implemented with rule-based modes (see ADR-011).
 - Нет интеграции с Binance API (только интерфейсы).
 - ML pipeline (`src/grinder/ml/`) — пустой placeholder.
 
@@ -106,4 +141,4 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
 ## Planned next
 - Реализовать минимальный data connector (Binance WebSocket mock).
 - Расширить тесты до >50% coverage.
-- Adaptive Controller implementation (regime + step + reset).
+- Adaptive Controller v1 (EMA-based adaptive step, trend detection, DRAWDOWN mode).

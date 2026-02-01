@@ -13,6 +13,16 @@ import sys
 from pathlib import Path
 
 
+def _load_fixture_config(fixture_dir: Path) -> dict[str, object]:
+    """Load fixture config.json if it exists."""
+    config_path = fixture_dir / "config.json"
+    if config_path.exists():
+        with config_path.open() as f:
+            result: dict[str, object] = json.load(f)
+            return result
+    return {}
+
+
 def _run_fixture_mode(args: argparse.Namespace) -> None:
     """Run paper trading on fixture data."""
     from grinder.paper import PaperEngine  # noqa: PLC0415 - lazy import
@@ -23,11 +33,16 @@ def _run_fixture_mode(args: argparse.Namespace) -> None:
         print(f"Fixture directory not found: {fixture_dir}", file=sys.stderr)
         raise SystemExit(1)
 
+    config = _load_fixture_config(fixture_dir)
+    controller_enabled = bool(config.get("controller_enabled", False))
+
     if args.verbose:
         print(f"Loading fixture from: {fixture_dir}")
         print("Paper trading mode: NO REAL ORDERS")
+        if controller_enabled:
+            print("Controller: ENABLED")
 
-    engine = PaperEngine()
+    engine = PaperEngine(controller_enabled=controller_enabled)
     result = engine.run(fixture_dir)
 
     if args.verbose:

@@ -1,0 +1,13 @@
+{
+  "name": "sample_day_controller",
+  "description": "Fixture for testing Adaptive Controller v0 modes (WIDEN, TIGHTEN, BASE)",
+  "symbols": ["WIDENUSDT", "TIGHTENUSDT", "BASEUSDT"],
+  "controller_enabled": true,
+  "expected_modes": {
+    "WIDENUSDT": "WIDEN",
+    "TIGHTENUSDT": "TIGHTEN",
+    "BASEUSDT": "BASE"
+  },
+  "canonical_digest": "f3a0a321c39cc411",
+  "expected_paper_digest": "f3a0a321c39cc411"
+}
