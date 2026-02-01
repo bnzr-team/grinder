@@ -10,11 +10,13 @@ as the single source of truth.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -85,7 +87,9 @@ def terminate_process(proc: PopenBytes, timeout: float = 3.0) -> None:
     except subprocess.TimeoutExpired:
         # Force kill
         proc.kill()
-        proc.wait(timeout=2)
+        # Wait with suppressed timeout - process may be stuck in uninterruptible state
+        with contextlib.suppress(subprocess.TimeoutExpired):
+            proc.wait(timeout=2)
 
 
 class TestLiveHTTPContracts:
@@ -96,47 +100,63 @@ class TestLiveHTTPContracts:
         """Start live server and yield (process, base_url).
 
         Automatically cleans up the server after the test.
+        Uses DEVNULL for stdout and temp file for stderr to avoid pipe deadlock.
         """
         port = find_free_port()
         base_url = f"http://127.0.0.1:{port}"
 
-        # Set up environment
+        # Set up environment - prepend src to PYTHONPATH (don't overwrite)
         env = os.environ.copy()
-        env["PYTHONPATH"] = "src"
+        existing_path = env.get("PYTHONPATH", "")
+        env["PYTHONPATH"] = f"src{os.pathsep}{existing_path}".rstrip(os.pathsep)
 
-        # Start server with short duration (will be terminated anyway)
-        proc = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "scripts.run_live",
-                "--metrics-port",
-                str(port),
-                "--duration-s",
-                "60",  # Will be terminated before this
-            ],
-            env=env,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            cwd=Path.cwd(),
-        )
+        # Use temp file for stderr to avoid pipe deadlock while capturing on failure
+        # We intentionally don't use context manager because file must stay open for subprocess
+        stderr_file = tempfile.NamedTemporaryFile(mode="w+b", delete=False)  # noqa: SIM115
+        stderr_path = Path(stderr_file.name)
 
         try:
-            # Wait for server to be ready
-            if not wait_for_server(base_url, timeout=10.0):
-                # Server didn't start - get output for debugging
-                terminate_process(proc)
-                stdout, stderr = proc.communicate(timeout=2)
-                pytest.fail(
-                    f"Server failed to start within timeout.\n"
-                    f"stdout: {stdout.decode()}\n"
-                    f"stderr: {stderr.decode()}"
-                )
+            # Start server with short duration (will be terminated anyway)
+            # Use DEVNULL for stdout to avoid pipe buffer deadlock
+            proc = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-m",
+                    "scripts.run_live",
+                    "--metrics-port",
+                    str(port),
+                    "--duration-s",
+                    "60",  # Will be terminated before this
+                ],
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=stderr_file,
+                cwd=Path.cwd(),
+            )
 
-            yield proc, base_url
+            try:
+                # Wait for server to be ready
+                if not wait_for_server(base_url, timeout=10.0):
+                    # Server didn't start - get stderr for debugging
+                    terminate_process(proc)
+                    stderr_file.flush()
+                    stderr_content = stderr_path.read_text(errors="replace")
+                    # Tail last 200 lines
+                    stderr_lines = stderr_content.splitlines()[-200:]
+                    pytest.fail(
+                        f"Server failed to start within timeout.\n"
+                        f"stderr (last 200 lines):\n{chr(10).join(stderr_lines)}"
+                    )
+
+                yield proc, base_url
+            finally:
+                # Clean up server
+                terminate_process(proc)
         finally:
-            # Clean up server
-            terminate_process(proc)
+            # Clean up temp file
+            stderr_file.close()
+            with contextlib.suppress(OSError):
+                stderr_path.unlink()
 
     def test_healthz_returns_valid_json(self, live_server: tuple[PopenBytes, str]) -> None:
         """Test that /healthz returns valid JSON with correct content-type."""
