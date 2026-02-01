@@ -287,3 +287,52 @@
   - Auto-liquidation on trip — rejected for simplicity; can be added as opt-in feature later
   - Soft warning before hard stop — rejected; keep v0 simple
   - Per-symbol drawdown tracking — rejected; track total portfolio equity for v0
+
+## ADR-014 — Soak Gate as CI release gate
+- **Date:** 2026-02-01
+- **Status:** accepted
+- **Context:** Need CI gate to catch performance regressions and determinism issues before merge. Synthetic soak (nightly) exists but doesn't use real PaperEngine execution. Need fixture-based soak that validates actual behavior.
+- **Decision:**
+  - **Soak runner** (`scripts/run_soak_fixtures.py`):
+    - Runs PaperEngine on all registered fixtures multiple times (default 3 runs)
+    - Collects metrics: latency (p50, p99), RSS memory, fill_rate, errors, digest stability
+    - Outputs JSON report compatible with `check_soak_thresholds.py`
+  - **Gating vs informational metrics:**
+    - **Gating (causes failure):** `errors_total`, `all_digests_stable`, `fill_rate` range
+    - **Informational (logged but not gated):** `decision_latency_p99_ms`, `order_latency_p99_ms`, `rss_mb_max`, `event_queue_depth_max`
+    - Latency/memory are NOT gated because CI runners have variable performance
+  - **Determinism check:**
+    - Each fixture runs N times, all N digests must match
+    - `all_digests_stable: true` required for pass
+    - Any digest mismatch = hard failure
+  - **Why 3 runs per fixture:**
+    - Balances coverage vs CI time
+    - Enough to detect non-determinism
+    - Not so many that CI becomes slow
+  - **Fill rate semantics:**
+    - Computed as: `total_fills / total_orders_placed`
+    - Value between 0 and 1
+    - If no orders placed, fill_rate = 1.0 (nothing to fill)
+    - Threshold: min 0.4, max 1.0 (baseline)
+  - **Deterministic gate script** (`scripts/check_soak_gate.py`):
+    - Reads thresholds from `monitoring/soak_thresholds.yml` (SSOT for thresholds)
+    - Gates ONLY deterministic metrics: `all_digests_stable`, `errors_total`, `fill_rate`, `events_dropped`
+    - Logs latency/memory as informational (not gated)
+    - Usage: `python scripts/check_soak_gate.py --report report.json --thresholds monitoring/soak_thresholds.yml --mode baseline`
+  - **CI workflow** (`.github/workflows/soak_gate.yml`):
+    - Triggers on PRs touching `src/**`, `scripts/**`, `tests/fixtures/**`, `monitoring/soak_thresholds.yml`
+    - Runs fixture-based soak with 3 runs per fixture
+    - Calls `check_soak_gate.py` for deterministic-only validation
+    - Uploads JSON report as artifact for inspection
+  - **Nightly synthetic soak** (`.github/workflows/nightly_soak.yml`):
+    - Uses `check_soak_thresholds.py` with full threshold validation (latency/memory included)
+    - Appropriate for controlled environment with consistent runner performance
+- **Consequences:**
+  - PRs that break determinism will be blocked
+  - PRs that cause errors will be blocked
+  - Latency/memory regressions are visible in PR artifacts but not blocking (CI variance)
+  - Nightly soak provides full threshold validation in stable environment
+- **Alternatives:**
+  - Gate on latency/memory — rejected; too flaky in CI
+  - Only nightly soak — rejected; too slow feedback loop
+  - Single run — rejected; doesn't catch non-determinism

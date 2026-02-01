@@ -1,0 +1,7 @@
+{
+  "name": "sample_day_drawdown",
+  "description": "Fixture for testing kill-switch with 40% price crash (BTC 50000->30000)",
+  "symbols": ["BTCUSDT", "ETHUSDT", "SOLUSDT"],
+  "kill_switch_enabled": true,
+  "expected_behavior": "Kill-switch should trigger on 5% drawdown threshold"
+}

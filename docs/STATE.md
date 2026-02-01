@@ -213,6 +213,26 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - **Unit tests:** `tests/unit/test_risk.py` (25 tests)
   - **Integration tests:** `tests/integration/test_kill_switch_integration.py` (9 tests)
   - See ADR-013 for design decisions
+- **Soak Gate v0** (`scripts/run_soak_fixtures.py`, `.github/workflows/soak_gate.yml`):
+  - Fixture-based soak runner for CI release gate
+  - **Metrics collected:**
+    - Processing latency (p50, p99)
+    - Memory usage (RSS max)
+    - Fill rate
+    - Error counts
+    - Digest stability (determinism check)
+  - **Threshold policy:** `monitoring/soak_thresholds.yml`
+    - Baseline mode: strict thresholds for normal operation
+    - Overload mode: relaxed thresholds for stress testing
+  - **CI integration:**
+    - `soak_gate.yml`: runs on PRs touching src/scripts/tests/monitoring
+    - `nightly_soak.yml`: runs daily with synthetic soak (existing)
+  - **Commands:**
+    - `python -m scripts.run_soak_fixtures --output report.json` — run soak test
+    - `python scripts/check_soak_gate.py --report report.json --thresholds monitoring/soak_thresholds.yml --mode baseline` — PR gate (deterministic only)
+    - `python scripts/check_soak_thresholds.py --baseline report.json --overload report.json --thresholds monitoring/soak_thresholds.yml` — nightly gate (full)
+  - **Unit tests:** `tests/unit/test_soak_thresholds.py`
+  - **Test fixtures:** Uses registered fixtures including `sample_day_drawdown` for kill-switch
 
 ## Partially implemented
 - Структура пакета `src/grinder/*` (core, protocols/interfaces) — каркас.
