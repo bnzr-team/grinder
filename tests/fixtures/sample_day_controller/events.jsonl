@@ -1,0 +1,15 @@
+{"ts": 1000, "type": "SNAPSHOT", "symbol": "WIDENUSDT", "bid_price": "99.99", "ask_price": "100.01", "bid_qty": "10.0", "ask_qty": "10.0", "last_price": "100.00", "last_qty": "1.0"}
+{"ts": 2000, "type": "SNAPSHOT", "symbol": "WIDENUSDT", "bid_price": "100.79", "ask_price": "100.81", "bid_qty": "10.0", "ask_qty": "10.0", "last_price": "100.80", "last_qty": "1.0"}
+{"ts": 3000, "type": "SNAPSHOT", "symbol": "WIDENUSDT", "bid_price": "101.59", "ask_price": "101.61", "bid_qty": "10.0", "ask_qty": "10.0", "last_price": "101.60", "last_qty": "1.0"}
+{"ts": 4000, "type": "SNAPSHOT", "symbol": "WIDENUSDT", "bid_price": "102.39", "ask_price": "102.41", "bid_qty": "10.0", "ask_qty": "10.0", "last_price": "102.40", "last_qty": "1.0"}
+{"ts": 5000, "type": "SNAPSHOT", "symbol": "WIDENUSDT", "bid_price": "103.19", "ask_price": "103.21", "bid_qty": "10.0", "ask_qty": "10.0", "last_price": "103.20", "last_qty": "1.0"}
+{"ts": 6000, "type": "SNAPSHOT", "symbol": "TIGHTENUSDT", "bid_price": "199.99", "ask_price": "200.01", "bid_qty": "10.0", "ask_qty": "10.0", "last_price": "200.00", "last_qty": "1.0"}
+{"ts": 7000, "type": "SNAPSHOT", "symbol": "TIGHTENUSDT", "bid_price": "200.00", "ask_price": "200.02", "bid_qty": "10.0", "ask_qty": "10.0", "last_price": "200.01", "last_qty": "1.0"}
+{"ts": 8000, "type": "SNAPSHOT", "symbol": "TIGHTENUSDT", "bid_price": "200.01", "ask_price": "200.03", "bid_qty": "10.0", "ask_qty": "10.0", "last_price": "200.02", "last_qty": "1.0"}
+{"ts": 9000, "type": "SNAPSHOT", "symbol": "TIGHTENUSDT", "bid_price": "200.02", "ask_price": "200.04", "bid_qty": "10.0", "ask_qty": "10.0", "last_price": "200.03", "last_qty": "1.0"}
+{"ts": 10000, "type": "SNAPSHOT", "symbol": "TIGHTENUSDT", "bid_price": "200.03", "ask_price": "200.05", "bid_qty": "10.0", "ask_qty": "10.0", "last_price": "200.04", "last_qty": "1.0"}
+{"ts": 11000, "type": "SNAPSHOT", "symbol": "BASEUSDT", "bid_price": "299.98", "ask_price": "300.02", "bid_qty": "10.0", "ask_qty": "10.0", "last_price": "300.00", "last_qty": "1.0"}
+{"ts": 12000, "type": "SNAPSHOT", "symbol": "BASEUSDT", "bid_price": "300.58", "ask_price": "300.62", "bid_qty": "10.0", "ask_qty": "10.0", "last_price": "300.60", "last_qty": "1.0"}
+{"ts": 13000, "type": "SNAPSHOT", "symbol": "BASEUSDT", "bid_price": "301.18", "ask_price": "301.22", "bid_qty": "10.0", "ask_qty": "10.0", "last_price": "301.20", "last_qty": "1.0"}
+{"ts": 14000, "type": "SNAPSHOT", "symbol": "BASEUSDT", "bid_price": "301.78", "ask_price": "301.82", "bid_qty": "10.0", "ask_qty": "10.0", "last_price": "301.80", "last_qty": "1.0"}
+{"ts": 15000, "type": "SNAPSHOT", "symbol": "BASEUSDT", "bid_price": "302.38", "ask_price": "302.42", "bid_qty": "10.0", "ask_qty": "10.0", "last_price": "302.40", "last_qty": "1.0"}
