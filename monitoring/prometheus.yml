@@ -12,6 +12,7 @@ rule_files:
 
 scrape_configs:
   - job_name: "grinder"
+    scrape_interval: 5s
     static_configs:
-      - targets: ["localhost:9090"]
+      - targets: ["grinder:9090"]
     metrics_path: /metrics

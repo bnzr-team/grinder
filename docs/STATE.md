@@ -122,6 +122,17 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - `build_metrics_output()`: convenience function for /metrics endpoint
   - **Exported via `/metrics`**: system metrics (grinder_up, grinder_uptime_seconds) + gating metrics
   - **Contract tests**: `tests/unit/test_observability.py` verifies metric names and labels
+- **Observability stack v0** (`docker-compose.observability.yml`):
+  - Docker Compose stack: grinder + Prometheus + Grafana
+  - **Commands:**
+    - Start: `docker compose -f docker-compose.observability.yml up --build -d`
+    - Status: `docker compose -f docker-compose.observability.yml ps`
+    - Stop: `docker compose -f docker-compose.observability.yml down -v`
+  - **Ports:** grinder:9090, Prometheus:9091, Grafana:3000
+  - **Grafana:** http://localhost:3000 (admin/admin), anonymous read access enabled
+  - **Dashboard:** GRINDER Overview (auto-provisioned) with status, uptime, gating metrics
+  - **Alert rules:** GrinderDown, GrinderTargetDown, HighGatingBlocks, ToxicityTriggers
+  - See `docs/OBSERVABILITY_STACK.md` for full documentation
 
 ## Partially implemented
 - Структура пакета `src/grinder/*` (core, protocols/interfaces) — каркас.

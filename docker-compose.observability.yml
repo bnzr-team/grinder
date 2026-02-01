@@ -1,0 +1,83 @@
+# GRINDER Observability Stack
+# Prometheus + Grafana monitoring for development/testing
+#
+# Usage:
+#   docker compose -f docker-compose.observability.yml up --build -d
+#   docker compose -f docker-compose.observability.yml down -v
+#
+# Ports:
+#   grinder:    9090  (/healthz, /metrics)
+#   prometheus: 9091  (web UI, API)
+#   grafana:    3000  (dashboards, admin/admin)
+
+services:
+  grinder:
+    build: .
+    container_name: grinder
+    ports:
+      - "9090:9090"
+    environment:
+      - GRINDER_MODE=dry-run
+      - GRINDER_LOG_LEVEL=INFO
+    command:
+      - "--symbols"
+      - "BTCUSDT,ETHUSDT"
+      - "--metrics-port"
+      - "9090"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9090/healthz', timeout=5).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  prometheus:
+    image: prom/prometheus:v2.51.0
+    container_name: grinder-prometheus
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./monitoring/alert_rules.yml:/etc/prometheus/alert_rules.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    depends_on:
+      grinder:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  grafana:
+    image: grafana/grafana:10.4.0
+    container_name: grinder-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  prometheus_data:
+  grafana_data:
