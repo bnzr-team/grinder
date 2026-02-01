@@ -239,6 +239,7 @@
     - `RetryConfig`: exponential backoff with cap (base_delay_ms, backoff_multiplier, max_delay_ms)
     - `TimeoutConfig`: connection and read timeouts
   - **Idempotency:** `last_seen_ts` property for duplicate detection; snapshots with ts ≤ last_seen_ts are skipped
+  - **Assumption:** Timestamps in a single stream are monotonically increasing (per-stream, not per-symbol). Multi-symbol streams share one `last_seen_ts` guard. This is valid for fixture-based testing; live connectors may need per-symbol cursors if exchange delivers out-of-order across symbols.
   - **First implementation:** `BinanceWsMockConnector` reads from fixture files for testing
 - **Consequences:**
   - New connectors must implement `DataConnector` interface

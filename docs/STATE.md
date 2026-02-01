@@ -166,8 +166,8 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - **Marker:** `@pytest.mark.integration` (run with `-m integration` to filter)
   - **Dependencies:** Uses `REQUIRED_HEALTHZ_KEYS` and `REQUIRED_METRICS_PATTERNS` from `live_contract.py`
   - **Included in CI:** runs as part of standard `pytest` invocation
-- **DataConnector protocol v0** (`src/grinder/connectors/data_connector.py`):
-  - Abstract base class defining narrow contract: `connect()`, `close()`, `iter_snapshots()`, `reconnect()`
+- **DataConnector v0** (`src/grinder/connectors/data_connector.py`):
+  - Abstract base class (ABC) defining narrow contract: `connect()`, `close()`, `iter_snapshots()`, `reconnect()`
   - **ConnectorState:** DISCONNECTED → CONNECTING → CONNECTED → RECONNECTING → CLOSED
   - **RetryConfig:** Exponential backoff with cap (`base_delay_ms`, `backoff_multiplier`, `max_delay_ms`)
   - **TimeoutConfig:** Connection and read timeouts (`connect_timeout_ms`, `read_timeout_ms`)
