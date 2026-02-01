@@ -1,4 +1,4 @@
-# GRINDER Alert Rules v0
+# GRINDER Alert Rules v1
 # Based on metrics from src/grinder/observability/metrics_builder.py
 #
 # Available metrics:
@@ -6,6 +6,10 @@
 #   - grinder_uptime_seconds (gauge): uptime in seconds
 #   - grinder_gating_allowed_total{gate} (counter): allowed decisions by gate
 #   - grinder_gating_blocked_total{gate,reason} (counter): blocked decisions by gate and reason
+#   - grinder_kill_switch_triggered (gauge): 1 if kill-switch active
+#   - grinder_kill_switch_trips_total{reason} (counter): total trips by reason
+#   - grinder_drawdown_pct (gauge): current drawdown percentage
+#   - grinder_high_water_mark (gauge): current equity HWM
 
 groups:
   - name: grinder_availability
@@ -77,3 +81,35 @@ groups:
         annotations:
           summary: "GRINDER recently restarted"
           description: "GRINDER uptime is {{ $value | printf \"%.0f\" }} seconds."
+
+  - name: grinder_risk
+    rules:
+      # Critical: Kill-switch has been triggered
+      - alert: KillSwitchTripped
+        expr: grinder_kill_switch_triggered == 1
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "GRINDER kill-switch is active"
+          description: "Kill-switch has been triggered. All trading is halted."
+
+      # Warning: Drawdown approaching threshold
+      - alert: HighDrawdown
+        expr: grinder_drawdown_pct > 3
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High drawdown detected"
+          description: "Current drawdown is {{ $value | printf \"%.2f\" }}%. Kill-switch triggers at 5%."
+
+      # Info: Kill-switch trip count increased
+      - alert: KillSwitchTripIncreased
+        expr: increase(grinder_kill_switch_trips_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: info
+        annotations:
+          summary: "Kill-switch trip detected"
+          description: "Kill-switch trip count increased in the last 5 minutes."

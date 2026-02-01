@@ -140,11 +140,27 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - Stop: `docker compose -f docker-compose.observability.yml down -v`
   - **Ports:** grinder:9090, Prometheus:9091, Grafana:3000
   - **Grafana:** http://localhost:3000 (admin/admin), anonymous read access enabled
-  - **Dashboard:** GRINDER Overview (auto-provisioned) with status, uptime, gating metrics
-  - **Alert rules:** GrinderDown, GrinderTargetDown, HighGatingBlocks, ToxicityTriggers
+  - **Dashboard:** GRINDER Overview (auto-provisioned) with status, uptime, gating, kill-switch metrics
+  - **Alert rules:** GrinderDown, GrinderTargetDown, HighGatingBlocks, ToxicityTriggers, KillSwitchTripped
   - **Smoke test:** `bash scripts/docker_smoke_observability.sh` validates full stack health
   - **CI:** `docker_smoke.yml` runs smoke test on PRs touching Dockerfile/compose/monitoring/src/scripts
   - See `docs/OBSERVABILITY_STACK.md` for full documentation
+- **Metrics Contract v1** (exported via `/metrics`):
+  - **System metrics:**
+    - `grinder_up` (gauge): 1 if running, 0 if down
+    - `grinder_uptime_seconds` (gauge): uptime in seconds since start
+  - **Gating metrics:**
+    - `grinder_gating_allowed_total{gate}` (counter): allowed decisions by gate name
+    - `grinder_gating_blocked_total{gate,reason}` (counter): blocked decisions by gate and reason
+    - Gate names: `rate_limiter`, `risk_gate`, `toxicity_gate`
+    - Block reasons: `RATE_LIMIT_EXCEEDED`, `COOLDOWN_ACTIVE`, `NOTIONAL_LIMIT`, `DAILY_LOSS_LIMIT`, `SPREAD_SPIKE`, `PRICE_IMPACT_HIGH`, `KILL_SWITCH_ACTIVE`
+  - **Risk metrics:**
+    - `grinder_kill_switch_triggered` (gauge): 1 if kill-switch is active, 0 otherwise
+    - `grinder_kill_switch_trips_total{reason}` (counter): total trips by reason
+    - `grinder_drawdown_pct` (gauge): current drawdown percentage (0-100)
+    - `grinder_high_water_mark` (gauge): current equity high-water mark
+  - **Contract tests:** `tests/unit/test_live_contracts.py`, `tests/unit/test_observability.py`
+  - **SSOT:** This section is the canonical list of exported metrics
 - **Determinism Gate v1** (`scripts/verify_determinism_suite.py`):
   - CI gate that catches silent drift across all fixtures and backtest
   - **Checks performed:**

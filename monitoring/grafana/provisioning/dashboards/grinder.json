@@ -123,6 +123,59 @@
     },
     {
       "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Whether kill-switch is active (0 = OK, 1 = TRIPPED)",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "mappings": [
+            {"options": {"0": {"color": "green", "index": 0, "text": "OK"}}, "type": "value"},
+            {"options": {"1": {"color": "red", "index": 1, "text": "TRIPPED"}}, "type": "value"}
+          ],
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "red", "value": 1}]}
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 4, "x": 16, "y": 0},
+      "id": 10,
+      "options": {
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "textMode": "auto"
+      },
+      "targets": [{"expr": "grinder_kill_switch_triggered", "legendFormat": "", "refId": "A"}],
+      "title": "Kill Switch",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
+      "description": "Current drawdown percentage (kill-switch triggers at 5%)",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {"mode": "absolute", "steps": [{"color": "green", "value": null}, {"color": "yellow", "value": 2}, {"color": "orange", "value": 3}, {"color": "red", "value": 5}]},
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "gridPos": {"h": 4, "w": 4, "x": 20, "y": 0},
+      "id": 11,
+      "options": {
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "orientation": "auto",
+        "reduceOptions": {"calcs": ["lastNotNull"], "fields": "", "values": false},
+        "textMode": "auto"
+      },
+      "targets": [{"expr": "grinder_drawdown_pct", "legendFormat": "", "refId": "A"}],
+      "title": "Drawdown %",
+      "type": "stat"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "${DS_PROMETHEUS}"},
       "description": "Uptime over time",
       "fieldConfig": {
         "defaults": {
@@ -222,7 +275,7 @@
           {"matcher": {"id": "byName", "options": "reason"}, "properties": [{"id": "custom.width", "value": 180}]}
         ]
       },
-      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 0},
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 4},
       "id": 7,
       "options": {
         "cellHeight": "sm",
@@ -252,7 +305,7 @@
           {"matcher": {"id": "byName", "options": "gate"}, "properties": [{"id": "custom.width", "value": 120}]}
         ]
       },
-      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 8},
+      "gridPos": {"h": 8, "w": 8, "x": 16, "y": 12},
       "id": 8,
       "options": {
         "cellHeight": "sm",
