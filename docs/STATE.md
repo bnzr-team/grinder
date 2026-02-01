@@ -249,6 +249,21 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - `python scripts/check_soak_thresholds.py --baseline report.json --overload report.json --thresholds monitoring/soak_thresholds.yml` — nightly gate (full)
   - **Unit tests:** `tests/unit/test_soak_thresholds.py`
   - **Test fixtures:** Uses registered fixtures including `sample_day_drawdown` for kill-switch
+- **Operations v0** (`docs/runbooks/`, `docs/HOW_TO_OPERATE.md`):
+  - Runbooks for common operational tasks:
+    - [Startup/Shutdown](runbooks/01_STARTUP_SHUTDOWN.md): docker compose up/down
+    - [Health Triage](runbooks/02_HEALTH_TRIAGE.md): quick diagnostics via /healthz
+    - [Metrics & Dashboards](runbooks/03_METRICS_DASHBOARDS.md): Prometheus + Grafana
+    - [Kill-Switch](runbooks/04_KILL_SWITCH.md): detection, diagnosis, recovery
+    - [Soak Gate](runbooks/05_SOAK_GATE.md): running soak tests
+    - [Alert Response](runbooks/06_ALERT_RESPONSE.md): responding to Prometheus alerts
+  - Operator's guide: [HOW_TO_OPERATE.md](HOW_TO_OPERATE.md)
+  - **Quick reference:**
+    - Health: `curl -fsS http://localhost:9090/healthz`
+    - Metrics: `curl -fsS http://localhost:9090/metrics`
+    - Start stack: `docker compose -f docker-compose.observability.yml up --build -d`
+    - Stop stack: `docker compose -f docker-compose.observability.yml down -v`
+  - **Limitations:** No HA deployment, no Kubernetes, no automated runbook execution
 
 ## Partially implemented
 - Структура пакета `src/grinder/*` (core, protocols/interfaces) — каркас.
@@ -256,6 +271,7 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
 
 ## Known gaps / mismatches
 - Нет реальной торговой логики — только skeleton/stubs.
+- **Backtest in Docker fails:** Running `scripts/run_backtest.py` inside a Docker container fails with `ModuleNotFoundError: No module named 'scripts'`. Fixture determinism checks pass; CI passes because it runs in a properly configured Python environment.
 - Adaptive Grid Controller v1+ (EMA-based adaptive step, trend detection, DRAWDOWN mode, auto-reset) — **not implemented**; see `docs/16_ADAPTIVE_GRID_CONTROLLER_SPEC.md` (Planned). Controller v0 implemented with rule-based modes (see ADR-011).
 - Нет интеграции с Binance API (только интерфейсы).
 - ML pipeline (`src/grinder/ml/`) — пустой placeholder.
