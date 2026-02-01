@@ -145,6 +145,18 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - **Smoke test:** `bash scripts/docker_smoke_observability.sh` validates full stack health
   - **CI:** `docker_smoke.yml` runs smoke test on PRs touching Dockerfile/compose/monitoring/src/scripts
   - See `docs/OBSERVABILITY_STACK.md` for full documentation
+- **Determinism Gate v1** (`scripts/verify_determinism_suite.py`):
+  - CI gate that catches silent drift across all fixtures and backtest
+  - **Checks performed:**
+    - For each fixture: run replay twice, assert identical digest
+    - For each fixture: run paper twice, assert identical digest
+    - For each fixture: assert digests match expected values in `config.json`
+    - Run backtest twice, assert identical `report_digest`
+  - **CLI:** `python -m scripts.verify_determinism_suite [-v] [-q]`
+  - **Exit codes:** 0 if all pass, 1 on any mismatch/drift
+  - **CI:** `determinism_suite.yml` runs on PRs touching `src/**`, `scripts/**`, `tests/**`, `docs/DECISIONS.md`, `docs/STATE.md`
+  - **Fixture discovery:** auto-discovers fixtures with `config.json` under `tests/fixtures/`
+  - **Output:** per-fixture summary table + final PASS/FAIL verdict
 
 ## Partially implemented
 - Структура пакета `src/grinder/*` (core, protocols/interfaces) — каркас.
