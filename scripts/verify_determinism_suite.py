@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Determinism Gate v1 — verify all fixtures and backtest are deterministic.
+"""Determinism Gate v1 -- verify all fixtures and backtest are deterministic.
 
 This script is a CI gate that catches silent drift across:
 - Replay digests (deterministic replay)
@@ -292,7 +292,7 @@ def print_summary(  # noqa: PLR0912
 def main() -> None:
     """CLI entrypoint."""
     parser = argparse.ArgumentParser(
-        description="Determinism Gate v1 — verify all fixtures and backtest are deterministic"
+        description="Determinism Gate v1 -- verify all fixtures and backtest are deterministic"
     )
     parser.add_argument(
         "-v",
