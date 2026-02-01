@@ -277,22 +277,31 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - `HAState`: thread-safe state container for current role
     - `LeaderElector`: Redis-based lease lock manager with TTL-based coordination
   - **Leader election:**
-    - Lock TTL: 10 seconds
-    - Renewal interval: 3 seconds
+    - Lock TTL: 10 seconds (configurable via `GRINDER_HA_LOCK_TTL_MS`)
+    - Renewal interval: 3 seconds (configurable via `GRINDER_HA_RENEW_INTERVAL_MS`)
     - Lock key: `grinder:leader:lock`
-    - Fail-safe: if lock lost → immediately become STANDBY
+  - **Fail-safe semantics (critical for single-active safety):**
+    - Lock renewal failure → immediately become STANDBY
+    - Redis unavailable → all instances become STANDBY
+    - STANDBY/UNKNOWN → `/readyz` returns 503 (not ready for traffic)
+    - Only ACTIVE → `/readyz` returns 200 (ready)
+    - **Unit tests:** `tests/unit/test_ha.py::TestFailSafeSemantics` validates these guarantees
   - **Observability:**
     - `/readyz` endpoint: 200 for ACTIVE, 503 for STANDBY/UNKNOWN
     - `/healthz` endpoint: 200 always (liveness, not readiness)
-    - `grinder_ha_role{role}` metric: gauge indicating current role
-  - **Deployment:** `docker-compose.ha.yml` with Redis + 2 grinder instances
+    - `grinder_ha_role{role}` metric: gauge with all roles (current=1, others=0)
+  - **Deployment:** `docker-compose.ha.yml` with Redis 7.2 + 2 grinder instances
   - **Environment variables:**
     - `GRINDER_REDIS_URL`: Redis connection URL (default: redis://localhost:6379/0)
     - `GRINDER_HA_ENABLED`: Enable HA mode (default: false)
+    - `GRINDER_HA_LOCK_TTL_MS`: Lock TTL in milliseconds (default: 10000)
+    - `GRINDER_HA_RENEW_INTERVAL_MS`: Lock renewal interval in milliseconds (default: 3000)
   - **Commands:**
     - Start HA stack: `docker compose -f docker-compose.ha.yml up --build -d`
     - Failover test: `docker stop grinder_live_1` → grinder_live_2 becomes ACTIVE within ~10s
-  - **Contract tests:** `tests/unit/test_live_contracts.py` verifies /readyz response structure
+  - **Contract tests:**
+    - `tests/unit/test_live_contracts.py`: /readyz response structure
+    - `tests/unit/test_ha.py`: HA role, state management, fail-safe semantics (17 tests)
   - See ADR-015 for design decisions
   - **Limitations:** Single-host only (Redis is SPOF), no protection against host/VM failure (v1 scope)
 

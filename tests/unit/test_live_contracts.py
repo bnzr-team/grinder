@@ -211,20 +211,29 @@ class TestMetricsContract:
         assert "grinder_ha_role" in body
 
     def test_metrics_ha_role_reflects_current_state(self) -> None:
-        """Test that grinder_ha_role reflects actual HA state."""
-        # Default is UNKNOWN
+        """Test that grinder_ha_role reflects actual HA state.
+
+        All roles should be present: current=1, others=0.
+        """
+        # Default is UNKNOWN: unknown=1, active=0, standby=0
         body = build_metrics_body()
         assert 'grinder_ha_role{role="unknown"} 1' in body
+        assert 'grinder_ha_role{role="active"} 0' in body
+        assert 'grinder_ha_role{role="standby"} 0' in body
 
-        # Set to ACTIVE
+        # Set to ACTIVE: active=1, others=0
         set_ha_state(role=HARole.ACTIVE)
         body = build_metrics_body()
         assert 'grinder_ha_role{role="active"} 1' in body
+        assert 'grinder_ha_role{role="standby"} 0' in body
+        assert 'grinder_ha_role{role="unknown"} 0' in body
 
-        # Set to STANDBY
+        # Set to STANDBY: standby=1, others=0
         set_ha_state(role=HARole.STANDBY)
         body = build_metrics_body()
         assert 'grinder_ha_role{role="standby"} 1' in body
+        assert 'grinder_ha_role{role="active"} 0' in body
+        assert 'grinder_ha_role{role="unknown"} 0' in body
 
 
 class TestContractConstants:

@@ -29,15 +29,26 @@ from grinder.ha.role import HARole, get_ha_state, set_ha_state
 logger = logging.getLogger(__name__)
 
 
+def _get_int_env(key: str, default: int) -> int:
+    """Get integer from environment variable."""
+    value = os.environ.get(key)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
 @dataclass
 class LeaderElectorConfig:
     """Configuration for leader election.
 
     Attributes:
-        redis_url: Redis connection URL (default: redis://localhost:6379/0)
+        redis_url: Redis connection URL (env: GRINDER_REDIS_URL)
         lock_key: Key name for the distributed lock
-        lock_ttl_ms: Lock TTL in milliseconds (default: 10000 = 10s)
-        renew_interval_ms: How often to renew lock (default: 3000 = 3s)
+        lock_ttl_ms: Lock TTL in milliseconds (env: GRINDER_HA_LOCK_TTL_MS, default: 10000)
+        renew_interval_ms: How often to renew lock (env: GRINDER_HA_RENEW_INTERVAL_MS, default: 3000)
         instance_id: Unique ID for this instance (auto-generated if empty)
     """
 
@@ -45,8 +56,12 @@ class LeaderElectorConfig:
         default_factory=lambda: os.environ.get("GRINDER_REDIS_URL", "redis://localhost:6379/0")
     )
     lock_key: str = "grinder:leader:lock"
-    lock_ttl_ms: int = 10000  # 10 seconds
-    renew_interval_ms: int = 3000  # 3 seconds
+    lock_ttl_ms: int = field(
+        default_factory=lambda: _get_int_env("GRINDER_HA_LOCK_TTL_MS", 10000)
+    )
+    renew_interval_ms: int = field(
+        default_factory=lambda: _get_int_env("GRINDER_HA_RENEW_INTERVAL_MS", 3000)
+    )
     instance_id: str = field(default_factory=lambda: f"grinder-{uuid.uuid4().hex[:8]}")
 
     def __post_init__(self) -> None:

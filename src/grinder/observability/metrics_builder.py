@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 
 from grinder.gating import get_gating_metrics
-from grinder.ha.role import get_ha_state
+from grinder.ha.role import HARole, get_ha_state
 
 
 @dataclass
@@ -151,14 +151,20 @@ class MetricsBuilder:
         return lines
 
     def _build_ha_metrics(self) -> list[str]:
-        """Build HA (high availability) metrics."""
-        state = get_ha_state()
-        role = state.role.value
-        return [
-            "# HELP grinder_ha_role Current HA role (1 = this role is active)",
+        """Build HA (high availability) metrics.
+
+        Outputs all possible roles with 1 for current role, 0 for others.
+        This follows Prometheus best practices for enum-like gauges.
+        """
+        current_role = get_ha_state().role
+        lines = [
+            "# HELP grinder_ha_role Current HA role (1 = this role, 0 = other roles)",
             "# TYPE grinder_ha_role gauge",
-            f'grinder_ha_role{{role="{role}"}} 1',
         ]
+        for role in HARole:
+            value = 1 if role == current_role else 0
+            lines.append(f'grinder_ha_role{{role="{role.value}"}} {value}')
+        return lines
 
 
 class _BuilderHolder:

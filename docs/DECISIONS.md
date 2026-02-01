@@ -358,11 +358,13 @@
   - **Observability:**
     - `/readyz` endpoint: Returns 200 for ACTIVE, 503 for STANDBY/UNKNOWN
     - `/healthz` endpoint: Always 200 if process is alive (liveness, not readiness)
-    - `grinder_ha_role` metric: Gauge with `role` label indicating current role
-  - **Deployment:** `docker-compose.ha.yml` with Redis + 2 grinder instances
+    - `grinder_ha_role{role}` metric: Gauge with all roles, current=1, others=0
+  - **Deployment:** `docker-compose.ha.yml` with Redis 7.2 + 2 grinder instances
   - **Environment variables:**
     - `GRINDER_REDIS_URL` — Redis connection URL (default: redis://localhost:6379/0)
     - `GRINDER_HA_ENABLED` — Enable HA mode (default: false)
+    - `GRINDER_HA_LOCK_TTL_MS` — Lock TTL in ms (default: 10000)
+    - `GRINDER_HA_RENEW_INTERVAL_MS` — Renewal interval in ms (default: 3000)
 - **Consequences:**
   - Single-active safety: Only one instance is ACTIVE at any time
   - Failover on leader crash: ~10s (lock TTL expiry)
