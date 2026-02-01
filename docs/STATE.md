@@ -212,4 +212,4 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
 ## Planned next
 - Расширить тесты до >50% coverage.
 - Adaptive Controller v1 (EMA-based adaptive step, trend detection, DRAWDOWN mode).
-- Live Binance WebSocket connector (using DataConnector protocol).
+- Live Binance WebSocket connector (implementing DataConnector ABC).

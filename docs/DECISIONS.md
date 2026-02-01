@@ -223,7 +223,7 @@
   - ML-based regime detection — rejected for determinism concerns
   - Controller always-on — rejected to preserve backward compatibility with existing digests
 
-## ADR-012 — DataConnector protocol with narrow contract
+## ADR-012 — DataConnector abstract base class with narrow contract
 - **Date:** 2026-02-01
 - **Status:** accepted
 - **Context:** Need a data connector interface for ingesting market data from various sources (live WebSocket, mock fixtures, replay files). The connector must support production hardening (timeouts, retries, idempotency) while remaining simple for testing.
