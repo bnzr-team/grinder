@@ -26,6 +26,9 @@ jobs:
       - name: Ruff format
         run: ruff format --check .
 
+      - name: Unicode security scan
+        run: python scripts/check_unicode.py
+
       - name: Mypy
         run: mypy .
 
