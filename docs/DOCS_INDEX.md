@@ -44,6 +44,19 @@ Where to find information:
 
 ---
 
+## Operations
+- `docs/HOW_TO_OPERATE.md` — operator's guide
+- `docs/OBSERVABILITY_STACK.md` — Prometheus + Grafana setup
+- `docs/runbooks/` — operational runbooks:
+  - `01_STARTUP_SHUTDOWN.md` — starting/stopping the system
+  - `02_HEALTH_TRIAGE.md` — quick health checks
+  - `03_METRICS_DASHBOARDS.md` — Prometheus metrics and Grafana
+  - `04_KILL_SWITCH.md` — kill-switch events and recovery
+  - `05_SOAK_GATE.md` — running soak tests
+  - `06_ALERT_RESPONSE.md` — responding to alerts
+
+---
+
 ## Spec vs reality
 - Specs define **target behavior**.
 - `STATE.md` defines **current behavior**.
