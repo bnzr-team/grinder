@@ -6,7 +6,7 @@ This file tracks **plan + progress**.
 - **Why key choices were made:** `docs/DECISIONS.md`
 - Specs in `docs/*` describe **target behavior** unless `STATE.md` says implemented.
 
-Last updated: 2026-01-31
+Last updated: 2026-02-01
 
 ---
 
@@ -19,7 +19,8 @@ Last updated: 2026-01-31
 
 ### Now
 - ✅ M1 — Vertical Slice v0.1 (Replay-first) — completed 2026-01-31
-- ⬜ M2 — Beta v0.5 (paper loop + gating)
+- ✅ M2 — Beta v0.5 (paper loop + gating) — completed 2026-02-01
+- ⬜ M3 — Production v1.0 (hardening + ops)
 
 ---
 
@@ -61,11 +62,22 @@ Last updated: 2026-01-31
 - ✅ PR-020: Gating metrics contract (GatingMetrics, labels, contract tests) — merged 2026-01-31
 - ✅ PR-021: Observability /metrics endpoint (gating metrics via HTTP) — merged 2026-01-31
 - ✅ PR-022: Allowed-orders fixture + fill coverage — merged 2026-01-31
-- ⬜ Adaptive Controller implementation (regime + step + reset)
-- ⬜ Top-K prefilter working from fixtures/live data
-- ⬜ Toxicity gating enabled (`docs/06_TOXICITY_SPEC.md`)
-- ⬜ Backtest protocol applied to at least 2 fixtures
-- ⬜ Dashboards and alerts usable for daily ops
+- ✅ PR-023: Fill simulation + position tracking + PnL ledger — merged 2026-01-31 (GitHub PR #32)
+- ✅ PR-024: Backtest protocol script + contract tests — merged 2026-01-31 (GitHub PR #33)
+- ✅ PR-025: ToxicityGate v0 (spread spike + price impact detection) — merged 2026-01-31 (GitHub PR #34)
+- ✅ PR-026: Top-K prefilter v0 (volatility scoring, K=3 default) — merged 2026-01-31
+- ✅ PR-027: Adaptive Controller v0 (rule-based modes: BASE/WIDEN/TIGHTEN/PAUSE) — merged 2026-02-01 (GitHub PR #35)
+- ✅ PR-028: Observability stack v0 (Prometheus + Grafana + alerts) — merged 2026-02-01 (GitHub PR #37)
+  - Note: Also fixed `.github/workflows/promtool.yml` (added `--entrypoint promtool`)
+- ✅ PR-029: docs/DEV.md (developer environment setup guide) — merged 2026-02-01 (GitHub PR #36)
+
+**M2 DoD achieved:**
+- Paper loop with fills, positions, PnL ✓
+- Gating: rate limit + risk + toxicity ✓
+- Top-K prefilter working on fixtures ✓
+- Adaptive Controller v0 (rule-based) ✓
+- Backtest protocol on 5 fixtures ✓
+- Observability stack with dashboards + alerts ✓
 
 ---
 
