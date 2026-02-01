@@ -55,15 +55,20 @@
 - **Alternatives:** black-box ML controller; implicit resets hidden in execution; keeping static spacing.
 
 ## ADR-005 — Unicode policy for docs
-- **Date:** 2026-01-31
+- **Date:** 2026-01-31 (updated 2026-02-01)
 - **Status:** accepted
-- **Context:** GitHub flags "hidden or bidirectional Unicode" in PRs; need clear policy on allowed vs dangerous chars.
+- **Context:** GitHub flags "hidden or bidirectional Unicode" in PRs (CVE-2021-42574 Trojan Source protection). Need clear policy on allowed vs dangerous chars, and documented mitigation for the warning.
 - **Decision:**
-  - **Forbidden:** bidi controls (U+202A-E, U+2066-9), zero-width (U+200B-D, U+FEFF), soft hyphen (U+00AD)
-  - **Allowed:** box-drawing (U+2500-257F) for diagrams, Cyrillic for Russian text
-  - Use `scripts/check_unicode.py` to verify before merge
-- **Consequences:** PRs must pass Unicode scan; box-drawing triggers GitHub warning but is allowed.
-- **Alternatives:** replace all box-drawing with ASCII art — rejected for readability.
+  - **Forbidden (security risk):** bidi controls (U+202A-E, U+2066-9), zero-width (U+200B-D, U+FEFF), soft hyphen (U+00AD), category `Cf` (Format) except allowed below
+  - **Allowed (non-security):** box-drawing (U+2500-257F) for diagrams, Cyrillic for Russian text in docs, em-dash (U+2014) for typography
+  - Use `scripts/check_unicode.py` to verify before merge (scans for forbidden bidi/zero-width chars)
+  - **GitHub warning mitigation:** The repo-wide scan (`scripts/check_unicode.py`) is the authoritative security gate, NOT the GitHub UI warning. GitHub may show "hidden or bidirectional Unicode" warning due to:
+    - Em-dashes (U+2014) in documentation — allowed, not a security risk
+    - Cyrillic text in `docs/STATE.md` — allowed, Russian documentation
+    - Box-drawing characters — allowed for diagrams
+  - PRs are mergeable when: (1) `scripts/check_unicode.py` passes, (2) all CI checks green
+- **Consequences:** PRs must pass Unicode scan; GitHub warning is informational, not blocking, when scan passes.
+- **Alternatives:** replace all non-ASCII with ASCII — rejected for readability and i18n support.
 
 ## ADR-006 — Fixture event format: SNAPSHOT replaces BOOK_TICKER
 - **Date:** 2026-01-31

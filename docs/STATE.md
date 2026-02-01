@@ -157,6 +157,15 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - **CI:** `determinism_suite.yml` runs on PRs touching `src/**`, `scripts/**`, `tests/**`, `docs/DECISIONS.md`, `docs/STATE.md`
   - **Fixture discovery:** auto-discovers fixtures with `config.json` under `tests/fixtures/`
   - **Output:** per-fixture summary table + final PASS/FAIL verdict
+- **Live HTTP Integration Tests** (`tests/integration/test_live_http.py`):
+  - End-to-end tests that spawn `scripts/run_live.py` and validate HTTP contracts
+  - **Endpoints tested:**
+    - `GET /healthz` - JSON with required keys, `status="ok"`, `uptime_s >= 0`
+    - `GET /metrics` - Prometheus text format with all `REQUIRED_METRICS_PATTERNS`
+  - **Run:** `PYTHONPATH=src pytest tests/integration -v`
+  - **Marker:** `@pytest.mark.integration` (run with `-m integration` to filter)
+  - **Dependencies:** Uses `REQUIRED_HEALTHZ_KEYS` and `REQUIRED_METRICS_PATTERNS` from `live_contract.py`
+  - **Included in CI:** runs as part of standard `pytest` invocation
 
 ## Partially implemented
 - Структура пакета `src/grinder/*` (core, protocols/interfaces) — каркас.
