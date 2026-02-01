@@ -67,6 +67,7 @@
     - Cyrillic text in `docs/STATE.md` — allowed, Russian documentation
     - Box-drawing characters — allowed for diagrams
   - PRs are mergeable when: (1) `scripts/check_unicode.py` passes, (2) all CI checks green
+  - **Enforced in CI:** `.github/workflows/ci.yml` → step "Unicode security scan"
 - **Consequences:** PRs must pass Unicode scan; GitHub warning is informational, not blocking, when scan passes.
 - **Alternatives:** replace all non-ASCII with ASCII — rejected for readability and i18n support.
 
