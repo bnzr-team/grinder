@@ -250,3 +250,40 @@
   - Callback-based interface — rejected for complexity and testing difficulty
   - Pull-based (get_next_snapshot) — rejected because async iterator is more Pythonic
   - Global connector registry — rejected as premature abstraction
+
+## ADR-013 — DrawdownGuard and KillSwitch for equity protection
+- **Date:** 2026-02-01
+- **Status:** accepted
+- **Context:** Need risk controls to halt trading when equity drawdown exceeds threshold. Essential for protecting capital in adverse market conditions. Must be deterministic for replay testing.
+- **Decision:**
+  - **Equity definition:**
+    - `equity = initial_capital + total_realized_pnl + total_unrealized_pnl`
+    - Sampled per snapshot (after fills are applied)
+    - `initial_capital` is configurable parameter (default 10000 USD)
+  - **DrawdownGuard** (`src/grinder/risk/drawdown.py`):
+    - Tracks high-water mark (HWM), initialized to `initial_capital`
+    - Drawdown computed as: `(HWM - equity) / HWM * 100`
+    - Configurable threshold (`max_drawdown_pct`, default 5%)
+    - **Latching:** once triggered, stays triggered until explicit reset
+  - **KillSwitch** (`src/grinder/risk/kill_switch.py`):
+    - Simple latch: once triggered, stays triggered
+    - **Idempotent:** triggering twice is a no-op (returns existing state)
+    - **Reasons:** `DRAWDOWN_LIMIT`, `MANUAL`, `ERROR`
+    - **Reset semantics:** does NOT auto-reset within a run; requires new engine run or explicit `reset()` call
+  - **PaperEngine integration:**
+    - Optional: `kill_switch_enabled` parameter (default False for backward compatibility)
+    - When kill-switch is triggered, blocks all trading with `KILL_SWITCH_ACTIVE` gating reason
+    - **No auto-liquidation:** positions are NOT force-closed when kill-switch trips (default behavior)
+    - State exposed in `PaperOutput` (per-snapshot) and `PaperResult` (final)
+  - **New gating reasons added:**
+    - `KILL_SWITCH_ACTIVE` — trading blocked because kill-switch is triggered
+    - `DRAWDOWN_LIMIT_EXCEEDED` — for future use (currently triggers kill-switch instead)
+- **Consequences:**
+  - Trading halts deterministically when drawdown exceeds threshold
+  - Trigger point is deterministic (exact snapshot where threshold crossed)
+  - Backward compatible: disabled by default
+  - No automatic position management (manual intervention required after trip)
+- **Alternatives:**
+  - Auto-liquidation on trip — rejected for simplicity; can be added as opt-in feature later
+  - Soft warning before hard stop — rejected; keep v0 simple
+  - Per-symbol drawdown tracking — rejected; track total portfolio equity for v0

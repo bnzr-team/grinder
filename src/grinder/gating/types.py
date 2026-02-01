@@ -38,6 +38,9 @@ class GateReason(Enum):
     # Toxicity gate reasons (v0)
     SPREAD_SPIKE = "SPREAD_SPIKE"
     PRICE_IMPACT_HIGH = "PRICE_IMPACT_HIGH"
+    # Kill-switch reasons (v0 - ADR-013)
+    KILL_SWITCH_ACTIVE = "KILL_SWITCH_ACTIVE"
+    DRAWDOWN_LIMIT_EXCEEDED = "DRAWDOWN_LIMIT_EXCEEDED"
 
 
 # Canonical list of all gate names for contract testing

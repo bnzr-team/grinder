@@ -152,6 +152,10 @@ known-first-party = ["grinder"]
     "ARG001",  # Unused function argument (fixtures)
     "PLR2004", # Magic values in tests OK
 ]
+"src/grinder/paper/engine.py" = [
+    "PLR0912", # too many branches - complex pipeline logic
+    "PLR0915", # too many statements - complex pipeline logic
+]
 
 # ============================================================================
 # MyPy Configuration

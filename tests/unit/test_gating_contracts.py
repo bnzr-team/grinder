@@ -49,6 +49,9 @@ class TestGateReasonContract:
             # Toxicity gate reasons (v0)
             "SPREAD_SPIKE",
             "PRICE_IMPACT_HIGH",
+            # Kill-switch reasons (v0 - ADR-013)
+            "KILL_SWITCH_ACTIVE",
+            "DRAWDOWN_LIMIT_EXCEEDED",
         }
     )
 

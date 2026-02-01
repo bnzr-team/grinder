@@ -193,6 +193,26 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - **Unit tests:** `tests/unit/test_data_connector.py` (28 tests)
   - **Integration tests:** `tests/integration/test_connector_integration.py` (8 tests)
   - **Limitations:** no live WebSocket, retry logic is interface-only (not used in mock)
+- **DrawdownGuard v0** (`src/grinder/risk/drawdown.py`):
+  - Tracks equity high-water mark (HWM)
+  - Computes drawdown: `(HWM - equity) / HWM`
+  - Configurable threshold (`max_drawdown_pct`, default 5%)
+  - Latching behavior: once triggered, stays triggered until reset
+  - **Equity definition:** `equity = initial_capital + total_realized_pnl + total_unrealized_pnl`
+  - **HWM initialization:** First equity sample (starts at `initial_capital`)
+  - See ADR-013 for design decisions
+- **KillSwitch v0** (`src/grinder/risk/kill_switch.py`):
+  - Simple emergency halt latch for trading
+  - **Idempotent:** triggering twice is a no-op
+  - **Reasons:** `DRAWDOWN_LIMIT`, `MANUAL`, `ERROR`
+  - **Reset semantics:** does NOT auto-reset; requires explicit `reset()` call
+  - **PaperEngine integration:**
+    - When triggered, blocks all trading with `KILL_SWITCH_ACTIVE` gating reason
+    - Does NOT auto-liquidate positions (configurable in future)
+    - Surfaces state in `PaperResult` and `PaperOutput`
+  - **Unit tests:** `tests/unit/test_risk.py` (25 tests)
+  - **Integration tests:** `tests/integration/test_kill_switch_integration.py` (9 tests)
+  - See ADR-013 for design decisions
 
 ## Partially implemented
 - Структура пакета `src/grinder/*` (core, protocols/interfaces) — каркас.
