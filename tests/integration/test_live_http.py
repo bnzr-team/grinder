@@ -6,6 +6,8 @@ Tests that the live server (scripts/run_live.py) correctly serves:
 
 Uses REQUIRED_HEALTHZ_KEYS and REQUIRED_METRICS_PATTERNS from live_contract.py
 as the single source of truth.
+
+Run with: PYTHONPATH=src pytest tests/integration -v
 """
 
 from __future__ import annotations
@@ -32,6 +34,9 @@ if TYPE_CHECKING:
 
 # Type alias for subprocess with bytes streams
 PopenBytes = subprocess.Popen[bytes]
+
+# Mark all tests in this module as integration tests
+pytestmark = pytest.mark.integration
 
 
 def find_free_port() -> int:
@@ -106,9 +111,9 @@ class TestLiveHTTPContracts:
         base_url = f"http://127.0.0.1:{port}"
 
         # Set up environment - prepend src to PYTHONPATH (don't overwrite)
+        existing_pythonpath = os.environ.get("PYTHONPATH", "")
         env = os.environ.copy()
-        existing_path = env.get("PYTHONPATH", "")
-        env["PYTHONPATH"] = f"src{os.pathsep}{existing_path}".rstrip(os.pathsep)
+        env["PYTHONPATH"] = f"src{os.pathsep}{existing_pythonpath}".rstrip(os.pathsep)
 
         # Use temp file for stderr to avoid pipe deadlock while capturing on failure
         # We intentionally don't use context manager because file must stay open for subprocess
