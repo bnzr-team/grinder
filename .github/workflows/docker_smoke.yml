@@ -7,6 +7,7 @@ on:
     paths:
       - "Dockerfile"
       - "docker-compose.yml"
+      - "docker-compose.observability.yml"
       - "monitoring/**"
       - "src/**"
       - "scripts/**"
@@ -49,3 +50,11 @@ jobs:
       - name: Stop container
         if: always()
         run: docker rm -f grinder-smoke || true
+
+  observability-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run observability stack smoke test
+        run: bash scripts/docker_smoke_observability.sh
