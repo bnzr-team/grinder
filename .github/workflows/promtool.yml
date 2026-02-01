@@ -19,12 +19,12 @@ jobs:
 
       - name: Validate Prometheus alert rules
         run: |
-          docker run --rm -v "$PWD/monitoring:/monitoring" \
+          docker run --rm --entrypoint promtool -v "$PWD/monitoring:/monitoring" \
             prom/prometheus:latest \
-            promtool check rules /monitoring/alert_rules.yml
+            check rules /monitoring/alert_rules.yml
 
       - name: Validate Prometheus config
         run: |
-          docker run --rm -v "$PWD/monitoring:/monitoring" \
+          docker run --rm --entrypoint promtool -v "$PWD/monitoring:/monitoring" \
             prom/prometheus:latest \
-            promtool check config /monitoring/prometheus.yml || true
+            check config /monitoring/prometheus.yml || true

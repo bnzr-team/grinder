@@ -1,125 +1,79 @@
+# GRINDER Alert Rules v0
+# Based on metrics from src/grinder/observability/metrics_builder.py
+#
+# Available metrics:
+#   - grinder_up (gauge): 1 if running
+#   - grinder_uptime_seconds (gauge): uptime in seconds
+#   - grinder_gating_allowed_total{gate} (counter): allowed decisions by gate
+#   - grinder_gating_blocked_total{gate,reason} (counter): blocked decisions by gate and reason
+
 groups:
-  - name: grinder_critical
+  - name: grinder_availability
     rules:
-      - alert: GrinderEmergencyExit
-        expr: grinder_state == 6
-        for: 0m
-        labels:
-          severity: critical
-        annotations:
-          summary: "GRINDER emergency exit triggered"
-          description: "System entered emergency state"
-
-      - alert: GrinderHighDrawdown
-        expr: grinder_drawdown_pct{period="daily"} > 0.08
-        for: 1m
-        labels:
-          severity: critical
-        annotations:
-          summary: "Daily drawdown exceeds 8%"
-          description: "Current drawdown: {{ $value | humanizePercentage }}"
-
-      - alert: GrinderKillSwitchTriggered
-        expr: grinder_kill_switch_triggered == 1
-        for: 0m
-        labels:
-          severity: critical
-        annotations:
-          summary: "Kill switch has been triggered"
-          description: "Manual intervention required"
-
-  - name: grinder_warning
-    rules:
-      - alert: GrinderHighToxicity
-        expr: grinder_toxicity_score > 2.5
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "High toxicity for {{ $labels.symbol }}"
-          description: "Toxicity score: {{ $value }}"
-
-      - alert: GrinderDataStale
-        expr: grinder_data_staleness_ms > 5000
-        for: 1m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Stale data for {{ $labels.stream }}"
-          description: "Data staleness: {{ $value }}ms"
-
-      - alert: GrinderHighLatency
-        expr: histogram_quantile(0.99, rate(grinder_order_latency_ms_bucket[5m])) > 500
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "P99 order latency exceeds 500ms"
-          description: "Current P99: {{ $value }}ms"
-
-      - alert: GrinderConsecutiveLosses
-        expr: grinder_consecutive_losses > 4
-        for: 0m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Consecutive losing trades"
-          description: "{{ $value }} consecutive losses"
-
-      - alert: GrinderInventoryHigh
-        expr: abs(grinder_inventory_notional_usd) > 4000
-        for: 5m
-        labels:
-          severity: warning
-        annotations:
-          summary: "High inventory for {{ $labels.symbol }}"
-          description: "Inventory: ${{ $value }}"
-
-  - name: grinder_info
-    rules:
-      - alert: GrinderStateChange
-        expr: changes(grinder_state[5m]) > 3
-        for: 0m
-        labels:
-          severity: info
-        annotations:
-          summary: "Frequent state changes"
-          description: "{{ $value }} state changes in 5 minutes"
-
-      - alert: GrinderLowFillRate
-        expr: grinder_fill_rate < 0.3
-        for: 10m
-        labels:
-          severity: info
-        annotations:
-          summary: "Low fill rate for {{ $labels.symbol }}"
-          description: "Fill rate: {{ $value | humanizePercentage }}"
-
-  - name: grinder_system
-    rules:
+      # Critical: GRINDER is completely down
       - alert: GrinderDown
-        expr: up{job="grinder"} == 0
+        expr: grinder_up == 0
         for: 1m
         labels:
           severity: critical
         annotations:
           summary: "GRINDER is down"
-          description: "GRINDER instance is not responding"
+          description: "GRINDER instance has been unresponsive for more than 1 minute."
 
-      - alert: GrinderHighMemory
-        expr: grinder_process_rss_mb > 1024
+      # Critical: Prometheus cannot scrape GRINDER
+      - alert: GrinderTargetDown
+        expr: up{job="grinder"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "GRINDER target is down"
+          description: "Prometheus cannot scrape the GRINDER metrics endpoint."
+
+  - name: grinder_gating
+    rules:
+      # Warning: High rate of blocked gating decisions
+      - alert: HighGatingBlocks
+        expr: sum(rate(grinder_gating_blocked_total[5m])) > 0.1
         for: 5m
         labels:
           severity: warning
         annotations:
-          summary: "High memory usage"
-          description: "RSS: {{ $value }}MB"
+          summary: "High rate of blocked gating decisions"
+          description: "More than 0.1 blocks/sec over 5 minutes. Current rate: {{ $value | printf \"%.2f\" }}/sec"
 
-      - alert: GrinderHighCPU
-        expr: rate(grinder_process_cpu_seconds_total[5m]) > 0.8
-        for: 5m
+      # Warning: Toxicity-related blocks (spread spike or price impact)
+      - alert: ToxicityTriggers
+        expr: |
+          sum(rate(grinder_gating_blocked_total{reason=~"SPREAD_SPIKE|PRICE_IMPACT_HIGH"}[5m])) > 0
+        for: 1m
         labels:
           severity: warning
         annotations:
-          summary: "High CPU usage"
-          description: "CPU usage: {{ $value | humanizePercentage }}"
+          summary: "Toxicity gate triggered"
+          description: "Spread spike or high price impact blocks detected in the last minute."
+
+      # Info: All gating decisions are being blocked
+      - alert: AllGatingBlocked
+        expr: |
+          sum(rate(grinder_gating_allowed_total[5m])) == 0
+          and
+          sum(rate(grinder_gating_blocked_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "No gating decisions allowed"
+          description: "All gating decisions are being blocked for the past 5 minutes."
+
+  - name: grinder_health
+    rules:
+      # Info: GRINDER recently restarted
+      - alert: GrinderRecentRestart
+        expr: grinder_uptime_seconds < 60
+        for: 0m
+        labels:
+          severity: info
+        annotations:
+          summary: "GRINDER recently restarted"
+          description: "GRINDER uptime is {{ $value | printf \"%.0f\" }} seconds."
