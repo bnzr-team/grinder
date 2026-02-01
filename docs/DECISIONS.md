@@ -222,3 +222,30 @@
   - EMA-based adaptive step (as per spec 16) — deferred for v1, rule-based is simpler and sufficient for v0
   - ML-based regime detection — rejected for determinism concerns
   - Controller always-on — rejected to preserve backward compatibility with existing digests
+
+## ADR-012 — DataConnector protocol with narrow contract
+- **Date:** 2026-02-01
+- **Status:** accepted
+- **Context:** Need a data connector interface for ingesting market data from various sources (live WebSocket, mock fixtures, replay files). The connector must support production hardening (timeouts, retries, idempotency) while remaining simple for testing.
+- **Decision:**
+  - Introduce `DataConnector` abstract base class in `src/grinder/connectors/data_connector.py`
+  - **Narrow contract** (only essential methods):
+    - `connect()` — establish connection
+    - `close()` — release resources
+    - `iter_snapshots()` — async iterator yielding `Snapshot`
+    - `reconnect()` — resume from last position
+  - **State machine:** DISCONNECTED → CONNECTING → CONNECTED → (RECONNECTING) → CLOSED
+  - **Hardening configurations:**
+    - `RetryConfig`: exponential backoff with cap (base_delay_ms, backoff_multiplier, max_delay_ms)
+    - `TimeoutConfig`: connection and read timeouts
+  - **Idempotency:** `last_seen_ts` property for duplicate detection; snapshots with ts ≤ last_seen_ts are skipped
+  - **First implementation:** `BinanceWsMockConnector` reads from fixture files for testing
+- **Consequences:**
+  - New connectors must implement `DataConnector` interface
+  - Idempotency is connector's responsibility (via `last_seen_ts` guard)
+  - Mock connector enables deterministic testing without network
+  - Retry/timeout configs are present but actual retry logic is implementation-specific
+- **Alternatives:**
+  - Callback-based interface — rejected for complexity and testing difficulty
+  - Pull-based (get_next_snapshot) — rejected because async iterator is more Pythonic
+  - Global connector registry — rejected as premature abstraction
