@@ -24,12 +24,13 @@ from typing import Any
 from grinder.contracts import Snapshot
 from grinder.controller import AdaptiveController, ControllerMode
 from grinder.execution import ExecutionEngine, ExecutionState, NoOpExchangePort
-from grinder.gating import GatingResult, RateLimiter, RiskGate, ToxicityGate
+from grinder.gating import GateReason, GatingResult, RateLimiter, RiskGate, ToxicityGate
 from grinder.paper.fills import simulate_fills
 from grinder.paper.ledger import Ledger
 from grinder.policies.base import GridPlan  # noqa: TC001 - used at runtime
 from grinder.policies.grid.static import StaticGridPolicy
 from grinder.prefilter import TopKSelector, hard_filter
+from grinder.risk import DrawdownGuard, KillSwitch, KillSwitchReason
 
 # Output schema version for contract stability
 SCHEMA_VERSION = "v1"
@@ -53,9 +54,30 @@ class PaperOutput:
     # v1 additions: fills and PnL
     fills: list[dict[str, Any]] = field(default_factory=list)
     pnl_snapshot: dict[str, Any] | None = None
+    # v1 additions: drawdown and kill-switch (ADR-013)
+    # Note: These fields are NOT included in digest computation for backward compatibility.
+    drawdown_check: dict[str, Any] | None = None
+    kill_switch_triggered: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to JSON-serializable dict."""
+        return {
+            "ts": self.ts,
+            "symbol": self.symbol,
+            "prefilter_result": self.prefilter_result,
+            "gating_result": self.gating_result,
+            "plan": self.plan,
+            "actions": self.actions,
+            "events": self.events,
+            "blocked_by_gating": self.blocked_by_gating,
+            "fills": self.fills,
+            "pnl_snapshot": self.pnl_snapshot,
+            "drawdown_check": self.drawdown_check,
+            "kill_switch_triggered": self.kill_switch_triggered,
+        }
+
+    def to_digest_dict(self) -> dict[str, Any]:
+        """Convert to dict for digest computation (excludes new fields for backward compat)."""
         return {
             "ts": self.ts,
             "symbol": self.symbol,
@@ -102,6 +124,14 @@ class PaperResult:
     # Controller is opt-in; when disabled, these fields are empty/defaults.
     controller_enabled: bool = False
     controller_decisions: list[dict[str, Any]] = field(default_factory=list)
+    # Kill-switch results (v1 addition - ADR-013)
+    # Note: These fields are NOT included in digest computation.
+    kill_switch_enabled: bool = False
+    kill_switch_triggered: bool = False
+    kill_switch_state: dict[str, Any] | None = None
+    final_equity: str = "0"
+    final_drawdown_pct: float = 0.0
+    high_water_mark: str = "0"
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to JSON-serializable dict."""
@@ -124,6 +154,12 @@ class PaperResult:
             "topk_scores": self.topk_scores,
             "controller_enabled": self.controller_enabled,
             "controller_decisions": self.controller_decisions,
+            "kill_switch_enabled": self.kill_switch_enabled,
+            "kill_switch_triggered": self.kill_switch_triggered,
+            "kill_switch_state": self.kill_switch_state,
+            "final_equity": self.final_equity,
+            "final_drawdown_pct": self.final_drawdown_pct,
+            "high_water_mark": self.high_water_mark,
         }
 
     def to_json(self) -> str:
@@ -163,6 +199,10 @@ class PaperEngine:
         controller_vol_tighten_bps: int = 50,
         controller_widen_multiplier: float = 1.5,
         controller_tighten_multiplier: float = 0.8,
+        # Kill-switch and drawdown guard parameters (ADR-013)
+        initial_capital: Decimal = Decimal("10000"),
+        max_drawdown_pct: float = 5.0,
+        kill_switch_enabled: bool = False,
     ) -> None:
         """Initialize paper trading engine.
 
@@ -189,6 +229,9 @@ class PaperEngine:
             controller_vol_tighten_bps: Volatility threshold for TIGHTEN mode (default 50)
             controller_widen_multiplier: Spacing multiplier for WIDEN mode (default 1.5)
             controller_tighten_multiplier: Spacing multiplier for TIGHTEN mode (default 0.8)
+            initial_capital: Starting capital for equity calculation (default 10000 USD)
+            max_drawdown_pct: Maximum drawdown percentage before kill-switch (default 5.0%)
+            kill_switch_enabled: Enable drawdown guard and kill-switch (default False for backward compat)
         """
         # Policy and execution
         self._policy = StaticGridPolicy(
@@ -233,6 +276,17 @@ class PaperEngine:
             tighten_multiplier=controller_tighten_multiplier,
         )
         self._base_spacing_bps = spacing_bps  # Store for controller adjustment
+
+        # Kill-switch and drawdown guard (ADR-013)
+        self._kill_switch_enabled = kill_switch_enabled
+        self._initial_capital = initial_capital
+        self._kill_switch = KillSwitch()
+        self._drawdown_guard: DrawdownGuard | None = None
+        if kill_switch_enabled:
+            self._drawdown_guard = DrawdownGuard(
+                initial_capital=initial_capital,
+                max_drawdown_pct=max_drawdown_pct,
+            )
 
         # Per-symbol execution state
         self._states: dict[str, ExecutionState] = {}
@@ -351,6 +405,26 @@ class PaperEngine:
         # Get PnL snapshot even if blocked (mark-to-market)
         pnl_snap = self._ledger.get_pnl_snapshot(ts, symbol, snapshot.mid_price)
 
+        # Step 0: Kill-switch check (ADR-013)
+        # If kill-switch is triggered, block all trading
+        if self._kill_switch_enabled and self._kill_switch.is_triggered:
+            return PaperOutput(
+                ts=ts,
+                symbol=symbol,
+                prefilter_result=filter_result.to_dict(),
+                gating_result=GatingResult.block(
+                    GateReason.KILL_SWITCH_ACTIVE,
+                    {"kill_switch_state": self._kill_switch.state.to_dict()},
+                ).to_dict(),
+                plan=None,
+                actions=[],
+                events=[],
+                blocked_by_gating=True,
+                fills=[],
+                pnl_snapshot=pnl_snap.to_dict(),
+                kill_switch_triggered=True,
+            )
+
         # If blocked by prefilter, return early
         if not filter_result.allowed:
             return PaperOutput(
@@ -461,6 +535,36 @@ class PaperEngine:
         # Get updated PnL snapshot after fills
         pnl_snap = self._ledger.get_pnl_snapshot(ts, symbol, snapshot.mid_price)
 
+        # Step 7: Drawdown check (ADR-013)
+        # Compute total equity and check drawdown guard
+        drawdown_check_dict: dict[str, Any] | None = None
+        kill_switch_triggered_now = False
+        if self._kill_switch_enabled and self._drawdown_guard is not None:
+            # Compute total equity: initial_capital + realized + unrealized
+            total_realized = self._ledger.get_total_realized_pnl()
+            total_unrealized = Decimal("0")
+            for sym, last_price in self._last_prices.items():
+                total_unrealized += self._ledger.get_unrealized_pnl(sym, last_price)
+            equity = self._initial_capital + total_realized + total_unrealized
+
+            # Update drawdown guard
+            drawdown_result = self._drawdown_guard.update(equity)
+            drawdown_check_dict = drawdown_result.to_dict()
+
+            # Trip kill-switch if drawdown exceeded threshold
+            if drawdown_result.triggered and not self._kill_switch.is_triggered:
+                self._kill_switch.trip(
+                    KillSwitchReason.DRAWDOWN_LIMIT,
+                    ts,
+                    {
+                        "equity": str(equity),
+                        "high_water_mark": str(drawdown_result.high_water_mark),
+                        "drawdown_pct": drawdown_result.drawdown_pct,
+                        "threshold_pct": drawdown_result.threshold_pct,
+                    },
+                )
+                kill_switch_triggered_now = True
+
         return PaperOutput(
             ts=ts,
             symbol=symbol,
@@ -472,6 +576,8 @@ class PaperEngine:
             blocked_by_gating=False,
             fills=[f.to_dict() for f in fills],
             pnl_snapshot=pnl_snap.to_dict(),
+            drawdown_check=drawdown_check_dict,
+            kill_switch_triggered=kill_switch_triggered_now,
         )
 
     def run(self, fixture_path: Path) -> PaperResult:
@@ -573,7 +679,28 @@ class PaperEngine:
                 )
             result.controller_decisions = controller_decisions
 
-        result.digest = self._compute_digest([o.to_dict() for o in outputs])
+        # Kill-switch results (ADR-013)
+        result.kill_switch_enabled = self._kill_switch_enabled
+        result.kill_switch_triggered = self._kill_switch.is_triggered
+        if self._kill_switch.is_triggered:
+            result.kill_switch_state = self._kill_switch.state.to_dict()
+
+        # Compute final equity and drawdown
+        if self._kill_switch_enabled and self._drawdown_guard is not None:
+            total_realized = self._ledger.get_total_realized_pnl()
+            final_equity = self._initial_capital + total_realized + total_unrealized
+            result.final_equity = str(final_equity)
+            result.high_water_mark = str(self._drawdown_guard.high_water_mark)
+            # Compute final drawdown
+            if self._drawdown_guard.high_water_mark > 0:
+                final_drawdown = float(
+                    (self._drawdown_guard.high_water_mark - final_equity)
+                    / self._drawdown_guard.high_water_mark
+                    * 100
+                )
+                result.final_drawdown_pct = max(0.0, final_drawdown)
+
+        result.digest = self._compute_digest([o.to_digest_dict() for o in outputs])
         return result
 
     def _load_fixture(self, fixture_path: Path) -> list[dict[str, Any]]:
@@ -626,6 +753,9 @@ class PaperEngine:
         self._topk_selector.reset()
         self._controller.reset()
         self._ledger.reset()
+        self._kill_switch.reset()
+        if self._drawdown_guard is not None:
+            self._drawdown_guard.reset()
         self._states.clear()
         self._last_prices.clear()
         self._orders_placed = 0
