@@ -122,6 +122,16 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - `build_metrics_output()`: convenience function for /metrics endpoint
   - **Exported via `/metrics`**: system metrics (grinder_up, grinder_uptime_seconds) + gating metrics
   - **Contract tests**: `tests/unit/test_observability.py` verifies metric names and labels
+  - **Live runtime contract** (`src/grinder/observability/live_contract.py`):
+    - Pure functions for testable HTTP responses (no network required)
+    - `build_healthz_body()`: returns JSON with `status`, `uptime_s`
+    - `build_metrics_body()`: returns Prometheus format metrics
+    - `REQUIRED_HEALTHZ_KEYS`: stable keys that must appear in /healthz response
+    - `REQUIRED_METRICS_PATTERNS`: stable patterns that must appear in /metrics response
+    - **Contract:**
+      - `GET /healthz`: status 200, content-type `application/json`, body includes `{"status": "ok", "uptime_s": <float>}`
+      - `GET /metrics`: status 200, content-type `text/plain`, body includes `grinder_up 1`, `grinder_uptime_seconds`, gating metrics
+    - **Contract tests**: `tests/unit/test_live_contracts.py` verifies response structure and required patterns
 - **Observability stack v0** (`docker-compose.observability.yml`):
   - Docker Compose stack: grinder + Prometheus + Grafana
   - **Commands:**

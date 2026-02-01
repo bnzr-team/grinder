@@ -7,22 +7,21 @@ Usage:
 """
 
 import argparse
-import json
 import signal
 import sys
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
-from typing import Any
 
-from grinder.observability import build_metrics_output
+from grinder.observability import build_healthz_body, build_metrics_body, set_start_time
 
 
 class HealthHandler(BaseHTTPRequestHandler):
-    """Simple HTTP handler for health checks."""
+    """Simple HTTP handler for health checks.
 
-    start_time = time.time()
-    status = "ok"
+    Uses pure functions from grinder.observability.live_contract
+    to build response bodies (testable without network).
+    """
 
     def do_GET(self) -> None:
         """Handle GET requests."""
@@ -35,26 +34,19 @@ class HealthHandler(BaseHTTPRequestHandler):
 
     def _send_health(self) -> None:
         """Send health check response."""
-        response = {
-            "status": self.status,
-            "uptime_s": round(time.time() - self.start_time, 2),
-        }
-        self._send_json(response)
-
-    def _send_metrics(self) -> None:
-        """Send Prometheus metrics."""
-        metrics_output = build_metrics_output()
-        self.send_response(200)
-        self.send_header("Content-Type", "text/plain; charset=utf-8")
-        self.end_headers()
-        self.wfile.write(metrics_output.encode())
-
-    def _send_json(self, data: dict[str, Any]) -> None:
-        """Send JSON response."""
+        body = build_healthz_body()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
-        self.wfile.write(json.dumps(data).encode())
+        self.wfile.write(body.encode())
+
+    def _send_metrics(self) -> None:
+        """Send Prometheus metrics."""
+        body = build_metrics_body()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.end_headers()
+        self.wfile.write(body.encode())
 
     def log_message(self, format: str, *args: object) -> None:
         """Suppress default logging."""
@@ -63,6 +55,8 @@ class HealthHandler(BaseHTTPRequestHandler):
 
 def run_server(port: int) -> HTTPServer:
     """Start HTTP server in background thread."""
+    # Initialize start time for uptime tracking
+    set_start_time(time.time())
     server = HTTPServer(("0.0.0.0", port), HealthHandler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
