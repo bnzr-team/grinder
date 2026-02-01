@@ -54,7 +54,7 @@ cp .env.example .env
 ### 2. Start Stack
 
 ```bash
-docker-compose -f docker-compose.observability.yml up --build -d
+docker compose -f docker-compose.observability.yml up --build -d
 ```
 
 ### 3. Verify Health
@@ -119,8 +119,8 @@ curl -fsS http://localhost:9090/healthz
 
 3. **Restart with new code**
    ```bash
-   docker-compose -f docker-compose.observability.yml down
-   docker-compose -f docker-compose.observability.yml up --build -d
+   docker compose -f docker-compose.observability.yml down
+   docker compose -f docker-compose.observability.yml up --build -d
    ```
 
 4. **Verify deployment**

@@ -42,7 +42,7 @@ Response procedures for Prometheus alerts defined in `monitoring/alert_rules.yml
 
 3. Restart if needed:
    ```bash
-   docker-compose -f docker-compose.observability.yml restart grinder
+   docker compose -f docker-compose.observability.yml restart grinder
    ```
 
 4. Verify recovery:

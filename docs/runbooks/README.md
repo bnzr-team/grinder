@@ -24,6 +24,7 @@ Operational runbooks for GRINDER trading system.
 
 ## Prerequisites
 
-- Docker and docker-compose installed
+- Docker with Compose plugin installed (`docker compose` command)
+  - Note: Legacy `docker-compose` (standalone binary) also works but is deprecated
 - Repository cloned with submodules
 - `.env` file configured (copy from `.env.example`)

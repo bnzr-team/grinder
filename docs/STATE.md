@@ -261,8 +261,8 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - **Quick reference:**
     - Health: `curl -fsS http://localhost:9090/healthz`
     - Metrics: `curl -fsS http://localhost:9090/metrics`
-    - Start stack: `docker-compose -f docker-compose.observability.yml up --build -d`
-    - Stop stack: `docker-compose -f docker-compose.observability.yml down -v`
+    - Start stack: `docker compose -f docker-compose.observability.yml up --build -d`
+    - Stop stack: `docker compose -f docker-compose.observability.yml down -v`
   - **Limitations:** No HA deployment, no Kubernetes, no automated runbook execution
 
 ## Partially implemented
@@ -271,6 +271,7 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
 
 ## Known gaps / mismatches
 - Нет реальной торговой логики — только skeleton/stubs.
+- **Backtest in Docker fails:** Running `scripts/run_backtest.py` inside a Docker container fails with `ModuleNotFoundError: No module named 'scripts'`. Fixture determinism checks pass; CI passes because it runs in a properly configured Python environment.
 - Adaptive Grid Controller v1+ (EMA-based adaptive step, trend detection, DRAWDOWN mode, auto-reset) — **not implemented**; see `docs/16_ADAPTIVE_GRID_CONTROLLER_SPEC.md` (Planned). Controller v0 implemented with rule-based modes (see ADR-011).
 - Нет интеграции с Binance API (только интерфейсы).
 - ML pipeline (`src/grinder/ml/`) — пустой placeholder.

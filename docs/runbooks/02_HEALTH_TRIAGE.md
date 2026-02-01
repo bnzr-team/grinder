@@ -120,7 +120,7 @@ If kill-switch is triggered, see [04_KILL_SWITCH.md](04_KILL_SWITCH.md).
 
 | Symptom | Likely Cause | Action |
 |---------|--------------|--------|
-| Connection refused | Container not running | `docker-compose up -d` |
+| Connection refused | Container not running | `docker compose up -d` |
 | Timeout | Container overloaded | Check logs, consider restart |
 | `uptime_s` very low | Recent crash/restart | Check logs for crash reason |
 | `grinder_up 0` | Graceful shutdown in progress | Wait or investigate |

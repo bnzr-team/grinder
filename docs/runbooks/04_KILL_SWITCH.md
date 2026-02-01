@@ -100,7 +100,7 @@ If you need to reset kill-switch immediately:
 
 ```bash
 # Stop and restart the service
-docker-compose -f docker-compose.observability.yml restart grinder
+docker compose -f docker-compose.observability.yml restart grinder
 
 # Verify reset
 curl -fsS http://localhost:9090/metrics | grep "grinder_kill_switch_triggered"

@@ -17,7 +17,7 @@ How to start and stop GRINDER locally using Docker Compose.
 ### 1. Start Full Stack (Grinder + Prometheus + Grafana)
 
 ```bash
-docker-compose -f docker-compose.observability.yml up --build -d
+docker compose -f docker-compose.observability.yml up --build -d
 ```
 
 ### 2. Verify Services Are Running
@@ -54,13 +54,13 @@ curl -fsS http://localhost:9090/healthz
 ### 1. Graceful Shutdown (Preserves Volumes)
 
 ```bash
-docker-compose -f docker-compose.observability.yml down
+docker compose -f docker-compose.observability.yml down
 ```
 
 ### 2. Full Cleanup (Removes Volumes)
 
 ```bash
-docker-compose -f docker-compose.observability.yml down -v
+docker compose -f docker-compose.observability.yml down -v
 ```
 
 **Use `-v` when:**
@@ -76,7 +76,7 @@ docker-compose -f docker-compose.observability.yml down -v
 
 ```bash
 # Check logs
-docker-compose -f docker-compose.observability.yml logs grinder
+docker compose -f docker-compose.observability.yml logs grinder
 
 # Check if port is in use
 lsof -i :9090
@@ -99,5 +99,5 @@ docker inspect grinder --format='{{json .State.Health.Log}}' | jq '.[-1]'
 docker inspect grinder --format='{{.State.ExitCode}}'
 
 # Check full logs
-docker-compose -f docker-compose.observability.yml logs --tail=100 grinder
+docker compose -f docker-compose.observability.yml logs --tail=100 grinder
 ```
