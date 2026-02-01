@@ -18,6 +18,10 @@ GET /metrics:
         - grinder_uptime_seconds (gauge)
         - grinder_gating_allowed_total (counter)
         - grinder_gating_blocked_total (counter)
+        - grinder_kill_switch_triggered (gauge)
+        - grinder_kill_switch_trips_total (counter)
+        - grinder_drawdown_pct (gauge)
+        - grinder_high_water_mark (gauge)
 """
 
 from __future__ import annotations
@@ -80,14 +84,28 @@ def build_metrics_body() -> str:
 REQUIRED_HEALTHZ_KEYS = ["status", "uptime_s"]
 
 REQUIRED_METRICS_PATTERNS = [
+    # System metrics
     "# HELP grinder_up",
     "# TYPE grinder_up",
     "grinder_up 1",
     "# HELP grinder_uptime_seconds",
     "# TYPE grinder_uptime_seconds",
     "grinder_uptime_seconds",
+    # Gating metrics
     "# HELP grinder_gating_allowed_total",
     "# TYPE grinder_gating_allowed_total",
     "# HELP grinder_gating_blocked_total",
     "# TYPE grinder_gating_blocked_total",
+    # Risk metrics
+    "# HELP grinder_kill_switch_triggered",
+    "# TYPE grinder_kill_switch_triggered",
+    "grinder_kill_switch_triggered",
+    "# HELP grinder_kill_switch_trips_total",
+    "# TYPE grinder_kill_switch_trips_total",
+    "# HELP grinder_drawdown_pct",
+    "# TYPE grinder_drawdown_pct",
+    "grinder_drawdown_pct",
+    "# HELP grinder_high_water_mark",
+    "# TYPE grinder_high_water_mark",
+    "grinder_high_water_mark",
 ]
