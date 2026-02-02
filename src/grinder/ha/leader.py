@@ -87,7 +87,7 @@ class LeaderElector:
 
     def __init__(self, config: LeaderElectorConfig) -> None:
         self._config = config
-        self._redis: redis.Redis[bytes] | None = None
+        self._redis: redis.Redis | None = None
         self._stop_event = threading.Event()
         self._renewal_thread: threading.Thread | None = None
         self._is_running = False

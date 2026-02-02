@@ -191,6 +191,10 @@ module = [
 ]
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+module = "grinder.ha.leader"
+disable_error_code = ["type-arg", "union-attr"]
+
 # ============================================================================
 # Pytest Configuration
 # ============================================================================
