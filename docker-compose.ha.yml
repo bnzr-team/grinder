@@ -1,0 +1,97 @@
+# GRINDER HA Stack
+# Single-host redundancy with Redis lease-lock coordination
+#
+# Usage:
+#   docker compose -f docker-compose.ha.yml up --build -d
+#   docker compose -f docker-compose.ha.yml down -v
+#
+# Ports:
+#   grinder_live_1: 9090  (/healthz, /readyz, /metrics)
+#   grinder_live_2: 9091  (/healthz, /readyz, /metrics)
+#   redis:          6379  (leader election)
+#
+# Environment variables (configurable):
+#   GRINDER_REDIS_URL:           Redis connection URL (default: redis://redis:6379/0)
+#   GRINDER_HA_ENABLED:          Enable HA mode (default: true in this compose)
+#   GRINDER_HA_LOCK_TTL_MS:      Lock TTL in ms (default: 10000 = 10s)
+#   GRINDER_HA_RENEW_INTERVAL_MS: Lock renewal interval in ms (default: 3000 = 3s)
+#
+# Failover test:
+#   docker stop grinder_live_1
+#   # grinder_live_2 should become ACTIVE within ~10s (TTL)
+#   curl -fsS http://localhost:9091/readyz
+
+services:
+  redis:
+    image: redis:7.2-alpine
+    container_name: grinder-redis
+    # ports:
+    #   - "6379:6379"  # Commented to avoid host conflict; internal only
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+
+  grinder_live_1:
+    build: .
+    container_name: grinder_live_1
+    ports:
+      - "9090:9090"
+    environment:
+      - GRINDER_MODE=dry-run
+      - GRINDER_LOG_LEVEL=INFO
+      - GRINDER_REDIS_URL=redis://redis:6379/0
+      - GRINDER_HA_ENABLED=true
+      - GRINDER_HA_LOCK_TTL_MS=10000
+      - GRINDER_HA_RENEW_INTERVAL_MS=3000
+    command:
+      - "--symbols"
+      - "BTCUSDT,ETHUSDT"
+      - "--metrics-port"
+      - "9090"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9090/healthz', timeout=5).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  grinder_live_2:
+    build: .
+    container_name: grinder_live_2
+    ports:
+      - "9091:9090"
+    environment:
+      - GRINDER_MODE=dry-run
+      - GRINDER_LOG_LEVEL=INFO
+      - GRINDER_REDIS_URL=redis://redis:6379/0
+      - GRINDER_HA_ENABLED=true
+      - GRINDER_HA_LOCK_TTL_MS=10000
+      - GRINDER_HA_RENEW_INTERVAL_MS=3000
+    command:
+      - "--symbols"
+      - "BTCUSDT,ETHUSDT"
+      - "--metrics-port"
+      - "9090"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:9090/healthz', timeout=5).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  redis_data:

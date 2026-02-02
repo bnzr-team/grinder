@@ -1,10 +1,15 @@
-"""Tests for live runtime contract (healthz and metrics endpoints).
+"""Tests for live runtime contract (healthz, readyz, and metrics endpoints).
 
 Enforces the contract defined in src/grinder/observability/live_contract.py:
 
 GET /healthz:
     - Body is valid JSON with "status" and "uptime_s" keys
     - "status" value is "ok"
+
+GET /readyz:
+    - Body is valid JSON with "ready" and "role" keys
+    - "ready" is true if ACTIVE, false otherwise
+    - Returns 200 if ACTIVE, 503 if STANDBY/UNKNOWN
 
 GET /metrics:
     - Body is Prometheus text format
@@ -18,11 +23,14 @@ import json
 import pytest
 
 from grinder.gating import reset_gating_metrics
+from grinder.ha.role import HARole, reset_ha_state, set_ha_state
 from grinder.observability import (
     REQUIRED_HEALTHZ_KEYS,
     REQUIRED_METRICS_PATTERNS,
+    REQUIRED_READYZ_KEYS,
     build_healthz_body,
     build_metrics_body,
+    build_readyz_body,
     get_start_time,
     reset_start_time,
     set_start_time,
@@ -36,6 +44,7 @@ def reset_state() -> None:
     reset_start_time()
     reset_gating_metrics()
     reset_metrics_builder()
+    reset_ha_state()
 
 
 class TestHealthzContract:
@@ -75,6 +84,71 @@ class TestHealthzContract:
 
         assert isinstance(data["uptime_s"], (int, float))
         assert data["uptime_s"] >= 0
+
+
+class TestReadyzContract:
+    """Tests for /readyz endpoint contract."""
+
+    def test_readyz_returns_valid_json(self) -> None:
+        """Test that readyz body is valid JSON."""
+        body, _ = build_readyz_body()
+
+        # Should parse as JSON without error
+        data = json.loads(body)
+        assert isinstance(data, dict)
+
+    def test_readyz_has_required_keys(self) -> None:
+        """Test that readyz body contains all required keys."""
+        body, _ = build_readyz_body()
+        data = json.loads(body)
+
+        for key in REQUIRED_READYZ_KEYS:
+            assert key in data, f"Missing required key: {key}"
+
+    def test_readyz_ready_is_boolean(self) -> None:
+        """Test that ready value is a boolean."""
+        body, _ = build_readyz_body()
+        data = json.loads(body)
+
+        assert isinstance(data["ready"], bool)
+
+    def test_readyz_role_is_string(self) -> None:
+        """Test that role value is a string."""
+        body, _ = build_readyz_body()
+        data = json.loads(body)
+
+        assert isinstance(data["role"], str)
+        assert data["role"] in ["active", "standby", "unknown"]
+
+    def test_readyz_active_returns_ready_true(self) -> None:
+        """Test that ACTIVE role returns ready=true and is_ready=True."""
+        set_ha_state(role=HARole.ACTIVE)
+        body, is_ready = build_readyz_body()
+        data = json.loads(body)
+
+        assert data["ready"] is True
+        assert data["role"] == "active"
+        assert is_ready is True
+
+    def test_readyz_standby_returns_ready_false(self) -> None:
+        """Test that STANDBY role returns ready=false and is_ready=False."""
+        set_ha_state(role=HARole.STANDBY)
+        body, is_ready = build_readyz_body()
+        data = json.loads(body)
+
+        assert data["ready"] is False
+        assert data["role"] == "standby"
+        assert is_ready is False
+
+    def test_readyz_unknown_returns_ready_false(self) -> None:
+        """Test that UNKNOWN role returns ready=false and is_ready=False."""
+        # Default state is UNKNOWN
+        body, is_ready = build_readyz_body()
+        data = json.loads(body)
+
+        assert data["ready"] is False
+        assert data["role"] == "unknown"
+        assert is_ready is False
 
 
 class TestMetricsContract:
@@ -128,6 +202,39 @@ class TestMetricsContract:
         assert "# HELP grinder_gating_blocked_total" in body
         assert "# TYPE grinder_gating_blocked_total counter" in body
 
+    def test_metrics_ha_role_present(self) -> None:
+        """Test that grinder_ha_role metric is present."""
+        body = build_metrics_body()
+
+        assert "# HELP grinder_ha_role" in body
+        assert "# TYPE grinder_ha_role gauge" in body
+        assert "grinder_ha_role" in body
+
+    def test_metrics_ha_role_reflects_current_state(self) -> None:
+        """Test that grinder_ha_role reflects actual HA state.
+
+        All roles should be present: current=1, others=0.
+        """
+        # Default is UNKNOWN: unknown=1, active=0, standby=0
+        body = build_metrics_body()
+        assert 'grinder_ha_role{role="unknown"} 1' in body
+        assert 'grinder_ha_role{role="active"} 0' in body
+        assert 'grinder_ha_role{role="standby"} 0' in body
+
+        # Set to ACTIVE: active=1, others=0
+        set_ha_state(role=HARole.ACTIVE)
+        body = build_metrics_body()
+        assert 'grinder_ha_role{role="active"} 1' in body
+        assert 'grinder_ha_role{role="standby"} 0' in body
+        assert 'grinder_ha_role{role="unknown"} 0' in body
+
+        # Set to STANDBY: standby=1, others=0
+        set_ha_state(role=HARole.STANDBY)
+        body = build_metrics_body()
+        assert 'grinder_ha_role{role="standby"} 1' in body
+        assert 'grinder_ha_role{role="active"} 0' in body
+        assert 'grinder_ha_role{role="unknown"} 0' in body
+
 
 class TestContractConstants:
     """Tests for contract constant definitions."""
@@ -136,6 +243,11 @@ class TestContractConstants:
         """Test REQUIRED_HEALTHZ_KEYS is properly defined."""
         assert "status" in REQUIRED_HEALTHZ_KEYS
         assert "uptime_s" in REQUIRED_HEALTHZ_KEYS
+
+    def test_required_readyz_keys_defined(self) -> None:
+        """Test REQUIRED_READYZ_KEYS is properly defined."""
+        assert "ready" in REQUIRED_READYZ_KEYS
+        assert "role" in REQUIRED_READYZ_KEYS
 
     def test_required_metrics_patterns_defined(self) -> None:
         """Test REQUIRED_METRICS_PATTERNS is properly defined."""
@@ -152,6 +264,9 @@ class TestContractConstants:
         # Should include gating metrics
         assert any("grinder_gating_allowed_total" in p for p in patterns)
         assert any("grinder_gating_blocked_total" in p for p in patterns)
+
+        # Should include HA metrics
+        assert any("grinder_ha_role" in p for p in patterns)
 
 
 class TestStartTimeManagement:

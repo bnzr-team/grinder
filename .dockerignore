@@ -1,0 +1,31 @@
+# Cache directories
+.ruff_cache/
+.pytest_cache/
+.mypy_cache/
+__pycache__/
+
+# Virtual environments
+.venv/
+venv/
+.tox/
+
+# IDE
+.idea/
+.vscode/
+*.code-workspace
+
+# Git
+.git/
+.github/
+
+# Test and coverage
+.coverage
+htmlcov/
+*.egg-info/
+
+# Misc
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+Thumbs.db

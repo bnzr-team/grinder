@@ -125,12 +125,15 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - **Live runtime contract** (`src/grinder/observability/live_contract.py`):
     - Pure functions for testable HTTP responses (no network required)
     - `build_healthz_body()`: returns JSON with `status`, `uptime_s`
+    - `build_readyz_body()`: returns tuple of (JSON body, is_ready bool) based on HA role
     - `build_metrics_body()`: returns Prometheus format metrics
     - `REQUIRED_HEALTHZ_KEYS`: stable keys that must appear in /healthz response
+    - `REQUIRED_READYZ_KEYS`: stable keys that must appear in /readyz response (`ready`, `role`)
     - `REQUIRED_METRICS_PATTERNS`: stable patterns that must appear in /metrics response
     - **Contract:**
       - `GET /healthz`: status 200, content-type `application/json`, body includes `{"status": "ok", "uptime_s": <float>}`
-      - `GET /metrics`: status 200, content-type `text/plain`, body includes `grinder_up 1`, `grinder_uptime_seconds`, gating metrics
+      - `GET /readyz`: status 200 if ACTIVE, 503 if STANDBY/UNKNOWN, content-type `application/json`, body includes `{"ready": true/false, "role": "<role>"}`
+      - `GET /metrics`: status 200, content-type `text/plain`, body includes `grinder_up 1`, `grinder_uptime_seconds`, `grinder_ha_role`, gating metrics
     - **Contract tests**: `tests/unit/test_live_contracts.py` verifies response structure and required patterns
 - **Observability stack v0** (`docker-compose.observability.yml`):
   - Docker Compose stack: grinder + Prometheus + Grafana
@@ -159,6 +162,8 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - `grinder_kill_switch_trips_total{reason}` (counter): total trips by reason
     - `grinder_drawdown_pct` (gauge): current drawdown percentage (0-100)
     - `grinder_high_water_mark` (gauge): current equity high-water mark
+  - **HA metrics:**
+    - `grinder_ha_role{role}` (gauge): 1 for current role (active/standby/unknown)
   - **Contract tests:** `tests/unit/test_live_contracts.py`, `tests/unit/test_observability.py`
   - **SSOT:** This section is the canonical list of exported metrics
 - **Determinism Gate v1** (`scripts/verify_determinism_suite.py`):
@@ -257,13 +262,48 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - [Kill-Switch](runbooks/04_KILL_SWITCH.md): detection, diagnosis, recovery
     - [Soak Gate](runbooks/05_SOAK_GATE.md): running soak tests
     - [Alert Response](runbooks/06_ALERT_RESPONSE.md): responding to Prometheus alerts
+    - [HA Operations](runbooks/07_HA_OPERATIONS.md): high availability deployment and failover
   - Operator's guide: [HOW_TO_OPERATE.md](HOW_TO_OPERATE.md)
   - **Quick reference:**
     - Health: `curl -fsS http://localhost:9090/healthz`
     - Metrics: `curl -fsS http://localhost:9090/metrics`
     - Start stack: `docker compose -f docker-compose.observability.yml up --build -d`
     - Stop stack: `docker compose -f docker-compose.observability.yml down -v`
-  - **Limitations:** No HA deployment, no Kubernetes, no automated runbook execution
+  - **Limitations:** No Kubernetes, no automated runbook execution
+- **HA v0** (`src/grinder/ha/`, `docker-compose.ha.yml`):
+  - Single-host redundancy with Redis lease-lock coordination
+  - **Components:**
+    - `HARole` enum: `ACTIVE`, `STANDBY`, `UNKNOWN`
+    - `HAState`: thread-safe state container for current role
+    - `LeaderElector`: Redis-based lease lock manager with TTL-based coordination
+  - **Leader election:**
+    - Lock TTL: 10 seconds (configurable via `GRINDER_HA_LOCK_TTL_MS`)
+    - Renewal interval: 3 seconds (configurable via `GRINDER_HA_RENEW_INTERVAL_MS`)
+    - Lock key: `grinder:leader:lock`
+  - **Fail-safe semantics (critical for single-active safety):**
+    - Lock renewal failure → immediately become STANDBY
+    - Redis unavailable → all instances become STANDBY
+    - STANDBY/UNKNOWN → `/readyz` returns 503 (not ready for traffic)
+    - Only ACTIVE → `/readyz` returns 200 (ready)
+    - **Unit tests:** `tests/unit/test_ha.py::TestFailSafeSemantics` validates these guarantees
+  - **Observability:**
+    - `/readyz` endpoint: 200 for ACTIVE, 503 for STANDBY/UNKNOWN
+    - `/healthz` endpoint: 200 always (liveness, not readiness)
+    - `grinder_ha_role{role}` metric: gauge with all roles (current=1, others=0)
+  - **Deployment:** `docker-compose.ha.yml` with Redis 7.2 + 2 grinder instances
+  - **Environment variables:**
+    - `GRINDER_REDIS_URL`: Redis connection URL (default: redis://localhost:6379/0)
+    - `GRINDER_HA_ENABLED`: Enable HA mode (default: false)
+    - `GRINDER_HA_LOCK_TTL_MS`: Lock TTL in milliseconds (default: 10000)
+    - `GRINDER_HA_RENEW_INTERVAL_MS`: Lock renewal interval in milliseconds (default: 3000)
+  - **Commands:**
+    - Start HA stack: `docker compose -f docker-compose.ha.yml up --build -d`
+    - Failover test: `docker stop grinder_live_1` → grinder_live_2 becomes ACTIVE within ~10s
+  - **Contract tests:**
+    - `tests/unit/test_live_contracts.py`: /readyz response structure
+    - `tests/unit/test_ha.py`: HA role, state management, fail-safe semantics (17 tests)
+  - See ADR-015 for design decisions
+  - **Limitations:** Single-host only (Redis is SPOF), no protection against host/VM failure (v1 scope)
 
 ## Partially implemented
 - Структура пакета `src/grinder/*` (core, protocols/interfaces) — каркас.

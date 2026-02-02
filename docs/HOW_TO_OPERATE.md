@@ -176,6 +176,7 @@ For detailed procedures, see [docs/runbooks/](runbooks/):
 | [Kill-Switch](runbooks/04_KILL_SWITCH.md) | When trading is halted |
 | [Soak Gate](runbooks/05_SOAK_GATE.md) | Validating releases |
 | [Alert Response](runbooks/06_ALERT_RESPONSE.md) | Responding to alerts |
+| [HA Operations](runbooks/07_HA_OPERATIONS.md) | High availability deployment |
 
 ---
 
