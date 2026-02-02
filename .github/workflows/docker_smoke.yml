@@ -8,6 +8,7 @@ on:
       - "Dockerfile"
       - "docker-compose.yml"
       - "docker-compose.observability.yml"
+      - "docker-compose.ha.yml"
       - "monitoring/**"
       - "src/**"
       - "scripts/**"
@@ -47,6 +48,15 @@ jobs:
             echo "FOUND: $m"
           done
 
+      - name: Check /readyz (non-HA mode expects 503)
+        run: |
+          HTTP_CODE=$(curl -s -o /tmp/readyz.json -w "%{http_code}" http://localhost:9090/readyz)
+          echo "HTTP status: $HTTP_CODE"
+          cat /tmp/readyz.json | python -m json.tool || cat /tmp/readyz.json
+          # Non-HA mode: role=unknown, ready=false, status=503
+          test "$HTTP_CODE" = "503"
+          python -c "import json; d=json.load(open('/tmp/readyz.json')); assert d.get('role') == 'unknown', f\"expected role=unknown, got {d.get('role')}\""
+
       - name: Stop container
         if: always()
         run: docker rm -f grinder-smoke || true
@@ -58,3 +68,62 @@ jobs:
 
       - name: Run observability stack smoke test
         run: bash scripts/docker_smoke_observability.sh
+
+  ha-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Start HA stack
+        run: |
+          docker compose -f docker-compose.ha.yml up --build -d
+          echo "Waiting for containers to be healthy..."
+          sleep 15
+
+      - name: Check HA stack is running
+        run: |
+          docker compose -f docker-compose.ha.yml ps
+          # Verify all 3 services are up
+          test $(docker compose -f docker-compose.ha.yml ps --status running -q | wc -l) -eq 3
+
+      - name: Check /readyz on both instances
+        run: |
+          echo "=== Instance 1 (port 9090) ==="
+          RESP1=$(curl -s -w "\nHTTP:%{http_code}" http://localhost:9090/readyz)
+          echo "$RESP1"
+          CODE1=$(echo "$RESP1" | grep "HTTP:" | cut -d: -f2)
+          ROLE1=$(echo "$RESP1" | head -1 | python -c "import sys,json; print(json.load(sys.stdin)['role'])")
+
+          echo ""
+          echo "=== Instance 2 (port 9091) ==="
+          RESP2=$(curl -s -w "\nHTTP:%{http_code}" http://localhost:9091/readyz)
+          echo "$RESP2"
+          CODE2=$(echo "$RESP2" | grep "HTTP:" | cut -d: -f2)
+          ROLE2=$(echo "$RESP2" | head -1 | python -c "import sys,json; print(json.load(sys.stdin)['role'])")
+
+          echo ""
+          echo "=== HA Status ==="
+          echo "Instance 1: HTTP=$CODE1, role=$ROLE1"
+          echo "Instance 2: HTTP=$CODE2, role=$ROLE2"
+
+          # Exactly one should be active (200), one standby (503)
+          if [[ "$CODE1" == "200" && "$CODE2" == "503" ]]; then
+            echo "✓ Instance 1 is ACTIVE, Instance 2 is STANDBY"
+          elif [[ "$CODE1" == "503" && "$CODE2" == "200" ]]; then
+            echo "✓ Instance 2 is ACTIVE, Instance 1 is STANDBY"
+          else
+            echo "✗ Unexpected HA state: expected one 200 and one 503"
+            exit 1
+          fi
+
+      - name: Check HA metrics
+        run: |
+          echo "=== Instance 1 HA metrics ==="
+          curl -fsS http://localhost:9090/metrics | grep grinder_ha_role
+          echo ""
+          echo "=== Instance 2 HA metrics ==="
+          curl -fsS http://localhost:9091/metrics | grep grinder_ha_role
+
+      - name: Stop HA stack
+        if: always()
+        run: docker compose -f docker-compose.ha.yml down -v

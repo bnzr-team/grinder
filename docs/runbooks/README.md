@@ -12,12 +12,14 @@ Operational runbooks for GRINDER trading system.
 | [04_KILL_SWITCH](04_KILL_SWITCH.md) | Kill-switch events and recovery |
 | [05_SOAK_GATE](05_SOAK_GATE.md) | Running soak tests and interpreting results |
 | [06_ALERT_RESPONSE](06_ALERT_RESPONSE.md) | Responding to Prometheus alerts |
+| [07_HA_OPERATIONS](07_HA_OPERATIONS.md) | HA deployment, failover, and troubleshooting |
 
 ## Quick Reference
 
 | Endpoint | URL | Purpose |
 |----------|-----|---------|
 | Health | `http://localhost:9090/healthz` | Liveness check |
+| Ready | `http://localhost:9090/readyz` | Readiness check (HA-aware) |
 | Metrics | `http://localhost:9090/metrics` | Prometheus scrape |
 | Prometheus | `http://localhost:9091` | Metrics UI |
 | Grafana | `http://localhost:3000` | Dashboards (admin/admin) |
