@@ -187,6 +187,7 @@ module = [
     "lightgbm.*",
     "optuna.*",
     "shap.*",
+    "redis.*",
 ]
 ignore_missing_imports = true
 

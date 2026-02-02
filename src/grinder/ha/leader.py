@@ -56,9 +56,7 @@ class LeaderElectorConfig:
         default_factory=lambda: os.environ.get("GRINDER_REDIS_URL", "redis://localhost:6379/0")
     )
     lock_key: str = "grinder:leader:lock"
-    lock_ttl_ms: int = field(
-        default_factory=lambda: _get_int_env("GRINDER_HA_LOCK_TTL_MS", 10000)
-    )
+    lock_ttl_ms: int = field(default_factory=lambda: _get_int_env("GRINDER_HA_LOCK_TTL_MS", 10000))
     renew_interval_ms: int = field(
         default_factory=lambda: _get_int_env("GRINDER_HA_RENEW_INTERVAL_MS", 3000)
     )
@@ -66,11 +64,11 @@ class LeaderElectorConfig:
 
     def __post_init__(self) -> None:
         """Validate configuration."""
-        if self.renew_interval_ms >= self.lock_ttl_ms:
-            msg = f"renew_interval_ms ({self.renew_interval_ms}) must be < lock_ttl_ms ({self.lock_ttl_ms})"
-            raise ValueError(msg)
         if self.lock_ttl_ms < 1000:
             msg = f"lock_ttl_ms ({self.lock_ttl_ms}) should be >= 1000ms for safety"
+            raise ValueError(msg)
+        if self.renew_interval_ms >= self.lock_ttl_ms:
+            msg = f"renew_interval_ms ({self.renew_interval_ms}) must be < lock_ttl_ms ({self.lock_ttl_ms})"
             raise ValueError(msg)
 
 
@@ -117,7 +115,10 @@ class LeaderElector:
             self._redis.ping()
             logger.info(
                 "Connected to Redis",
-                extra={"redis_url": self._config.redis_url, "instance_id": self._config.instance_id},
+                extra={
+                    "redis_url": self._config.redis_url,
+                    "instance_id": self._config.instance_id,
+                },
             )
         except redis.ConnectionError as e:
             logger.error("Failed to connect to Redis: %s", e)
