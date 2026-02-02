@@ -12,6 +12,7 @@ on:
       - "monitoring/**"
       - "src/**"
       - "scripts/**"
+      - ".github/workflows/docker_smoke.yml"
 
 jobs:
   docker-smoke:
@@ -71,10 +72,12 @@ jobs:
 
   ha-smoke:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
 
       - name: Start HA stack
+        timeout-minutes: 3
         run: |
           docker compose -f docker-compose.ha.yml up --build -d
           echo "Waiting for containers to be healthy..."
