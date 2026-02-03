@@ -385,5 +385,13 @@ Comprehensive adaptive grid system design:
   - ✅ **PaperEngine integration (ASM-P1-02):** Integrated, features NOT in digest (backward compat)
   - ✅ **Policy receives features (ASM-P1-03):** Plumbing complete — features passed to policy when enabled, StaticGridPolicy ignores (backward compat), digests unchanged (see ADR-020)
   - ✅ **Regime classifier (ASM-P1-04):** Deterministic precedence-based classifier — EMERGENCY > TOXIC > THIN_BOOK > VOL_SHOCK > TREND > RANGE (see ADR-021)
-  - ⏳ **AdaptiveGridPolicy v1 (ASM-P1-05):** Pending
+  - ✅ **AdaptiveGridPolicy v1 (ASM-P1-05):** Dynamic grid sizing from NATR + regime (see ADR-022)
+    - **Opt-in:** `adaptive_policy_enabled=False` default (backward compat with existing digests)
+    - **L1-only:** Uses natr_bps, spread_bps, thin_l1, range_score from FeatureEngine
+    - **Adapts:** step_bps (volatility-scaled), width_bps (X_stress model), levels (ceil(width/step))
+    - **Formulas:** step=max(5, 0.3*NATR*regime_mult), width=clamp(2.0*NATR*sqrt(H/TF), 20, 500), levels=clamp(ceil(width/step), 2, 20)
+    - **Regime multipliers:** RANGE=1.0, VOL_SHOCK=1.5, THIN_BOOK=2.0, TREND asymmetric (1.3× on against-trend side)
+    - **Units:** All thresholds/multipliers as integer bps (×100 scale) for determinism
+    - **NOT included:** auto-sizing (legacy size_per_level), DD allocator, L2 features, Top-K integration
+    - **Fixture:** `sample_day_adaptive` — paper digest `1b8af993a8435ee6`
   - ⏳ **Top-K v1 (ASM-P1-06):** Pending

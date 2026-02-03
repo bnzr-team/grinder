@@ -106,9 +106,18 @@ def run_replay(fixture_path: Path) -> str:
     return result.digest
 
 
-def run_paper(fixture_path: Path, controller_enabled: bool = False) -> str:
+def run_paper(
+    fixture_path: Path,
+    controller_enabled: bool = False,
+    feature_engine_enabled: bool = False,
+    adaptive_policy_enabled: bool = False,
+) -> str:
     """Run paper trading and return digest."""
-    engine = PaperEngine(controller_enabled=controller_enabled)
+    engine = PaperEngine(
+        controller_enabled=controller_enabled,
+        feature_engine_enabled=feature_engine_enabled,
+        adaptive_policy_enabled=adaptive_policy_enabled,
+    )
     result = engine.run(fixture_path)
     return result.digest
 
@@ -127,12 +136,17 @@ def check_fixture(fixture_path: Path, verbose: bool = False) -> FixtureCheck:
     name = fixture_path.name
     config = load_config(fixture_path)
     controller_enabled = bool(config.get("controller_enabled", False))
+    feature_engine_enabled = bool(config.get("feature_engine_enabled", False))
+    adaptive_policy_enabled = bool(config.get("adaptive_policy_enabled", False))
 
     errors: list[str] = []
 
     # Get expected digests from config
     replay_expected = config.get("expected_digest", "")
     paper_expected = config.get("expected_paper_digest", "")
+    # Also check canonical_digest (alternative key)
+    if not paper_expected:
+        paper_expected = config.get("canonical_digest", "")
 
     if verbose:
         print(f"  Checking {name}...")
@@ -152,8 +166,18 @@ def check_fixture(fixture_path: Path, verbose: bool = False) -> FixtureCheck:
 
     # Run paper twice
     try:
-        paper_1 = run_paper(fixture_path, controller_enabled)
-        paper_2 = run_paper(fixture_path, controller_enabled)
+        paper_1 = run_paper(
+            fixture_path,
+            controller_enabled=controller_enabled,
+            feature_engine_enabled=feature_engine_enabled,
+            adaptive_policy_enabled=adaptive_policy_enabled,
+        )
+        paper_2 = run_paper(
+            fixture_path,
+            controller_enabled=controller_enabled,
+            feature_engine_enabled=feature_engine_enabled,
+            adaptive_policy_enabled=adaptive_policy_enabled,
+        )
     except Exception as e:
         errors.append(f"Paper error: {e}")
         paper_1 = paper_2 = ""

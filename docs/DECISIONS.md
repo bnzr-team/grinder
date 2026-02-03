@@ -586,3 +586,46 @@
   - ML-based regime detection — deferred to v2; rule-based is deterministic and interpretable
   - Continuous regime probability — rejected; discrete regimes are simpler for policy logic
   - Integrate directly into AdaptiveGridPolicy — rejected; separation of concerns, easier to test
+
+## ADR-022 — AdaptiveGridPolicy v1 (L1-only step/width/levels, deterministic)
+- **Date:** 2026-02-03
+- **Status:** accepted
+- **Context:** ASM v1 requires dynamic grid parameters based on market conditions (§17.8-17.10). StaticGridPolicy uses fixed spacing/levels which doesn't adapt to volatility changes. We need an adaptive policy that computes step/width/levels from NATR and regime while maintaining determinism.
+- **Decision:**
+  - **Module:** `src/grinder/policies/grid/adaptive.py` with:
+    - `AdaptiveGridConfig`: threshold configuration (integer bps for determinism)
+    - `AdaptiveGridPolicy`: policy class with `evaluate()` method
+    - Helper functions: `compute_step_bps()`, `compute_width_bps()`, `compute_levels()`
+  - **Step computation (§17.9):**
+    - `step_bps = max(step_min_bps, alpha * NATR * regime_mult)`
+    - `alpha` stored as integer (30 = 0.30) for determinism
+    - Regime multipliers: RANGE=1.0, VOL_SHOCK=1.5, THIN_BOOK=2.0
+  - **Width/X_stress computation (§17.8):**
+    - `sigma_H = NATR * sqrt(H / TF)` (horizon volatility)
+    - `X_stress = clamp(k_tail * sigma_H, X_min, X_cap)`
+    - Asymmetric in TREND: more width on against-trend side
+  - **Levels computation (§17.10):**
+    - `levels = ceil(width / step)`, clamped to [levels_min, levels_max]
+  - **Regime integration:**
+    - Uses `classify_regime()` from ADR-021 for market condition detection
+    - EMERGENCY/TOXIC/PAUSED → pause plan (levels=0, reset=HARD)
+    - VOL_SHOCK → wider step
+    - TREND_UP/DOWN → asymmetric width
+  - **PaperEngine integration:**
+    - `adaptive_policy_enabled` flag (default False for backward compat)
+    - When enabled, uses AdaptiveGridPolicy instead of StaticGridPolicy
+    - Requires `feature_engine_enabled=True` for features
+  - **Sizing:** Legacy (fixed size_per_level from config) — auto-sizing deferred to P1-05b
+  - **Determinism guarantees:**
+    - All thresholds and multipliers are integer bps
+    - Integer arithmetic for all intermediate calculations
+    - Same inputs → same GridPlan
+- **Consequences:**
+  - AdaptiveGridPolicy produces different GridPlan than StaticGridPolicy
+  - New fixture `sample_day_adaptive` with separate digest (existing fixtures unchanged)
+  - Unit tests: 23 tests in `test_adaptive_policy.py` for step/width/levels + boundaries
+  - Existing digests unchanged (adaptive_policy_enabled=False by default)
+- **Alternatives:**
+  - Float arithmetic — rejected; breaks determinism
+  - Single unified policy — rejected; StaticGridPolicy useful for comparison/debugging
+  - Auto-sizing in v1 — deferred to P1-05b to keep PR scope manageable
