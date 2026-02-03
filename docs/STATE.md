@@ -337,3 +337,16 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
 - Расширить тесты до >50% coverage.
 - Adaptive Controller v1 (EMA-based adaptive step, trend detection, DRAWDOWN mode).
 - Live Binance WebSocket connector (implementing DataConnector ABC).
+
+## Planned (spec exists, not implemented)
+
+### Adaptive Smart Grid v1 (`docs/17_ADAPTIVE_SMART_GRID_V1.md`)
+Comprehensive adaptive grid system design:
+- **Regime-driven behavior:** RANGE / TREND / VOL_SHOCK / THIN_BOOK / TOXIC / PAUSED / EMERGENCY
+- **Auto-sizing:** dynamic step, width, levels, and size schedule from market features
+- **L1/L2-aware:** microstructure features from L1 (spread, imbalance) and optional L2 (depth, impact)
+- **Risk budgeting:** DD budgets, inventory caps, leverage caps, auto-allocation
+- **Top-K 3–5:** symbol selection for tradable chop + safe liquidity
+- **Deterministic:** fixture-based testing with stable digests
+- **Cross-reference:** See `docs/16_ADAPTIVE_GRID_CONTROLLER_SPEC.md` for meta-controller contracts (regime, step, reset)
+- **Status:** Proposed (docs-only), no code implemented yet

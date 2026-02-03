@@ -38,7 +38,8 @@ Where to find information:
 - `docs/10_RISK_SPEC.md`
 - `docs/11_BACKTEST_PROTOCOL.md`
 - `docs/12_ML_SPEC.md`
-- `docs/16_ADAPTIVE_GRID_CONTROLLER_SPEC.md`
+- `docs/16_ADAPTIVE_GRID_CONTROLLER_SPEC.md` — meta-controller (regime, step, reset)
+- `docs/17_ADAPTIVE_SMART_GRID_V1.md` — **full Adaptive Smart Grid v1 spec** (regime-driven, auto-sizing, L1/L2-aware)
 - `docs/13_OBSERVABILITY.md`
 - `docs/14_GITHUB_WORKFLOW.md`
 
