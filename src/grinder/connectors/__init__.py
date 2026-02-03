@@ -8,10 +8,24 @@ from grinder.connectors.data_connector import (
     RetryConfig,
     TimeoutConfig,
 )
+from grinder.connectors.errors import (
+    ConnectorClosedError,
+    ConnectorError,
+    ConnectorIOError,
+    ConnectorNonRetryableError,
+    ConnectorTimeoutError,
+    ConnectorTransientError,
+)
 
 __all__ = [
     "BinanceWsMockConnector",
+    "ConnectorClosedError",
+    "ConnectorError",
+    "ConnectorIOError",
+    "ConnectorNonRetryableError",
     "ConnectorState",
+    "ConnectorTimeoutError",
+    "ConnectorTransientError",
     "DataConnector",
     "ExchangeConnector",
     "MockConnectorStats",

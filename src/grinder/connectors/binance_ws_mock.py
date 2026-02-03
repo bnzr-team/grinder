@@ -7,6 +7,7 @@ Used for:
 - Integration testing without real Binance connection
 - Soak testing with controlled data
 - Development and debugging
+- Timeout and cancellation testing (H1)
 
 See: ADR-012 for connector design decisions
 """
@@ -25,6 +26,14 @@ from grinder.connectors.data_connector import (
     RetryConfig,
     TimeoutConfig,
 )
+from grinder.connectors.errors import (
+    ConnectorClosedError,
+    ConnectorTimeoutError,
+)
+from grinder.connectors.timeouts import (
+    cancel_tasks_with_timeout,
+    wait_for_with_op,
+)
 from grinder.contracts import Snapshot
 
 if TYPE_CHECKING:
@@ -40,6 +49,9 @@ class MockConnectorStats:
     snapshots_delivered: int = 0
     duplicates_skipped: int = 0
     reconnect_attempts: int = 0
+    timeouts: int = 0
+    tasks_cancelled: int = 0
+    tasks_force_killed: int = 0
     errors: list[str] = field(default_factory=list)
 
 
@@ -98,6 +110,10 @@ class BinanceWsMockConnector(DataConnector):
         self._cursor: int = 0
         self._stats = MockConnectorStats()
 
+        # Task tracking for clean shutdown (no zombies)
+        self._tasks: set[asyncio.Task[Any]] = set()
+        self._task_name_prefix = f"mock_connector_{id(self)}_"
+
     @property
     def state(self) -> ConnectorState:
         """Get current connector state."""
@@ -118,6 +134,7 @@ class BinanceWsMockConnector(DataConnector):
 
         Raises:
             ConnectionError: If fixture not found or invalid
+            ConnectorTimeoutError: If connection times out
         """
         if self._state == ConnectorState.CONNECTED:
             return  # Already connected
@@ -125,15 +142,17 @@ class BinanceWsMockConnector(DataConnector):
         self._state = ConnectorState.CONNECTING
 
         try:
-            # Simulate connection delay (for testing)
-            if self._timeout_config.connect_timeout_ms > 0:
-                await asyncio.sleep(0.001)  # Minimal async yield
-
-            self._events = self._load_fixture()
-            self._cursor = 0
-            self._stats.events_loaded = len(self._events)
-            self._state = ConnectorState.CONNECTED
-
+            # Use timeout wrapper for connect operation
+            await wait_for_with_op(
+                self._do_connect(),
+                timeout_ms=self._timeout_config.connect_timeout_ms,
+                op="connect",
+            )
+        except ConnectorTimeoutError:
+            self._state = ConnectorState.DISCONNECTED
+            self._stats.timeouts += 1
+            self._stats.errors.append("Connect timeout")
+            raise
         except FileNotFoundError as e:
             self._state = ConnectorState.DISCONNECTED
             self._stats.errors.append(f"Fixture not found: {e}")
@@ -143,12 +162,38 @@ class BinanceWsMockConnector(DataConnector):
             self._stats.errors.append(f"Invalid JSON: {e}")
             raise ConnectionError(f"Invalid fixture JSON: {e}") from e
 
+    async def _do_connect(self) -> None:
+        """Internal connect implementation."""
+        # Simulate minimal async yield
+        await asyncio.sleep(0.001)
+
+        self._events = self._load_fixture()
+        self._cursor = 0
+        self._stats.events_loaded = len(self._events)
+        self._state = ConnectorState.CONNECTED
+
     async def close(self) -> None:
-        """Close connector and release resources."""
+        """Close connector and release resources.
+
+        Cancels all background tasks and waits for completion within
+        close_timeout_ms. Safe to call multiple times. Idempotent.
+        """
         if self._state == ConnectorState.CLOSED:
             return
 
         self._state = ConnectorState.CLOSED
+
+        # Cancel and await all tracked tasks
+        if self._tasks:
+            cancelled, timed_out = await cancel_tasks_with_timeout(
+                self._tasks,
+                timeout_ms=self._timeout_config.close_timeout_ms,
+                task_name_prefix=self._task_name_prefix,
+            )
+            self._stats.tasks_cancelled += cancelled
+            self._stats.tasks_force_killed += timed_out
+
+        self._tasks.clear()
         self._events = []
         self._cursor = 0
 
@@ -159,11 +204,19 @@ class BinanceWsMockConnector(DataConnector):
 
         Raises:
             ConnectionError: If not connected
+            ConnectorClosedError: If connector is closed during iteration
+            ConnectorTimeoutError: If read times out
         """
+        if self._state == ConnectorState.CLOSED:
+            raise ConnectorClosedError("iterate")
         if self._state != ConnectorState.CONNECTED:
             raise ConnectionError(f"Cannot iterate: connector state is {self._state.value}")
 
         while self._cursor < len(self._events):
+            # Check if closed during iteration (state can change externally)
+            if self._state != ConnectorState.CONNECTED:
+                raise ConnectorClosedError("iterate")
+
             event = self._events[self._cursor]
             self._cursor += 1
 
@@ -188,9 +241,17 @@ class BinanceWsMockConnector(DataConnector):
                 self._last_seen_ts = ts
                 self._stats.snapshots_delivered += 1
 
-                # Optional delay for simulating real-time
+                # Optional delay for simulating real-time (with read timeout)
                 if self._read_delay_ms > 0:
-                    await asyncio.sleep(self._read_delay_ms / 1000)
+                    try:
+                        await wait_for_with_op(
+                            asyncio.sleep(self._read_delay_ms / 1000),
+                            timeout_ms=self._timeout_config.read_timeout_ms,
+                            op="read",
+                        )
+                    except ConnectorTimeoutError:
+                        self._stats.timeouts += 1
+                        raise
 
                 yield snapshot
 
@@ -202,9 +263,12 @@ class BinanceWsMockConnector(DataConnector):
         """Reconnect from last seen position.
 
         For mock connector, this just resets cursor to resume position.
+
+        Raises:
+            ConnectorClosedError: If connector is closed
         """
         if self._state == ConnectorState.CLOSED:
-            raise ConnectionError("Cannot reconnect: connector is closed")
+            raise ConnectorClosedError("reconnect")
 
         self._state = ConnectorState.RECONNECTING
         self._stats.reconnect_attempts += 1
@@ -258,6 +322,16 @@ class BinanceWsMockConnector(DataConnector):
             last_price=Decimal(event["last_price"]),
             last_qty=Decimal(event["last_qty"]),
         )
+
+    @property
+    def active_tasks(self) -> set[asyncio.Task[Any]]:
+        """Get set of active tasks (for testing/debugging)."""
+        return {t for t in self._tasks if not t.done()}
+
+    @property
+    def timeout_config(self) -> TimeoutConfig:
+        """Get timeout configuration."""
+        return self._timeout_config
 
     def reset(self) -> None:
         """Reset connector to initial state (for testing).

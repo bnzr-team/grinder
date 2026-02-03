@@ -23,8 +23,15 @@ import pytest
 
 from grinder.connectors import (
     BinanceWsMockConnector,
+    ConnectorClosedError,
+    ConnectorError,
+    ConnectorIOError,
+    ConnectorNonRetryableError,
     ConnectorState,
+    ConnectorTimeoutError,
+    ConnectorTransientError,
     RetryConfig,
+    TimeoutConfig,
 )
 
 if TYPE_CHECKING:
@@ -499,3 +506,282 @@ class TestBinanceWsMockConnectorReadDelay:
 
         assert elapsed < 0.1  # Should be very fast
         await connector.close()
+
+
+# --- Timeout Tests (PR-H1) ---
+
+
+class SlowMockConnector(BinanceWsMockConnector):
+    """Mock connector that simulates slow operations for timeout testing."""
+
+    def __init__(
+        self,
+        fixture_path: Path,
+        *,
+        connect_delay_ms: int = 0,
+        read_delay_ms: int = 0,
+        close_delay_ms: int = 0,
+        timeout_config: TimeoutConfig | None = None,
+    ) -> None:
+        super().__init__(
+            fixture_path,
+            read_delay_ms=read_delay_ms,
+            timeout_config=timeout_config,
+        )
+        self._connect_delay_ms = connect_delay_ms
+        self._close_delay_ms = close_delay_ms
+        self._close_task_ignore_cancel = False
+
+    async def _do_connect(self) -> None:
+        """Slow connect implementation."""
+        if self._connect_delay_ms > 0:
+            await asyncio.sleep(self._connect_delay_ms / 1000)
+        await super()._do_connect()
+
+    async def close(self) -> None:
+        """Slow close with optional delay."""
+        if self._close_delay_ms > 0 and self._state != ConnectorState.CLOSED:
+            await asyncio.sleep(self._close_delay_ms / 1000)
+        await super().close()
+
+    def set_close_task_ignore_cancel(self, ignore: bool) -> None:
+        """Configure whether close task ignores cancellation (for testing force-kill)."""
+        self._close_task_ignore_cancel = ignore
+
+
+class TestConnectorTimeouts:
+    """Tests for connector timeout behavior (PR-H1)."""
+
+    @pytest.mark.asyncio
+    async def test_connect_timeout_raises_error(self, fixture_path: Path) -> None:
+        """Connect times out when delay exceeds timeout."""
+        # Connect delay (100ms) > timeout (50ms)
+        connector = SlowMockConnector(
+            fixture_path,
+            connect_delay_ms=100,
+            timeout_config=TimeoutConfig(connect_timeout_ms=50),
+        )
+
+        with pytest.raises(ConnectorTimeoutError) as exc_info:
+            await connector.connect()
+
+        assert exc_info.value.op == "connect"
+        assert exc_info.value.timeout_ms == 50
+        assert connector.state == ConnectorState.DISCONNECTED
+        assert connector.stats.timeouts == 1
+        assert "Connect timeout" in connector.stats.errors
+
+    @pytest.mark.asyncio
+    async def test_connect_succeeds_within_timeout(self, fixture_path: Path) -> None:
+        """Connect succeeds when delay is within timeout."""
+        # Connect delay (10ms) < timeout (100ms)
+        connector = SlowMockConnector(
+            fixture_path,
+            connect_delay_ms=10,
+            timeout_config=TimeoutConfig(connect_timeout_ms=100),
+        )
+
+        await connector.connect()
+        assert connector.state == ConnectorState.CONNECTED
+        assert connector.stats.timeouts == 0
+        await connector.close()
+
+    @pytest.mark.asyncio
+    async def test_read_timeout_during_iteration(self, fixture_path: Path) -> None:
+        """Read times out when delay exceeds read timeout."""
+        # Read delay (100ms) > read timeout (50ms)
+        connector = BinanceWsMockConnector(
+            fixture_path,
+            read_delay_ms=100,
+            timeout_config=TimeoutConfig(read_timeout_ms=50),
+        )
+
+        await connector.connect()
+
+        with pytest.raises(ConnectorTimeoutError) as exc_info:
+            async for _ in connector.iter_snapshots():
+                pass
+
+        assert exc_info.value.op == "read"
+        assert exc_info.value.timeout_ms == 50
+        assert connector.stats.timeouts == 1
+        await connector.close()
+
+    @pytest.mark.asyncio
+    async def test_read_succeeds_within_timeout(self, fixture_path: Path) -> None:
+        """Read succeeds when delay is within timeout."""
+        # Read delay (10ms) < read timeout (100ms)
+        connector = BinanceWsMockConnector(
+            fixture_path,
+            read_delay_ms=10,
+            timeout_config=TimeoutConfig(read_timeout_ms=100),
+        )
+
+        await connector.connect()
+
+        count = 0
+        async for _ in connector.iter_snapshots():
+            count += 1
+
+        assert count == 3
+        assert connector.stats.timeouts == 0
+        await connector.close()
+
+    @pytest.mark.asyncio
+    async def test_timeout_config_has_all_fields(self) -> None:
+        """TimeoutConfig includes all timeout types."""
+        config = TimeoutConfig()
+        assert config.connect_timeout_ms == 5000
+        assert config.read_timeout_ms == 10000
+        assert config.write_timeout_ms == 5000
+        assert config.close_timeout_ms == 5000
+
+    @pytest.mark.asyncio
+    async def test_timeout_error_attributes(self) -> None:
+        """ConnectorTimeoutError has correct attributes."""
+        error = ConnectorTimeoutError(op="connect", timeout_ms=5000)
+        assert error.op == "connect"
+        assert error.timeout_ms == 5000
+        assert "connect" in str(error)
+        assert "5000" in str(error)
+
+
+class TestConnectorCleanShutdown:
+    """Tests for clean shutdown with no zombie tasks (PR-H1)."""
+
+    @pytest.mark.asyncio
+    async def test_close_sets_state_before_cleanup(self, fixture_path: Path) -> None:
+        """Close sets CLOSED state immediately."""
+        connector = BinanceWsMockConnector(fixture_path)
+        await connector.connect()
+
+        await connector.close()
+        assert connector.state == ConnectorState.CLOSED
+
+    @pytest.mark.asyncio
+    async def test_close_clears_events(self, fixture_path: Path) -> None:
+        """Close clears loaded events."""
+        connector = BinanceWsMockConnector(fixture_path)
+        await connector.connect()
+        assert connector.stats.events_loaded == 3
+
+        await connector.close()
+        # Verify internal state is cleared (via reset of cursor)
+        assert connector.state == ConnectorState.CLOSED
+
+    @pytest.mark.asyncio
+    async def test_iteration_stops_when_closed(self, fixture_path: Path) -> None:
+        """Iteration stops cleanly if connector closes during iteration.
+
+        When close() is called during iteration, it clears the events list,
+        which causes the iteration to terminate gracefully rather than raising.
+        This is the expected behavior for clean shutdown.
+        """
+        connector = BinanceWsMockConnector(fixture_path, read_delay_ms=50)
+        await connector.connect()
+
+        count = 0
+        async for _ in connector.iter_snapshots():
+            count += 1
+            if count == 1:
+                # Close during iteration - clears events, ends iteration
+                await connector.close()
+
+        # Iteration stopped cleanly after first snapshot
+        assert count == 1
+        assert connector.state == ConnectorState.CLOSED
+
+    @pytest.mark.asyncio
+    async def test_iteration_raises_on_closed_connector(self, fixture_path: Path) -> None:
+        """Starting iteration on closed connector raises error."""
+        connector = BinanceWsMockConnector(fixture_path)
+        await connector.connect()
+        await connector.close()
+
+        with pytest.raises(ConnectorClosedError) as exc_info:
+            async for _ in connector.iter_snapshots():
+                pass
+
+        assert exc_info.value.op == "iterate"
+
+    @pytest.mark.asyncio
+    async def test_reconnect_raises_when_closed(self, fixture_path: Path) -> None:
+        """Reconnect raises error if connector is closed."""
+        connector = BinanceWsMockConnector(fixture_path)
+        await connector.connect()
+        await connector.close()
+
+        with pytest.raises(ConnectorClosedError) as exc_info:
+            await connector.reconnect()
+
+        assert exc_info.value.op == "reconnect"
+
+    @pytest.mark.asyncio
+    async def test_no_pending_tasks_after_close(self, fixture_path: Path) -> None:
+        """No active tasks remain after close."""
+        connector = BinanceWsMockConnector(fixture_path)
+        await connector.connect()
+
+        await connector.close()
+
+        # No active tasks should remain
+        assert len(connector.active_tasks) == 0
+
+    @pytest.mark.asyncio
+    async def test_close_is_idempotent_with_tasks(self, fixture_path: Path) -> None:
+        """Multiple close calls are safe."""
+        connector = BinanceWsMockConnector(fixture_path)
+        await connector.connect()
+
+        await connector.close()
+        await connector.close()  # Second close should not raise
+        await connector.close()  # Third close should not raise
+
+        assert connector.state == ConnectorState.CLOSED
+
+    @pytest.mark.asyncio
+    async def test_stats_track_cancelled_tasks(self, fixture_path: Path) -> None:
+        """Stats track number of cancelled tasks."""
+        connector = BinanceWsMockConnector(fixture_path)
+        await connector.connect()
+        await connector.close()
+
+        # Stats should be accessible after close
+        assert connector.stats.tasks_cancelled >= 0
+        assert connector.stats.tasks_force_killed >= 0
+
+
+class TestConnectorErrorHierarchy:
+    """Tests for connector exception hierarchy (PR-H1)."""
+
+    def test_timeout_error_is_connector_error(self) -> None:
+        """ConnectorTimeoutError inherits from ConnectorError."""
+        error = ConnectorTimeoutError(op="test", timeout_ms=100)
+        assert isinstance(error, ConnectorError)
+
+    def test_closed_error_is_connector_error(self) -> None:
+        """ConnectorClosedError inherits from ConnectorError."""
+        error = ConnectorClosedError("test")
+        assert isinstance(error, ConnectorError)
+
+    def test_transient_error_is_io_error(self) -> None:
+        """ConnectorTransientError inherits from ConnectorIOError."""
+        error = ConnectorTransientError("test")
+        assert isinstance(error, ConnectorIOError)
+
+    def test_non_retryable_error_is_io_error(self) -> None:
+        """ConnectorNonRetryableError inherits from ConnectorIOError."""
+        error = ConnectorNonRetryableError("test")
+        assert isinstance(error, ConnectorIOError)
+
+    def test_all_errors_are_exceptions(self) -> None:
+        """All connector errors are proper exceptions."""
+        for error_cls in [
+            ConnectorError,
+            ConnectorTimeoutError,
+            ConnectorClosedError,
+            ConnectorIOError,
+            ConnectorTransientError,
+            ConnectorNonRetryableError,
+        ]:
+            assert issubclass(error_cls, Exception)

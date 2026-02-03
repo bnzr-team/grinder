@@ -1,0 +1,72 @@
+"""Connector exception hierarchy.
+
+Provides structured exceptions for connector operations with clear
+classification for retry/circuit-breaker logic in H2/H4.
+
+Exception hierarchy:
+- ConnectorError (base)
+  - ConnectorTimeoutError (timeout on connect/read/write/close)
+  - ConnectorClosedError (operation on closed connector)
+  - ConnectorIOError (general I/O errors)
+    - ConnectorTransientError (retryable: network, 5xx, 429)
+    - ConnectorNonRetryableError (not retryable: 4xx, auth, validation)
+"""
+
+from __future__ import annotations
+
+
+class ConnectorError(Exception):
+    """Base exception for all connector errors."""
+
+    pass
+
+
+class ConnectorTimeoutError(ConnectorError):
+    """Timeout during connector operation.
+
+    Attributes:
+        op: Operation that timed out (connect, read, write, close)
+        timeout_ms: Timeout value in milliseconds
+    """
+
+    def __init__(self, op: str, timeout_ms: int, message: str | None = None) -> None:
+        self.op = op
+        self.timeout_ms = timeout_ms
+        msg = message or f"Timeout during {op} after {timeout_ms}ms"
+        super().__init__(msg)
+
+
+class ConnectorClosedError(ConnectorError):
+    """Operation attempted on closed connector."""
+
+    def __init__(self, op: str | None = None) -> None:
+        self.op = op
+        msg = f"Cannot {op}: connector is closed" if op else "Connector is closed"
+        super().__init__(msg)
+
+
+class ConnectorIOError(ConnectorError):
+    """General I/O error during connector operation.
+
+    Base class for transient and non-retryable errors.
+    """
+
+    pass
+
+
+class ConnectorTransientError(ConnectorIOError):
+    """Transient error that is safe to retry.
+
+    Examples: network errors, 5xx responses, 429 rate limits.
+    """
+
+    pass
+
+
+class ConnectorNonRetryableError(ConnectorIOError):
+    """Error that should not be retried.
+
+    Examples: 4xx responses, authentication failures, validation errors.
+    """
+
+    pass
