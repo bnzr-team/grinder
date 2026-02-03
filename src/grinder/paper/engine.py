@@ -203,6 +203,8 @@ class PaperEngine:
         initial_capital: Decimal = Decimal("10000"),
         max_drawdown_pct: float = 5.0,
         kill_switch_enabled: bool = False,
+        # Fill simulation mode (ADR-016)
+        fill_mode: str = "crossing",
     ) -> None:
         """Initialize paper trading engine.
 
@@ -232,6 +234,7 @@ class PaperEngine:
             initial_capital: Starting capital for equity calculation (default 10000 USD)
             max_drawdown_pct: Maximum drawdown percentage before kill-switch (default 5.0%)
             kill_switch_enabled: Enable drawdown guard and kill-switch (default False for backward compat)
+            fill_mode: Fill simulation mode - "crossing" (default, v1.1) or "instant" (v1.0 compat)
         """
         # Policy and execution
         self._policy = StaticGridPolicy(
@@ -287,6 +290,9 @@ class PaperEngine:
                 initial_capital=initial_capital,
                 max_drawdown_pct=max_drawdown_pct,
             )
+
+        # Fill simulation mode (ADR-016)
+        self._fill_mode = fill_mode
 
         # Per-symbol execution state
         self._states: dict[str, ExecutionState] = {}
@@ -524,10 +530,13 @@ class PaperEngine:
         # Update state
         self._states[symbol] = result.state
 
-        # Step 5: Simulate fills for PLACE actions using crossing/touch model
-        # v1: orders fill only if mid_price crosses/touches the limit price
+        # Step 5: Simulate fills for PLACE actions
+        # v1.1 (crossing): orders fill only if mid_price crosses/touches the limit price
+        # v1.0 (instant): all PLACE orders fill immediately (for backward compat)
         action_dicts = [a.to_dict() for a in result.actions]
-        fills = simulate_fills(ts, symbol, action_dicts, mid_price=snapshot.mid_price)
+        fills = simulate_fills(
+            ts, symbol, action_dicts, mid_price=snapshot.mid_price, fill_mode=self._fill_mode
+        )
 
         # Step 6: Apply fills to ledger and get updated PnL
         self._ledger.apply_fills(fills)
