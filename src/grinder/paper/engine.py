@@ -34,6 +34,7 @@ from grinder.policies.grid.adaptive import AdaptiveGridConfig, AdaptiveGridPolic
 from grinder.policies.grid.static import StaticGridPolicy
 from grinder.prefilter import TopKSelector, hard_filter
 from grinder.risk import DrawdownGuard, KillSwitch, KillSwitchReason
+from grinder.selection import SelectionCandidate, SelectionResult, TopKConfigV1, select_topk_v1
 
 # Output schema version for contract stability
 SCHEMA_VERSION = "v1"
@@ -67,6 +68,10 @@ class PaperOutput:
     # v1 additions: FeatureEngine features (ADR-019)
     # Note: NOT included in digest computation for backward compatibility.
     features: dict[str, Any] | None = None
+    # v1 additions: Top-K v1 selection (ADR-023)
+    # Note: NOT included in digest computation for backward compatibility.
+    not_in_topk: bool = False
+    topk_v1_rank: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to JSON-serializable dict."""
@@ -85,6 +90,8 @@ class PaperOutput:
             "kill_switch_triggered": self.kill_switch_triggered,
             "cycle_intents": self.cycle_intents,
             "features": self.features,
+            "not_in_topk": self.not_in_topk,
+            "topk_v1_rank": self.topk_v1_rank,
         }
 
     def to_digest_dict(self) -> dict[str, Any]:
@@ -149,6 +156,12 @@ class PaperResult:
     # AdaptiveGridPolicy results (v1 addition - ADR-022)
     # Note: These fields are NOT included in digest computation.
     adaptive_policy_enabled: bool = False
+    # Top-K v1 selection results (ADR-023)
+    # Note: These fields are NOT included in digest computation.
+    topk_v1_enabled: bool = False
+    topk_v1_selected_symbols: list[str] = field(default_factory=list)
+    topk_v1_scores: list[dict[str, Any]] = field(default_factory=list)
+    topk_v1_gate_excluded: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to JSON-serializable dict."""
@@ -179,6 +192,10 @@ class PaperResult:
             "high_water_mark": self.high_water_mark,
             "feature_engine_enabled": self.feature_engine_enabled,
             "adaptive_policy_enabled": self.adaptive_policy_enabled,
+            "topk_v1_enabled": self.topk_v1_enabled,
+            "topk_v1_selected_symbols": self.topk_v1_selected_symbols,
+            "topk_v1_scores": self.topk_v1_scores,
+            "topk_v1_gate_excluded": self.topk_v1_gate_excluded,
         }
 
     def to_json(self) -> str:
@@ -236,6 +253,9 @@ class PaperEngine:
         # AdaptiveGridPolicy parameters (ADR-022)
         adaptive_policy_enabled: bool = False,
         adaptive_config: AdaptiveGridConfig | None = None,
+        # Top-K v1 selection parameters (ADR-023)
+        topk_v1_enabled: bool = False,
+        topk_v1_config: TopKConfigV1 | None = None,
     ) -> None:
         """Initialize paper trading engine.
 
@@ -275,6 +295,8 @@ class PaperEngine:
             feature_max_bars: Maximum bars to keep per symbol (default 1000)
             adaptive_policy_enabled: Enable AdaptiveGridPolicy for dynamic step/width/levels (default False)
             adaptive_config: Configuration for AdaptiveGridPolicy (uses defaults if None)
+            topk_v1_enabled: Enable Top-K v1 selection with feature-based scoring (default False)
+            topk_v1_config: Configuration for Top-K v1 selection (uses defaults if None)
         """
         # Policy and execution
         self._policy = StaticGridPolicy(
@@ -368,6 +390,12 @@ class PaperEngine:
                 ),
             )
 
+        # Top-K v1 selection (ADR-023)
+        self._topk_v1_enabled = topk_v1_enabled
+        self._topk_v1_config = topk_v1_config or TopKConfigV1()
+        # Cache for latest Top-K v1 selection result
+        self._topk_v1_result: SelectionResult | None = None
+
         # Per-symbol execution state
         self._states: dict[str, ExecutionState] = {}
 
@@ -387,6 +415,44 @@ class PaperEngine:
         if symbol not in self._states:
             self._states[symbol] = ExecutionState()
         return self._states[symbol]
+
+    def _build_topk_v1_candidates(self) -> list[SelectionCandidate]:
+        """Build Top-K v1 selection candidates from cached features and toxicity state.
+
+        Returns a list of SelectionCandidate for all symbols with cached features.
+        """
+        if self._feature_engine is None:
+            return []
+
+        candidates: list[SelectionCandidate] = []
+        latest_snapshots = self._feature_engine.get_all_latest_snapshots()
+
+        for symbol, feature_snap in latest_snapshots.items():
+            # Check toxicity gate for this symbol
+            # Use cached price for toxicity check (price already recorded in first pass)
+            toxicity_blocked = False
+            if feature_snap.mid_price > 0:
+                toxicity_result = self._toxicity_gate.check(
+                    feature_snap.ts,
+                    symbol,
+                    float(feature_snap.spread_bps),
+                    feature_snap.mid_price,
+                )
+                toxicity_blocked = not toxicity_result.allowed
+
+            candidates.append(
+                SelectionCandidate(
+                    symbol=symbol,
+                    range_score=feature_snap.range_score,
+                    spread_bps=feature_snap.spread_bps,
+                    thin_l1=feature_snap.thin_l1,
+                    net_return_bps=feature_snap.net_return_bps,
+                    warmup_bars=feature_snap.warmup_bars,
+                    toxicity_blocked=toxicity_blocked,
+                )
+            )
+
+        return candidates
 
     def _plan_to_dict(self, plan: GridPlan) -> dict[str, Any]:
         """Convert GridPlan to JSON-serializable dict."""
@@ -722,12 +788,19 @@ class PaperEngine:
     def run(self, fixture_path: Path) -> PaperResult:
         """Run paper trading loop on fixture.
 
-        Pipeline:
+        Pipeline (v0 - volatility-based):
         1. Load all events from fixture
         2. First pass: scan events to populate TopKSelector with prices
         3. Select Top-K symbols by volatility score
         4. Filter events to only include selected symbols
         5. Process filtered events through prefilter -> gating -> policy -> execution
+
+        Pipeline (v1 - feature-based, when topk_v1_enabled):
+        1. Load all events from fixture
+        2. First pass: feed all events to FeatureEngine for warmup + record prices for toxicity
+        3. Build candidates from cached features + toxicity state
+        4. Select Top-K symbols using feature-based scoring (range + liquidity - toxicity - trend)
+        5. Second pass: process all events, mark non-selected symbols as not_in_topk
 
         Args:
             fixture_path: Path to fixture directory
@@ -746,39 +819,135 @@ class PaperEngine:
             result.digest = self._compute_digest([])
             return result
 
-        # First pass: populate TopKSelector with prices for scoring
-        self._topk_selector.reset()
-        for event in events:
-            snapshot = self._parse_snapshot(event)
-            if snapshot:
-                self._topk_selector.record_price(snapshot.ts, snapshot.symbol, snapshot.mid_price)
-
-        # Select Top-K symbols
-        topk_result = self._topk_selector.select()
-        selected_symbols = set(topk_result.selected)
-
-        # Store Top-K results in output
-        result.topk_selected_symbols = topk_result.selected
-        result.topk_k = topk_result.k
-        result.topk_scores = [s.to_dict() for s in topk_result.scores]
-
-        # Filter events to only include selected symbols
-        filtered_events = [
-            e for e in events if e.get("symbol") in selected_symbols or e.get("type") != "SNAPSHOT"
-        ]
-
-        # Process filtered events in order
-        outputs: list[PaperOutput] = []
-        for event in filtered_events:
-            try:
+        # Top-K v1 selection (feature-based)
+        if self._topk_v1_enabled and self._feature_engine_enabled and self._feature_engine is not None:
+            # First pass: feed all events to FeatureEngine for warmup
+            for event in events:
                 snapshot = self._parse_snapshot(event)
                 if snapshot:
-                    output = self.process_snapshot(snapshot)
-                    outputs.append(output)
-                    if output.blocked_by_gating:
-                        result.events_gated += 1
-            except Exception as e:
-                result.errors.append(f"Error processing event at ts={event.get('ts')}: {e}")
+                    # Update FeatureEngine to build bar history
+                    self._feature_engine.process_snapshot(snapshot)
+                    # Record price for toxicity tracking
+                    self._toxicity_gate.record_price(snapshot.ts, snapshot.symbol, snapshot.mid_price)
+                    # Track last price for PnL calculation
+                    self._last_prices[snapshot.symbol] = snapshot.mid_price
+
+            # Build candidates from cached features + toxicity state
+            candidates = self._build_topk_v1_candidates()
+
+            # Select Top-K symbols
+            topk_v1_result = select_topk_v1(candidates, self._topk_v1_config)
+            self._topk_v1_result = topk_v1_result
+            selected_symbols_v1 = set(topk_v1_result.selected)
+
+            # Store Top-K v1 results in output
+            result.topk_v1_enabled = True
+            result.topk_v1_selected_symbols = topk_v1_result.selected
+            result.topk_v1_scores = [s.to_dict() for s in topk_v1_result.scores]
+            result.topk_v1_gate_excluded = topk_v1_result.gate_excluded
+
+            # Also populate v0 fields for backward compatibility (empty when v1 is used)
+            result.topk_selected_symbols = topk_v1_result.selected  # Same list
+            result.topk_k = topk_v1_result.k
+
+            # Reset engine state for second pass (except FeatureEngine - bars persist)
+            self._toxicity_gate.reset()
+            self._rate_limiter.reset()
+            self._risk_gate.reset()
+            self._ledger.reset()
+            self._states.clear()
+            self._last_prices.clear()
+            self._orders_placed = 0
+            self._orders_blocked = 0
+            self._total_fills = 0
+
+            # Build rank lookup for selected symbols
+            rank_lookup: dict[str, int] = {}
+            for score in topk_v1_result.scores:
+                if score.rank is not None:
+                    rank_lookup[score.symbol] = score.rank
+
+            # Second pass: process all events with Top-K v1 filtering
+            outputs: list[PaperOutput] = []
+            for event in events:
+                try:
+                    snapshot = self._parse_snapshot(event)
+                    if snapshot:
+                        # Check if symbol is in Top-K v1 selected list
+                        if snapshot.symbol not in selected_symbols_v1:
+                            # Not in Top-K: return minimal output with not_in_topk=True
+                            pnl_snap = self._ledger.get_pnl_snapshot(
+                                snapshot.ts, snapshot.symbol, snapshot.mid_price
+                            )
+                            self._last_prices[snapshot.symbol] = snapshot.mid_price
+                            # Still compute features to keep state updated
+                            features_dict = None
+                            if self._feature_engine is not None:
+                                feature_snapshot = self._feature_engine.process_snapshot(snapshot)
+                                features_dict = feature_snapshot.to_dict()
+
+                            outputs.append(
+                                PaperOutput(
+                                    ts=snapshot.ts,
+                                    symbol=snapshot.symbol,
+                                    prefilter_result={"allowed": False, "reason": "not_in_topk"},
+                                    gating_result=GatingResult.allow().to_dict(),
+                                    plan=None,
+                                    actions=[],
+                                    events=[],
+                                    blocked_by_gating=False,
+                                    fills=[],
+                                    pnl_snapshot=pnl_snap.to_dict(),
+                                    features=features_dict,
+                                    not_in_topk=True,
+                                    topk_v1_rank=None,
+                                )
+                            )
+                        else:
+                            # In Top-K: process normally
+                            output = self.process_snapshot(snapshot)
+                            output.topk_v1_rank = rank_lookup.get(snapshot.symbol)
+                            outputs.append(output)
+                            if output.blocked_by_gating:
+                                result.events_gated += 1
+                except Exception as e:
+                    result.errors.append(f"Error processing event at ts={event.get('ts')}: {e}")
+
+        else:
+            # Top-K v0 selection (volatility-based)
+            # First pass: populate TopKSelector with prices for scoring
+            self._topk_selector.reset()
+            for event in events:
+                snapshot = self._parse_snapshot(event)
+                if snapshot:
+                    self._topk_selector.record_price(snapshot.ts, snapshot.symbol, snapshot.mid_price)
+
+            # Select Top-K symbols
+            topk_result = self._topk_selector.select()
+            selected_symbols = set(topk_result.selected)
+
+            # Store Top-K results in output
+            result.topk_selected_symbols = topk_result.selected
+            result.topk_k = topk_result.k
+            result.topk_scores = [s.to_dict() for s in topk_result.scores]
+
+            # Filter events to only include selected symbols
+            filtered_events = [
+                e for e in events if e.get("symbol") in selected_symbols or e.get("type") != "SNAPSHOT"
+            ]
+
+            # Process filtered events in order
+            outputs: list[PaperOutput] = []
+            for event in filtered_events:
+                try:
+                    snapshot = self._parse_snapshot(event)
+                    if snapshot:
+                        output = self.process_snapshot(snapshot)
+                        outputs.append(output)
+                        if output.blocked_by_gating:
+                            result.events_gated += 1
+                except Exception as e:
+                    result.errors.append(f"Error processing event at ts={event.get('ts')}: {e}")
 
         result.outputs = outputs
         result.orders_placed = self._orders_placed
@@ -809,6 +978,9 @@ class PaperEngine:
         result.feature_engine_enabled = self._feature_engine_enabled
         # AdaptiveGridPolicy results (ADR-022)
         result.adaptive_policy_enabled = self._adaptive_policy_enabled
+        # Top-K v1 results (ADR-023) - already populated above if enabled
+        if not result.topk_v1_enabled:
+            result.topk_v1_enabled = self._topk_v1_enabled
         if self._controller_enabled:
             # Compute final controller decisions for each symbol
             controller_decisions = []
@@ -901,6 +1073,7 @@ class PaperEngine:
             self._drawdown_guard.reset()
         if self._feature_engine is not None:
             self._feature_engine.reset()
+        self._topk_v1_result = None
         self._states.clear()
         self._last_prices.clear()
         self._orders_placed = 0

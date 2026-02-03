@@ -629,3 +629,53 @@
   - Float arithmetic — rejected; breaks determinism
   - Single unified policy — rejected; StaticGridPolicy useful for comparison/debugging
   - Auto-sizing in v1 — deferred to P1-05b to keep PR scope manageable
+
+## ADR-023 — Top-K v1: Feature-Based Symbol Selection (ASM-P1-06)
+- **Date:** 2026-02-03
+- **Status:** accepted
+- **Context:** ASM v1 requires selecting the best K symbols for trading based on market characteristics. The existing Top-K v0 uses simple price volatility which doesn't consider range quality, liquidity, toxicity, or trend strength. We need a feature-based selection that integrates with FeatureEngine outputs.
+- **Decision:**
+  - **Module:** `src/grinder/selection/topk_v1.py` with:
+    - `TopKConfigV1`: configuration (k, spread_max_bps, thin_l1_min, warmup_min, weights)
+    - `SelectionCandidate`: input data structure (symbol, range_score, spread_bps, thin_l1, net_return_bps, warmup_bars, toxicity_blocked)
+    - `SymbolScoreV1`: output with score components and gate status
+    - `SelectionResult`: result with selected symbols and all scores
+    - `select_topk_v1()`: main selection function
+  - **Scoring formula (integer bps for determinism):**
+    - `score = range_component + liquidity_component - toxicity_penalty - trend_penalty`
+    - `range_component = w_range * range_score / 100`
+    - `liquidity_component = log10(thin_l1 + 1) * liq_scale`
+    - `toxicity_penalty = w_toxicity * spread_bps`
+    - `trend_penalty = w_trend * net_return_bps / 100`
+  - **Hard gates (exclude before scoring):**
+    - `TOXICITY_BLOCKED`: toxicity_blocked=True from ToxicityGate
+    - `SPREAD_TOO_WIDE`: spread_bps > spread_max_bps
+    - `THIN_BOOK`: thin_l1 < thin_l1_min
+    - `WARMUP_INSUFFICIENT`: warmup_bars < warmup_min
+  - **Tie-breaking:** deterministic sort by `(-score, symbol)` for stable ordering
+  - **PaperEngine integration:**
+    - `topk_v1_enabled` flag (default False for backward compat)
+    - `topk_v1_config` parameter for configuration
+    - First pass: feed all events to FeatureEngine for warmup
+    - Build candidates from cached features + toxicity state
+    - Run selection, filter symbols
+    - Symbols not in Top-K get `not_in_topk=True` in output
+  - **FeatureEngine extension:**
+    - Added `_latest_snapshots` cache for per-symbol feature tracking
+    - `get_latest_snapshot(symbol)` and `get_all_latest_snapshots()` methods
+  - **Determinism guarantees:**
+    - All weights and thresholds are integers
+    - Integer arithmetic throughout scoring
+    - Deterministic tie-breaking by symbol name
+    - Same inputs → same selection
+- **Consequences:**
+  - New fixture `sample_day_topk_v1` with 6 symbols demonstrating selection
+  - When enabled, replaces v0 volatility-based selection
+  - Gate-excluded symbols marked in scores (gates_failed list)
+  - PaperResult includes `topk_v1_selected_symbols`, `topk_v1_scores`, `topk_v1_gate_excluded`
+  - PaperOutput includes `not_in_topk`, `topk_v1_rank` fields
+  - 20 unit tests in `test_topk_v1.py`
+- **Alternatives:**
+  - Float weights — rejected; breaks determinism
+  - Single-pass selection — rejected; need FeatureEngine warmup first
+  - Real-time re-selection — deferred; current approach selects once after warmup
