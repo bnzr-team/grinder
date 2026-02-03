@@ -14,6 +14,7 @@ import subprocess
 import sys
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 from grinder.contracts import Snapshot
@@ -557,10 +558,10 @@ class TestPolicyFeaturesPlumbing:
         )
 
         # Capture the features dict passed to policy.evaluate()
-        captured_features: list[dict] = []
+        captured_features: list[dict[str, Any]] = []
         original_evaluate = engine._policy.evaluate
 
-        def capture_evaluate(features: dict) -> any:
+        def capture_evaluate(features: dict[str, Any]) -> Any:
             captured_features.append(features.copy())
             return original_evaluate(features)
 
@@ -598,10 +599,10 @@ class TestPolicyFeaturesPlumbing:
             last_qty=Decimal("0.1"),
         )
 
-        captured_features: list[dict] = []
+        captured_features: list[dict[str, Any]] = []
         original_evaluate = engine._policy.evaluate
 
-        def capture_evaluate(features: dict) -> any:
+        def capture_evaluate(features: dict[str, Any]) -> Any:
             captured_features.append(features.copy())
             return original_evaluate(features)
 
@@ -680,10 +681,10 @@ class TestPolicyFeaturesPlumbing:
         )
 
         # Capture policy features to verify mid_price
-        captured_features: list[dict] = []
+        captured_features: list[dict[str, Any]] = []
         original_evaluate = engine._policy.evaluate
 
-        def capture_evaluate(features: dict) -> any:
+        def capture_evaluate(features: dict[str, Any]) -> Any:
             captured_features.append(features.copy())
             return original_evaluate(features)
 
