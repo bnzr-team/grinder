@@ -947,7 +947,7 @@ class PaperEngine:
             ]
 
             # Process filtered events in order
-            outputs: list[PaperOutput] = []
+            outputs = []
             for event in filtered_events:
                 try:
                     snapshot = self._parse_snapshot(event)
