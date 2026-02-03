@@ -96,6 +96,17 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - Opt-in: `cycle_enabled=False` default (backward compat)
     - Intents NOT included in digest (backward compat)
     - See ADR-017
+  - **Feature Engine v1** (`src/grinder/features/`):
+    - Deterministic mid-bar OHLC construction from snapshot stream
+    - **Bar building:** floor-aligned boundaries, no synthesized bars for gaps
+    - **ATR/NATR (§17.5.2):** True Range + period-based averaging (default 14)
+    - **L1 features (§17.5.3):** imbalance_l1_bps, thin_l1, spread_bps
+    - **Range/trend (§17.5.5):** sum_abs_returns_bps, net_return_bps, range_score
+    - **Warmup handling:** features return 0/None until period+1 bars complete
+    - **Determinism:** all calcs use Decimal, outputs as integer bps or Decimal
+    - **Unit tests:** 83 tests (test_bar_builder.py, test_indicators.py, test_feature_engine.py)
+    - Not yet integrated into PaperEngine (integration in ASM-P1-02)
+    - See ADR-019
   - **Position tracking:** Per-symbol qty + avg_entry_price via `Ledger` class
   - **PnL tracking:** Realized (on close), Unrealized (mark-to-market), Total
   - **Output schema v1:** `PaperResult` includes `schema_version`, `total_fills`, `final_positions`, `total_realized_pnl`, `total_unrealized_pnl`, `topk_selected_symbols`, `topk_k`, `topk_scores`
@@ -364,4 +375,7 @@ Comprehensive adaptive grid system design:
 - **Top-K 3–5:** symbol selection for tradable chop + safe liquidity
 - **Deterministic:** fixture-based testing with stable digests
 - **Cross-reference:** See `docs/16_ADAPTIVE_GRID_CONTROLLER_SPEC.md` for meta-controller contracts (regime, step, reset)
-- **Status:** Proposed (docs-only), no code implemented yet
+- **Partial implementation status:**
+  - ✅ **Feature Engine v1 (ASM-P1-01):** Mid-bar OHLC + ATR/NATR + L1 microstructure (see ADR-019)
+  - ⏳ **PaperEngine integration (ASM-P1-02):** Pending
+  - ⏳ **GridPolicy integration (ASM-P1-03):** Pending
