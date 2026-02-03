@@ -439,3 +439,26 @@
   - Immediate order placement from fills — rejected; need intent layer for gating/validation
   - Fixed TP distance — rejected; step_pct allows adaptive sizing per controller
   - Martingale sizing — rejected; bounded replenishment is safer per §17.11.3
+
+## ADR-018 — Sizing units SSOT: size_schedule is base quantity, NOT notional
+- **Date:** 2026-02-03
+- **Status:** accepted
+- **Context:** `GridPlan.size_schedule` had ambiguous unit semantics. The `StaticGridPolicy` docstring incorrectly stated "quote currency (USD)" while execution engine treated it as base asset quantity. This ambiguity could lead to order sizing bugs (e.g., placing $0.01 orders instead of 0.01 BTC orders).
+- **Decision:**
+  - **SSOT:** `GridPlan.size_schedule` is ALWAYS interpreted as **base asset quantity** (e.g., BTC, ETH), NOT notional (USD)
+  - **Documentation updates:**
+    - `GridPlan` docstring: explicit Units section referencing this ADR
+    - `StaticGridPolicy.size_per_level` docstring: fixed to "base asset quantity"
+    - `ExecutionEngine._compute_grid_levels`: already correct ("quantity per level")
+  - **Conversion utility:** `notional_to_qty(notional, price, precision)` in `src/grinder/policies/base.py`
+    - Formula: `qty = notional / price`, rounded down to precision
+    - Use this when configuring size_schedule from notional budget
+  - **Reference:** docs/17_ADAPTIVE_SMART_GRID_V1.md §17.12.4 (canonical)
+- **Consequences:**
+  - All code interpreting `size_schedule` MUST treat values as base asset quantity
+  - To configure from notional (USD) budget, explicitly convert: `notional_to_qty(500, 50000) = 0.01`
+  - No backward compat impact: execution engine already uses qty interpretation
+- **Alternatives:**
+  - Allow both units with a flag — rejected; too error-prone, single SSOT is safer
+  - Default to notional — rejected; qty is more intuitive for trading (you buy/sell qty, not USD)
+  - No conversion utility — rejected; explicit helper prevents division-order bugs
