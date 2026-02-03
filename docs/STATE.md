@@ -105,7 +105,12 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - **Warmup handling:** features return 0/None until period+1 bars complete
     - **Determinism:** all calcs use Decimal, outputs as integer bps or Decimal
     - **Unit tests:** 83 tests (test_bar_builder.py, test_indicators.py, test_feature_engine.py)
-    - Not yet integrated into PaperEngine (integration in ASM-P1-02)
+    - **PaperEngine integration (ASM-P1-02):**
+      - `feature_engine_enabled=False` default (backward compat)
+      - `PaperOutput.features: dict | None` — computed features per snapshot
+      - Features NOT in digest (backward compat, Variant A)
+      - Canonical digests unchanged when features enabled
+      - 9 integration tests in `test_paper.py::TestFeatureEngineIntegration`
     - See ADR-019
   - **Position tracking:** Per-symbol qty + avg_entry_price via `Ledger` class
   - **PnL tracking:** Realized (on close), Unrealized (mark-to-market), Total
@@ -377,5 +382,5 @@ Comprehensive adaptive grid system design:
 - **Cross-reference:** See `docs/16_ADAPTIVE_GRID_CONTROLLER_SPEC.md` for meta-controller contracts (regime, step, reset)
 - **Partial implementation status:**
   - ✅ **Feature Engine v1 (ASM-P1-01):** Mid-bar OHLC + ATR/NATR + L1 microstructure (see ADR-019)
-  - ⏳ **PaperEngine integration (ASM-P1-02):** Pending
+  - ✅ **PaperEngine integration (ASM-P1-02):** Integrated, features NOT in digest (backward compat)
   - ⏳ **GridPolicy integration (ASM-P1-03):** Pending

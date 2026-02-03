@@ -24,6 +24,7 @@ from typing import Any
 from grinder.contracts import Snapshot
 from grinder.controller import AdaptiveController, ControllerMode
 from grinder.execution import ExecutionEngine, ExecutionState, NoOpExchangePort
+from grinder.features import FeatureEngine, FeatureEngineConfig
 from grinder.gating import GateReason, GatingResult, RateLimiter, RiskGate, ToxicityGate
 from grinder.paper.cycle_engine import CycleEngine
 from grinder.paper.fills import simulate_fills
@@ -62,6 +63,9 @@ class PaperOutput:
     # v1 additions: CycleEngine intents (ADR-017)
     # Note: NOT included in digest computation for backward compatibility.
     cycle_intents: list[dict[str, Any]] = field(default_factory=list)
+    # v1 additions: FeatureEngine features (ADR-019)
+    # Note: NOT included in digest computation for backward compatibility.
+    features: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to JSON-serializable dict."""
@@ -79,6 +83,7 @@ class PaperOutput:
             "drawdown_check": self.drawdown_check,
             "kill_switch_triggered": self.kill_switch_triggered,
             "cycle_intents": self.cycle_intents,
+            "features": self.features,
         }
 
     def to_digest_dict(self) -> dict[str, Any]:
@@ -137,6 +142,9 @@ class PaperResult:
     final_equity: str = "0"
     final_drawdown_pct: float = 0.0
     high_water_mark: str = "0"
+    # FeatureEngine results (v1 addition - ADR-019)
+    # Note: These fields are NOT included in digest computation.
+    feature_engine_enabled: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to JSON-serializable dict."""
@@ -165,6 +173,7 @@ class PaperResult:
             "final_equity": self.final_equity,
             "final_drawdown_pct": self.final_drawdown_pct,
             "high_water_mark": self.high_water_mark,
+            "feature_engine_enabled": self.feature_engine_enabled,
         }
 
     def to_json(self) -> str:
@@ -213,6 +222,12 @@ class PaperEngine:
         # CycleEngine parameters (ADR-017)
         cycle_enabled: bool = False,
         cycle_step_pct: Decimal = Decimal("0.001"),  # 10 bps default
+        # FeatureEngine parameters (ADR-019)
+        feature_engine_enabled: bool = False,
+        feature_bar_interval_ms: int = 60_000,
+        feature_atr_period: int = 14,
+        feature_range_horizon: int = 14,
+        feature_max_bars: int = 1000,
     ) -> None:
         """Initialize paper trading engine.
 
@@ -245,6 +260,11 @@ class PaperEngine:
             fill_mode: Fill simulation mode - "crossing" (default, v1.1) or "instant" (v1.0 compat)
             cycle_enabled: Enable CycleEngine for TP + replenishment (default False for backward compat)
             cycle_step_pct: Step percentage for TP/replenish placement (default 0.001 = 10 bps)
+            feature_engine_enabled: Enable FeatureEngine for L1/volatility features (default False)
+            feature_bar_interval_ms: Bar interval for feature computation (default 60_000 = 1m)
+            feature_atr_period: Period for ATR/NATR calculation (default 14)
+            feature_range_horizon: Horizon for range/trend calculation (default 14)
+            feature_max_bars: Maximum bars to keep per symbol (default 1000)
         """
         # Policy and execution
         self._policy = StaticGridPolicy(
@@ -312,6 +332,19 @@ class PaperEngine:
                 step_pct=cycle_step_pct,
                 price_precision=price_precision,
                 quantity_precision=quantity_precision,
+            )
+
+        # FeatureEngine for L1/volatility features (ADR-019)
+        self._feature_engine_enabled = feature_engine_enabled
+        self._feature_engine: FeatureEngine | None = None
+        if feature_engine_enabled:
+            self._feature_engine = FeatureEngine(
+                config=FeatureEngineConfig(
+                    bar_interval_ms=feature_bar_interval_ms,
+                    atr_period=feature_atr_period,
+                    range_horizon=feature_range_horizon,
+                    max_bars=feature_max_bars,
+                )
             )
 
         # Per-symbol execution state
@@ -420,6 +453,13 @@ class PaperEngine:
         # Track last price for unrealized PnL
         self._last_prices[symbol] = snapshot.mid_price
 
+        # Step 0.5: Compute features (ADR-019)
+        # Always compute features to build bar history, even if blocked later
+        features_dict: dict[str, Any] | None = None
+        if self._feature_engine_enabled and self._feature_engine is not None:
+            feature_snapshot = self._feature_engine.process_snapshot(snapshot)
+            features_dict = feature_snapshot.to_dict()
+
         # Step 1: Prefilter
         features = {
             "spread_bps": snapshot.spread_bps,
@@ -449,6 +489,7 @@ class PaperEngine:
                 fills=[],
                 pnl_snapshot=pnl_snap.to_dict(),
                 kill_switch_triggered=True,
+                features=features_dict,
             )
 
         # If blocked by prefilter, return early
@@ -464,6 +505,7 @@ class PaperEngine:
                 blocked_by_gating=False,
                 fills=[],
                 pnl_snapshot=pnl_snap.to_dict(),
+                features=features_dict,
             )
 
         # Step 2: Controller decision (if enabled) and policy evaluation
@@ -490,6 +532,7 @@ class PaperEngine:
                     blocked_by_gating=True,  # Treat controller PAUSE like gating block
                     fills=[],
                     pnl_snapshot=pnl_snap.to_dict(),
+                    features=features_dict,
                 )
             # Apply spacing multiplier
             effective_spacing_bps = self._base_spacing_bps * controller_decision.spacing_multiplier
@@ -531,6 +574,7 @@ class PaperEngine:
                 blocked_by_gating=True,
                 fills=[],
                 pnl_snapshot=pnl_snap.to_dict(),
+                features=features_dict,
             )
 
         # Step 4: Execution
@@ -628,6 +672,7 @@ class PaperEngine:
             drawdown_check=drawdown_check_dict,
             kill_switch_triggered=kill_switch_triggered_now,
             cycle_intents=cycle_intents_list,
+            features=features_dict,
         )
 
     def run(self, fixture_path: Path) -> PaperResult:
@@ -716,6 +761,8 @@ class PaperEngine:
 
         # Controller results (ADR-011)
         result.controller_enabled = self._controller_enabled
+        # FeatureEngine results (ADR-019)
+        result.feature_engine_enabled = self._feature_engine_enabled
         if self._controller_enabled:
             # Compute final controller decisions for each symbol
             controller_decisions = []
@@ -806,6 +853,8 @@ class PaperEngine:
         self._kill_switch.reset()
         if self._drawdown_guard is not None:
             self._drawdown_guard.reset()
+        if self._feature_engine is not None:
+            self._feature_engine.reset()
         self._states.clear()
         self._last_prices.clear()
         self._orders_placed = 0

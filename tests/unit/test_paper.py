@@ -367,3 +367,168 @@ class TestSampleDayFixture:
         assert result.events_gated == 5, "Expected all events blocked by gating"
         assert result.orders_placed == 0, "Expected no orders placed"
         assert result.orders_blocked == 5, "Expected all orders blocked"
+
+
+class TestFeatureEngineIntegration:
+    """Tests for FeatureEngine integration (ADR-019)."""
+
+    def test_features_disabled_by_default(self) -> None:
+        """Test that features are None when feature_engine disabled (default)."""
+        engine = PaperEngine()
+        snapshot = Snapshot(
+            ts=1000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50010"),
+            bid_qty=Decimal("1"),
+            ask_qty=Decimal("1"),
+            last_price=Decimal("50005"),
+            last_qty=Decimal("0.1"),
+        )
+
+        output = engine.process_snapshot(snapshot)
+
+        assert output.features is None
+        assert engine._feature_engine_enabled is False
+
+    def test_features_enabled_returns_features(self) -> None:
+        """Test that features are computed when feature_engine enabled."""
+        engine = PaperEngine(feature_engine_enabled=True)
+        snapshot = Snapshot(
+            ts=1000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50010"),
+            bid_qty=Decimal("2"),
+            ask_qty=Decimal("1"),
+            last_price=Decimal("50005"),
+            last_qty=Decimal("0.1"),
+        )
+
+        output = engine.process_snapshot(snapshot)
+
+        assert output.features is not None
+        assert output.features["ts"] == 1000
+        assert output.features["symbol"] == "BTCUSDT"
+        assert output.features["mid_price"] == "50005"
+        assert output.features["spread_bps"] == 1  # ~2 bps truncated to int
+        assert output.features["imbalance_l1_bps"] == 3333  # (2-1)/(2+1) ≈ 0.333
+        assert "natr_bps" in output.features
+        assert "warmup_bars" in output.features
+
+    def test_features_not_in_digest(self) -> None:
+        """Test that features are NOT included in digest (backward compat)."""
+        engine_no_features = PaperEngine()
+        engine_with_features = PaperEngine(feature_engine_enabled=True)
+
+        result1 = engine_no_features.run(FIXTURE_DIR)
+        result2 = engine_with_features.run(FIXTURE_DIR)
+
+        # Digests must match even though features are computed
+        assert result1.digest == result2.digest, (
+            f"Digest mismatch: no_features={result1.digest}, with_features={result2.digest}"
+        )
+
+    def test_features_in_to_dict_not_in_to_digest_dict(self) -> None:
+        """Test features field in to_dict but not in to_digest_dict."""
+        output = PaperOutput(
+            ts=1000,
+            symbol="BTCUSDT",
+            prefilter_result={"allowed": True, "reason": "PASS"},
+            gating_result={"allowed": True, "reason": "PASS"},
+            plan=None,
+            actions=[],
+            events=[],
+            blocked_by_gating=False,
+            features={"mid_price": "50000", "natr_bps": 100},
+        )
+
+        full_dict = output.to_dict()
+        digest_dict = output.to_digest_dict()
+
+        assert "features" in full_dict
+        assert full_dict["features"] == {"mid_price": "50000", "natr_bps": 100}
+        assert "features" not in digest_dict
+
+    def test_digest_unchanged_sample_day(self) -> None:
+        """Test canonical digest unchanged when features enabled."""
+        engine = PaperEngine(feature_engine_enabled=True)
+        result = engine.run(FIXTURE_DIR)
+
+        assert result.digest == EXPECTED_PAPER_DIGEST_SAMPLE_DAY, (
+            f"Digest changed with features enabled: got {result.digest}, "
+            f"expected {EXPECTED_PAPER_DIGEST_SAMPLE_DAY}"
+        )
+
+    def test_digest_unchanged_allowed(self) -> None:
+        """Test canonical digest unchanged when features enabled (allowed fixture)."""
+        engine = PaperEngine(feature_engine_enabled=True)
+        result = engine.run(FIXTURE_ALLOWED_DIR)
+
+        assert result.digest == EXPECTED_PAPER_DIGEST_ALLOWED, (
+            f"Digest changed with features enabled: got {result.digest}, "
+            f"expected {EXPECTED_PAPER_DIGEST_ALLOWED}"
+        )
+
+    def test_feature_engine_enabled_in_result(self) -> None:
+        """Test that feature_engine_enabled is tracked in PaperResult."""
+        engine1 = PaperEngine(feature_engine_enabled=False)
+        engine2 = PaperEngine(feature_engine_enabled=True)
+
+        result1 = engine1.run(FIXTURE_DIR)
+        result2 = engine2.run(FIXTURE_DIR)
+
+        assert result1.feature_engine_enabled is False
+        assert result2.feature_engine_enabled is True
+
+    def test_features_computed_even_when_blocked(self) -> None:
+        """Test that features are computed even when gating blocks the event."""
+        engine = PaperEngine(
+            feature_engine_enabled=True,
+            max_notional_per_symbol=Decimal("1"),  # Will block
+        )
+        snapshot = Snapshot(
+            ts=1000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50010"),
+            bid_qty=Decimal("1"),
+            ask_qty=Decimal("1"),
+            last_price=Decimal("50005"),
+            last_qty=Decimal("0.1"),
+        )
+
+        output = engine.process_snapshot(snapshot)
+
+        # Event is blocked, but features should still be computed
+        assert output.blocked_by_gating is True
+        assert output.features is not None
+        assert output.features["symbol"] == "BTCUSDT"
+
+    def test_feature_engine_reset(self) -> None:
+        """Test that reset clears feature engine state."""
+        engine = PaperEngine(feature_engine_enabled=True)
+
+        # Process some snapshots
+        for i in range(5):
+            snapshot = Snapshot(
+                ts=i * 1000,
+                symbol="BTCUSDT",
+                bid_price=Decimal("50000"),
+                ask_price=Decimal("50010"),
+                bid_qty=Decimal("1"),
+                ask_qty=Decimal("1"),
+                last_price=Decimal("50005"),
+                last_qty=Decimal("0.1"),
+            )
+            engine.process_snapshot(snapshot)
+
+        # Verify feature engine has state
+        assert engine._feature_engine is not None
+        assert len(engine._feature_engine.get_all_symbols()) > 0
+
+        # Reset
+        engine.reset()
+
+        # Verify feature engine state is cleared
+        assert engine._feature_engine.get_all_symbols() == []
