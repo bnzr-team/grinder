@@ -11,15 +11,38 @@ Hard gates (exclusion before scoring):
 
 Tie-breaker: (-score, symbol) for deterministic ordering.
 
+Determinism guarantee:
+    - All arithmetic is integer-only (no float operations)
+    - Liquidity score uses ilog10 (digit counting) instead of math.log10
+    - See ADR-023 for design rationale
+
 See: docs/17_ADAPTIVE_SMART_GRID_V1.md, ADR-023
 """
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
+
+
+def _ilog10(x: int) -> int:
+    """Deterministic integer log10 (floor).
+
+    Returns floor(log10(x)) for x >= 1, using digit counting.
+    This is fully deterministic across all platforms.
+
+    Args:
+        x: Positive integer
+
+    Returns:
+        floor(log10(x)) for x >= 1, or 0 for x <= 0
+    """
+    if x <= 0:
+        return 0
+    # Number of digits = floor(log10(x)) + 1
+    # So floor(log10(x)) = number of digits - 1
+    return len(str(x)) - 1
 
 
 @dataclass(frozen=True)
@@ -45,7 +68,8 @@ class TopKConfigV1:
         w_trend: Weight for trend_penalty (default 100 = 1.0)
 
         # Liquidity score scaling
-        liq_scale: Multiplier for log10(thin_l1 + 1) (default 1000)
+        liq_scale: Multiplier for ilog10(thin_l1 + 1) (default 1000)
+            Note: Uses integer log10 (digit counting) for determinism
     """
 
     # K parameters
@@ -237,11 +261,12 @@ def _compute_score(
     # Higher range_score = more choppy = better for grid trading
     range_component = (candidate.range_score * config.w_range) // 100
 
-    # Liquidity component: log10(thin_l1 + 1) * liq_scale * w_liquidity / 100
-    # Using log10 to normalize across different order sizes
+    # Liquidity component: ilog10(thin_l1 + 1) * liq_scale * w_liquidity / 100
+    # Using integer log10 (digit counting) for determinism across platforms
+    # ilog10(x) = floor(log10(x)) = len(str(x)) - 1
     # Add 1 to avoid log(0)
-    thin_l1_float = float(candidate.thin_l1)
-    liq_raw = int(math.log10(thin_l1_float + 1) * config.liq_scale)
+    thin_l1_int = int(candidate.thin_l1) + 1
+    liq_raw = _ilog10(thin_l1_int) * config.liq_scale
     liquidity_component = (liq_raw * config.w_liquidity) // 100
 
     # Toxicity penalty: if blocked, apply w_toxicity * 100 (scaled penalty)

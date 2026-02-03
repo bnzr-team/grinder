@@ -641,12 +641,14 @@
     - `SymbolScoreV1`: output with score components and gate status
     - `SelectionResult`: result with selected symbols and all scores
     - `select_topk_v1()`: main selection function
-  - **Scoring formula (integer bps for determinism):**
+  - **Scoring formula (integer-only for determinism):**
     - `score = range_component + liquidity_component - toxicity_penalty - trend_penalty`
     - `range_component = w_range * range_score / 100`
-    - `liquidity_component = log10(thin_l1 + 1) * liq_scale`
-    - `toxicity_penalty = w_toxicity * spread_bps`
-    - `trend_penalty = w_trend * net_return_bps / 100`
+    - `liquidity_component = ilog10(thin_l1 + 1) * liq_scale * w_liquidity / 100`
+      - `ilog10(x) = len(str(x)) - 1` (floor of log10, deterministic via digit counting)
+      - No float operations — fully portable across platforms/compilers
+    - `toxicity_penalty = w_toxicity * 100` (fixed penalty when blocked)
+    - `trend_penalty = w_trend * abs(net_return_bps) / 100`
   - **Hard gates (exclude before scoring):**
     - `TOXICITY_BLOCKED`: toxicity_blocked=True from ToxicityGate
     - `SPREAD_TOO_WIDE`: spread_bps > spread_max_bps
@@ -665,9 +667,10 @@
     - `get_latest_snapshot(symbol)` and `get_all_latest_snapshots()` methods
   - **Determinism guarantees:**
     - All weights and thresholds are integers
-    - Integer arithmetic throughout scoring
-    - Deterministic tie-breaking by symbol name
-    - Same inputs → same selection
+    - Integer-only arithmetic throughout scoring (no float operations)
+    - Liquidity uses `ilog10` (digit counting) instead of `math.log10` to avoid float
+    - Deterministic tie-breaking by `(-score, symbol)` for stable ordering
+    - Same inputs → identical selection across all platforms
 - **Consequences:**
   - New fixture `sample_day_topk_v1` with 6 symbols demonstrating selection
   - When enabled, replaces v0 volatility-based selection
@@ -677,5 +680,6 @@
   - 20 unit tests in `test_topk_v1.py`
 - **Alternatives:**
   - Float weights — rejected; breaks determinism
+  - `math.log10` for liquidity — rejected; float not bit-identical across platforms/libc
   - Single-pass selection — rejected; need FeatureEngine warmup first
   - Real-time re-selection — deferred; current approach selects once after warmup

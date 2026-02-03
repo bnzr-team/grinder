@@ -17,6 +17,7 @@ from decimal import Decimal
 from grinder.selection.topk_v1 import (
     SelectionCandidate,
     TopKConfigV1,
+    _ilog10,
     select_topk_v1,
 )
 
@@ -573,3 +574,115 @@ class TestConfigVariants:
         assert "k" in d
         assert "total_candidates" in d
         assert "gate_excluded" in d
+
+
+class TestIlog10Determinism:
+    """Tests for _ilog10 function (integer log10 via digit counting)."""
+
+    def test_ilog10_basic_values(self) -> None:
+        """Basic ilog10 values match floor(log10(x))."""
+        # floor(log10(1)) = 0
+        assert _ilog10(1) == 0
+        # floor(log10(9)) = 0
+        assert _ilog10(9) == 0
+        # floor(log10(10)) = 1
+        assert _ilog10(10) == 1
+        # floor(log10(99)) = 1
+        assert _ilog10(99) == 1
+        # floor(log10(100)) = 2
+        assert _ilog10(100) == 2
+        # floor(log10(999)) = 2
+        assert _ilog10(999) == 2
+        # floor(log10(1000)) = 3
+        assert _ilog10(1000) == 3
+
+    def test_ilog10_edge_cases(self) -> None:
+        """Edge cases return 0."""
+        assert _ilog10(0) == 0
+        assert _ilog10(-1) == 0
+        assert _ilog10(-100) == 0
+
+    def test_ilog10_large_values(self) -> None:
+        """Large values work correctly."""
+        # floor(log10(1_000_000)) = 6
+        assert _ilog10(1_000_000) == 6
+        # floor(log10(10_000_000_000)) = 10
+        assert _ilog10(10_000_000_000) == 10
+
+    def test_ilog10_deterministic_across_calls(self) -> None:
+        """Multiple calls return identical results."""
+        for x in [1, 10, 100, 1000, 12345, 999999]:
+            result1 = _ilog10(x)
+            result2 = _ilog10(x)
+            assert result1 == result2, f"Non-deterministic for x={x}"
+
+    def test_liquidity_component_determinism(self) -> None:
+        """Liquidity component is deterministic for same thin_l1."""
+        # Test that same thin_l1 always produces same liquidity_component
+        candidates = [
+            SelectionCandidate(
+                symbol="TESTUSDT",
+                range_score=100,
+                spread_bps=10,
+                thin_l1=Decimal("100.5"),  # Will be truncated to int
+                net_return_bps=50,
+                warmup_bars=20,
+            ),
+        ]
+        config = TopKConfigV1(k=1)
+
+        # Run multiple times
+        results = [select_topk_v1(candidates, config) for _ in range(5)]
+
+        # All liquidity components must be identical
+        liq_components = [r.scores[0].liquidity_component for r in results]
+        assert len(set(liq_components)) == 1, f"Non-deterministic: {liq_components}"
+
+    def test_liquidity_boundary_values(self) -> None:
+        """Liquidity at decade boundaries behaves predictably."""
+        # thin_l1=9 → int=10 → ilog10(10)=1
+        # thin_l1=10 → int=11 → ilog10(11)=1
+        # thin_l1=99 → int=100 → ilog10(100)=2
+        candidates_9 = [
+            SelectionCandidate(
+                symbol="A",
+                range_score=0,
+                spread_bps=10,
+                thin_l1=Decimal("9"),
+                net_return_bps=0,
+                warmup_bars=20,
+            ),
+        ]
+        candidates_10 = [
+            SelectionCandidate(
+                symbol="A",
+                range_score=0,
+                spread_bps=10,
+                thin_l1=Decimal("10"),
+                net_return_bps=0,
+                warmup_bars=20,
+            ),
+        ]
+        candidates_99 = [
+            SelectionCandidate(
+                symbol="A",
+                range_score=0,
+                spread_bps=10,
+                thin_l1=Decimal("99"),
+                net_return_bps=0,
+                warmup_bars=20,
+            ),
+        ]
+
+        config = TopKConfigV1(k=1)
+        liq_9 = select_topk_v1(candidates_9, config).scores[0].liquidity_component
+        liq_10 = select_topk_v1(candidates_10, config).scores[0].liquidity_component
+        liq_99 = select_topk_v1(candidates_99, config).scores[0].liquidity_component
+
+        # All should be predictable integer values
+        # thin_l1=9: ilog10(10)=1 → liq_raw=1000 → component=1000*50/100=500
+        # thin_l1=10: ilog10(11)=1 → liq_raw=1000 → component=500
+        # thin_l1=99: ilog10(100)=2 → liq_raw=2000 → component=1000
+        assert liq_9 == 500, f"Expected 500 for thin_l1=9, got {liq_9}"
+        assert liq_10 == 500, f"Expected 500 for thin_l1=10, got {liq_10}"
+        assert liq_99 == 1000, f"Expected 1000 for thin_l1=99, got {liq_99}"
