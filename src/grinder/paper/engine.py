@@ -456,9 +456,11 @@ class PaperEngine:
         # Step 0.5: Compute features (ADR-019)
         # Always compute features to build bar history, even if blocked later
         features_dict: dict[str, Any] | None = None
+        policy_feature_inputs: dict[str, Any] | None = None
         if self._feature_engine_enabled and self._feature_engine is not None:
             feature_snapshot = self._feature_engine.process_snapshot(snapshot)
             features_dict = feature_snapshot.to_dict()
+            policy_feature_inputs = feature_snapshot.to_policy_features()
 
         # Step 1: Prefilter
         features = {
@@ -538,9 +540,14 @@ class PaperEngine:
             effective_spacing_bps = self._base_spacing_bps * controller_decision.spacing_multiplier
 
         # Policy evaluation with effective spacing
-        policy_features = {
+        # Base features always include mid_price
+        policy_features: dict[str, Any] = {
             "mid_price": snapshot.mid_price,
         }
+        # Merge FeatureEngine features when enabled (ADR-020)
+        # StaticGridPolicy ignores extra keys; future policies can use them
+        if policy_feature_inputs is not None:
+            policy_features.update(policy_feature_inputs)
         # Create a temporary policy with adjusted spacing if controller is active
         if self._controller_enabled and effective_spacing_bps != self._base_spacing_bps:
             temp_policy = StaticGridPolicy(
