@@ -118,6 +118,11 @@ This is the canonical checklist for deploying a release to production.
   - [ ] `docker-smoke` PASS (includes `/readyz` verification)
   - [ ] `ha-smoke` PASS (if HA deployment)
   - [ ] `determinism-suite` PASS
+
+  **Note:** Some workflows are path-filtered and may not auto-trigger on docs-only PRs.
+  To verify CI status: `gh pr checks <PR_NUMBER>`
+  To manually re-run a workflow: `gh run rerun <RUN_ID>` or use GitHub Actions UI.
+
 - [ ] **No pending migrations** (check DECISIONS.md for breaking changes)
 - [ ] **Config verified**: environment variables match deployment target
 - [ ] **Rollback plan ready** (see below)
