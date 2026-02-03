@@ -462,3 +462,56 @@
   - Allow both units with a flag — rejected; too error-prone, single SSOT is safer
   - Default to notional — rejected; qty is more intuitive for trading (you buy/sell qty, not USD)
   - No conversion utility — rejected; explicit helper prevents division-order bugs
+
+## ADR-019 — Feature Engine v1: deterministic mid-bar OHLC + L1 microstructure
+- **Date:** 2026-02-03
+- **Status:** accepted
+- **Context:** ASM v1 (Adaptive Smart Grid) requires computed market features for dynamic policy adjustment. Per §17.5, the policy needs:
+  - **Volatility:** NATR (Normalized ATR) for adaptive grid spacing
+  - **L1 microstructure:** imbalance, thin_l1 for order placement decisions
+  - **Range/trend:** range_score for regime detection (choppy vs trending)
+  Features must be deterministic for replay fidelity.
+- **Decision:**
+  - **Module structure:** `src/grinder/features/` with:
+    - `bar.py` — MidBar frozen dataclass + BarBuilder for OHLC construction
+    - `indicators.py` — compute_atr, compute_natr_bps, compute_imbalance_l1_bps, compute_thin_l1, compute_range_trend
+    - `types.py` — FeatureSnapshot frozen dataclass with all computed features
+    - `engine.py` — FeatureEngine orchestrator (maintains per-symbol state)
+  - **Bar building (§17.5.1):**
+    - Bar boundaries: floor division on bar_interval_ms (default 60s)
+    - No synthesized bars for gaps (correct behavior)
+    - MidBar: bar_ts, open, high, low, close, tick_count
+  - **ATR/NATR (§17.5.2):**
+    - True Range = max(high-low, |high-prev_close|, |low-prev_close|)
+    - ATR = SMA of TRs over period (default 14)
+    - NATR = ATR / close, in integer bps for determinism
+  - **L1 features (§17.5.3):**
+    - imbalance_l1_bps = (bid_qty - ask_qty) / (bid_qty + ask_qty + eps) * 10000
+    - thin_l1 = min(bid_qty, ask_qty)
+    - spread_bps = (ask - bid) / mid * 10000
+  - **Range/trend (§17.5.5):**
+    - sum_abs_returns_bps = sum of |return_i| over horizon
+    - net_return_bps = |p_end/p_start - 1|
+    - range_score = sum_abs_returns_bps / (net_return_bps + 1)
+    - High range_score = choppy; low = trending
+  - **Warmup handling:**
+    - ATR/NATR return 0/None until period+1 bars complete
+    - FeatureSnapshot.is_warmed_up = warmup_bars >= 15
+  - **Determinism guarantees:**
+    - All intermediate calcs use Decimal
+    - Final outputs: integer bps or Decimal (no floats)
+    - Same snapshot sequence → identical features
+  - **Backward compatibility:**
+    - FeatureEngine is standalone; not yet integrated into PaperEngine
+    - No changes to existing digests
+    - Integration deferred to ASM-P1-02
+- **Consequences:**
+  - FeatureSnapshot can be passed to policy via to_policy_features()
+  - Unit tests: test_bar_builder.py (25 tests), test_indicators.py (32 tests), test_feature_engine.py (26 tests)
+  - Memory bounded: max_bars=1000 per symbol
+  - Foundation for ASM v1 policy adaptation (§17.6, §17.7)
+- **Alternatives:**
+  - Use floating point — rejected; breaks determinism
+  - External TA library (TA-Lib) — rejected; Decimal precision lost, extra dependency
+  - Time-weighted VWAP bars — deferred to v2; mid-bars sufficient for v1
+  - Volume bars — deferred; tick-based sufficient for initial ASM
