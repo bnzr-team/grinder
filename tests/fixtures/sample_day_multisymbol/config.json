@@ -2,7 +2,7 @@
   "description": "Fixture with 5 symbols to test Top-K prefilter selection (K=3)",
   "symbols": ["AAAUSDT", "BBBUSDT", "CCCUSDT", "DDDUSDT", "EEEUSDT"],
   "duration_ms": 5000,
-  "expected_paper_digest": "7c4f4b07ec7b391f",
+  "expected_paper_digest": "22acba5cb8b81ab4",
   "notes": "Top-K selects AAAUSDT, BBBUSDT, CCCUSDT based on volatility scores. DDDUSDT and EEEUSDT are filtered out.",
   "schema_version": "v1",
   "expected_topk_selected": ["AAAUSDT", "BBBUSDT", "CCCUSDT"]

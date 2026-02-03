@@ -375,3 +375,33 @@
   - File-based lock — rejected; not atomic, no TTL support
   - Active-active with partitioning — rejected; too complex for v0
   - Full Raft/Paxos consensus — rejected; overkill for single-host
+
+## ADR-016 — Fill model v1: crossing/touch with determinism constraints
+- **Date:** 2026-02-03
+- **Status:** accepted
+- **Context:** Paper trading v0 used "instant fill" model where all PLACE orders fill immediately at their limit price regardless of market state. This is unrealistic: real limit orders fill only when price reaches the limit. Need a more realistic fill model while preserving determinism for replay.
+- **Decision:**
+  - **Crossing/touch fill model (v1):**
+    - LIMIT BUY fills if `mid_price <= limit_price` (price came down to our buy level)
+    - LIMIT SELL fills if `mid_price >= limit_price` (price came up to our sell level)
+    - Orders that don't cross/touch the mid price do NOT fill
+  - **No partial fills:** v1 fills are all-or-nothing (max 1 fill per order)
+  - **Determinism:** Fill simulation uses only `mid_price` and `limit_price` (both Decimal), no randomness
+  - **Backward compatibility:**
+    - `fill_mode="crossing"` (default) — new crossing/touch model
+    - `fill_mode="instant"` — legacy instant-fill for backward compat
+  - **Implementation:** `src/grinder/paper/fills.py::simulate_fills()` function
+  - **Tests:** `tests/unit/test_fills.py` with crossing/touch and instant mode coverage
+- **Consequences:**
+  - Fixture digests updated (orders that don't cross now produce 0 fills):
+    - `sample_day` = `66b29a4e92192f8f` (unchanged — blocked by gating, 0 fills)
+    - `sample_day_allowed` = `3ecf49cd03db1b07` (was `ec223bce78d7926f`)
+    - `sample_day_toxic` = `a31ead72fc1f197e` (was `66d57776b7be4797`)
+    - `sample_day_multisymbol` = `22acba5cb8b81ab4` (was `7c4f4b07ec7b391f`)
+    - `sample_day_controller` = `f3a0a321c39cc411` (unchanged — 0 fills with controller)
+  - Fills are now more realistic: buy orders only fill when price drops, sell orders only fill when price rises
+  - This is foundation for ASM (Adaptive Smart Grid v1) per §17.21 roadmap
+- **Alternatives:**
+  - Keep instant fill — rejected; too unrealistic for meaningful backtests
+  - Probabilistic fill based on queue position — rejected; breaks determinism
+  - Slippage model — deferred to v2; crossing/touch is sufficient for v1

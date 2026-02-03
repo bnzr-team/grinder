@@ -3,7 +3,7 @@
   "symbols": ["TESTUSDT", "TEST2USDT"],
   "duration_ms": 5000,
   "expected_digest": "03253d84cd2604e7",
-  "expected_paper_digest": "ec223bce78d7926f",
+  "expected_paper_digest": "3ecf49cd03db1b07",
   "notes": "Uses prices ~$1 so 100 units = ~$100 notional, within $5000 limit. Spread ~1 bps, within 15 bps limit.",
   "schema_version": "v1"
 }

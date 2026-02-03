@@ -524,9 +524,10 @@ class PaperEngine:
         # Update state
         self._states[symbol] = result.state
 
-        # Step 5: Simulate fills for PLACE actions
+        # Step 5: Simulate fills for PLACE actions using crossing/touch model
+        # v1: orders fill only if mid_price crosses/touches the limit price
         action_dicts = [a.to_dict() for a in result.actions]
-        fills = simulate_fills(ts, symbol, action_dicts)
+        fills = simulate_fills(ts, symbol, action_dicts, mid_price=snapshot.mid_price)
 
         # Step 6: Apply fills to ledger and get updated PnL
         self._ledger.apply_fills(fills)
