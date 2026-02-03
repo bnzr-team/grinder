@@ -25,10 +25,10 @@ from grinder.paper.fills import Fill, simulate_fills
 from grinder.paper.ledger import Ledger, PnLSnapshot, PositionState
 
 __all__ = [
+    "SCHEMA_VERSION",
     "CycleEngine",
     "CycleIntent",
     "CycleResult",
-    "SCHEMA_VERSION",
     "Fill",
     "Ledger",
     "PaperEngine",
