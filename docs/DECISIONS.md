@@ -545,3 +545,44 @@
   - Add explicit features parameter to policy — rejected; dict is flexible for future features
   - Pass FeatureSnapshot directly — rejected; dict is more generic and allows policy to not depend on features module
   - Change StaticGridPolicy to use features — deferred to AdaptiveGridPolicy (ASM-P1-05)
+
+## ADR-021 — Deterministic regime classifier v1 (ASM-P1-04)
+- **Date:** 2026-02-03
+- **Status:** accepted
+- **Context:** ASM v1 requires regime-driven policy behavior (§17.3). Before implementing adaptive policies, we need a deterministic regime classifier that classifies market conditions from FeatureSnapshot and gating state. The regime determines which policy behavior to activate (e.g., pause trading in EMERGENCY, widen grids in VOL_SHOCK, tighten in RANGE).
+- **Decision:**
+  - **Module:** `src/grinder/controller/regime.py` with:
+    - `Regime` enum: RANGE, TREND_UP, TREND_DOWN, VOL_SHOCK, THIN_BOOK, TOXIC, PAUSED, EMERGENCY
+    - `RegimeReason` enum: reason codes for each classification
+    - `RegimeConfig` frozen dataclass: threshold configuration (no magic numbers)
+    - `RegimeDecision` frozen dataclass: classified regime + reason + confidence + features_used
+    - `classify_regime()` function: precedence-based classification
+  - **Precedence order (first match wins):**
+    1. kill_switch_active → EMERGENCY
+    2. toxicity_result blocked → TOXIC
+    3. thin_l1 < threshold OR spread_bps > threshold → THIN_BOOK
+    4. natr_bps > vol_shock_threshold → VOL_SHOCK
+    5. |net_return_bps| > trend_threshold AND range_score <= choppy_max → TREND_UP/DOWN
+    6. else → RANGE
+  - **Thresholds (configurable via RegimeConfig):**
+    - `thin_l1_qty=0.1` — minimum L1 depth on thin side
+    - `spread_thin_bps=100` — spread threshold for THIN_BOOK
+    - `vol_shock_natr_bps=500` — NATR threshold for VOL_SHOCK
+    - `trend_net_return_bps=200` — net return threshold for trend
+    - `trend_range_score_max=3` — max range_score for trending (vs choppy)
+  - **Determinism guarantees:**
+    - All thresholds are integer bps (no floats)
+    - Same inputs → same regime classification
+    - Confidence is integer 0-100
+  - **Boundary conditions (strict > for thresholds):**
+    - At threshold → NOT triggered (need to exceed threshold)
+    - Exception: range_score uses <= for max (at or below is trending)
+- **Consequences:**
+  - Regime classifier is standalone; can be used independently of policy
+  - Future policies will use `classify_regime()` to determine behavior
+  - Unit tests: 28 tests in `test_regime.py` covering all precedence branches + boundary cases
+  - No changes to existing digests — classifier is not yet integrated into PaperEngine
+- **Alternatives:**
+  - ML-based regime detection — deferred to v2; rule-based is deterministic and interpretable
+  - Continuous regime probability — rejected; discrete regimes are simpler for policy logic
+  - Integrate directly into AdaptiveGridPolicy — rejected; separation of concerns, easier to test

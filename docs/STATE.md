@@ -384,6 +384,6 @@ Comprehensive adaptive grid system design:
   - ✅ **Feature Engine v1 (ASM-P1-01):** Mid-bar OHLC + ATR/NATR + L1 microstructure (see ADR-019)
   - ✅ **PaperEngine integration (ASM-P1-02):** Integrated, features NOT in digest (backward compat)
   - ✅ **Policy receives features (ASM-P1-03):** Plumbing complete — features passed to policy when enabled, StaticGridPolicy ignores (backward compat), digests unchanged (see ADR-020)
-  - ⏳ **Regime classifier (ASM-P1-04):** Pending
+  - ✅ **Regime classifier (ASM-P1-04):** Deterministic precedence-based classifier — EMERGENCY > TOXIC > THIN_BOOK > VOL_SHOCK > TREND > RANGE (see ADR-021)
   - ⏳ **AdaptiveGridPolicy v1 (ASM-P1-05):** Pending
   - ⏳ **Top-K v1 (ASM-P1-06):** Pending
