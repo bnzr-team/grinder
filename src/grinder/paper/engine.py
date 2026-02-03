@@ -820,7 +820,11 @@ class PaperEngine:
             return result
 
         # Top-K v1 selection (feature-based)
-        if self._topk_v1_enabled and self._feature_engine_enabled and self._feature_engine is not None:
+        if (
+            self._topk_v1_enabled
+            and self._feature_engine_enabled
+            and self._feature_engine is not None
+        ):
             # First pass: feed all events to FeatureEngine for warmup
             for event in events:
                 snapshot = self._parse_snapshot(event)
@@ -828,7 +832,9 @@ class PaperEngine:
                     # Update FeatureEngine to build bar history
                     self._feature_engine.process_snapshot(snapshot)
                     # Record price for toxicity tracking
-                    self._toxicity_gate.record_price(snapshot.ts, snapshot.symbol, snapshot.mid_price)
+                    self._toxicity_gate.record_price(
+                        snapshot.ts, snapshot.symbol, snapshot.mid_price
+                    )
                     # Track last price for PnL calculation
                     self._last_prices[snapshot.symbol] = snapshot.mid_price
 
@@ -920,7 +926,9 @@ class PaperEngine:
             for event in events:
                 snapshot = self._parse_snapshot(event)
                 if snapshot:
-                    self._topk_selector.record_price(snapshot.ts, snapshot.symbol, snapshot.mid_price)
+                    self._topk_selector.record_price(
+                        snapshot.ts, snapshot.symbol, snapshot.mid_price
+                    )
 
             # Select Top-K symbols
             topk_result = self._topk_selector.select()
@@ -933,7 +941,9 @@ class PaperEngine:
 
             # Filter events to only include selected symbols
             filtered_events = [
-                e for e in events if e.get("symbol") in selected_symbols or e.get("type") != "SNAPSHOT"
+                e
+                for e in events
+                if e.get("symbol") in selected_symbols or e.get("type") != "SNAPSHOT"
             ]
 
             # Process filtered events in order
