@@ -453,14 +453,14 @@ class TestScoreComponents:
         # range_component = 100 * 100 / 100 = 100
         assert score.range_component == 100
 
-        # liquidity_component = int(log10(101) * 1000) * 50 / 100
-        # log10(101) ≈ 2.004 → liq_raw = 2004 → 2004 * 50 / 100 = 1002
+        # Liquidity component from log10(thin_l1+1) * liq_scale * w_liquidity / 100
+        # Expected: log10(101) ≈ 2.004 → liq_raw ≈ 2004 → component ≈ 1002
         assert score.liquidity_component > 0  # Exact value depends on math.log10
 
         # trend_penalty = 200 * 100 / 100 = 200
         assert score.trend_penalty == 200
 
-        # toxicity_penalty = 0 (not blocked)
+        # No toxicity penalty since symbol not blocked
         assert score.toxicity_penalty == 0
 
     def test_selected_symbols_have_ranks(self) -> None:
