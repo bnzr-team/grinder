@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any
 
 from grinder.paper import SCHEMA_VERSION, PaperEngine
+from grinder.selection import TopKConfigV1
 
 # Registered fixtures for backtest protocol
 FIXTURES = [
@@ -29,6 +30,7 @@ FIXTURES = [
     Path("tests/fixtures/sample_day_toxic"),
     Path("tests/fixtures/sample_day_multisymbol"),
     Path("tests/fixtures/sample_day_controller"),
+    Path("tests/fixtures/sample_day_topk_v1"),
 ]
 
 # Report schema version
@@ -58,6 +60,10 @@ class FixtureResult:
     # Controller results (v1 addition - ADR-011)
     controller_enabled: bool = False
     controller_decisions: list[dict[str, Any]] = field(default_factory=list)
+    # Top-K v1 results (v1 addition - ADR-023)
+    topk_v1_enabled: bool = False
+    topk_v1_selected_symbols: list[str] = field(default_factory=list)
+    topk_v1_gate_excluded: int = 0
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to JSON-serializable dict."""
@@ -79,6 +85,9 @@ class FixtureResult:
             "topk_k": self.topk_k,
             "controller_enabled": self.controller_enabled,
             "controller_decisions": self.controller_decisions,
+            "topk_v1_enabled": self.topk_v1_enabled,
+            "topk_v1_selected_symbols": self.topk_v1_selected_symbols,
+            "topk_v1_gate_excluded": self.topk_v1_gate_excluded,
         }
 
 
@@ -132,8 +141,25 @@ def run_fixture(fixture_path: Path) -> FixtureResult:
     config = load_fixture_config(fixture_path)
     expected_digest = config.get("expected_paper_digest", "")
     controller_enabled = config.get("controller_enabled", False)
+    feature_engine_enabled = config.get("feature_engine_enabled", False)
+    topk_v1_enabled = config.get("topk_v1_enabled", False)
 
-    engine = PaperEngine(controller_enabled=controller_enabled)
+    # Build TopKConfigV1 if enabled
+    topk_v1_config = None
+    if topk_v1_enabled:
+        topk_v1_config = TopKConfigV1(
+            k=config.get("topk_v1_k", 3),
+            spread_max_bps=config.get("topk_v1_spread_max_bps", 100),
+            thin_l1_min=config.get("topk_v1_thin_l1_min", 1.0),
+            warmup_min=config.get("topk_v1_warmup_min", 10),
+        )
+
+    engine = PaperEngine(
+        controller_enabled=controller_enabled,
+        feature_engine_enabled=feature_engine_enabled or topk_v1_enabled,
+        topk_v1_enabled=topk_v1_enabled,
+        topk_v1_config=topk_v1_config,
+    )
     result = engine.run(fixture_path)
 
     digest_match = result.digest == expected_digest if expected_digest else True
@@ -156,6 +182,9 @@ def run_fixture(fixture_path: Path) -> FixtureResult:
         topk_k=result.topk_k,
         controller_enabled=result.controller_enabled,
         controller_decisions=result.controller_decisions,
+        topk_v1_enabled=result.topk_v1_enabled,
+        topk_v1_selected_symbols=result.topk_v1_selected_symbols,
+        topk_v1_gate_excluded=result.topk_v1_gate_excluded,
     )
 
 

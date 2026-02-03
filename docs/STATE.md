@@ -29,6 +29,11 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - WIDENUSDT: triggers WIDEN mode (high volatility)
     - TIGHTENUSDT: triggers TIGHTEN mode (low volatility)
     - BASEUSDT: triggers BASE mode (normal volatility)
+  - `sample_day_topk_v1/`: 6 symbols to test Top-K v1 feature-based selection
+    - Paper digest (v1, topk_v1 enabled): `63d981b60a8e9b3a`
+    - Selected: LOWUSDT (rank 1), HIGHUSDT (rank 2), MEDUSDT (rank 3)
+    - Gate-excluded: THINUSDT (THIN_BOOK)
+    - Not selected: TRENDUSDT, WIDEUSDT (lower scores)
   - Fixture format: SNAPSHOT events (see ADR-006 for migration from BOOK_TICKER)
   - Schema version: v1 (see ADR-008)
 - **End-to-end replay**:
@@ -394,4 +399,13 @@ Comprehensive adaptive grid system design:
     - **Units:** All thresholds/multipliers as integer bps (×100 scale) for determinism
     - **NOT included:** auto-sizing (legacy size_per_level), DD allocator, L2 features, Top-K integration
     - **Fixture:** `sample_day_adaptive` — paper digest `1b8af993a8435ee6`
-  - ⏳ **Top-K v1 (ASM-P1-06):** Pending
+  - ✅ **Top-K v1 (ASM-P1-06):** Feature-based symbol selection (see ADR-023)
+    - **Opt-in:** `topk_v1_enabled=False` default (backward compat with existing digests)
+    - **Requires:** `feature_engine_enabled=True` (needs FeatureEngine for range_score, spread_bps, thin_l1, net_return_bps)
+    - **Scoring:** `score = range + liquidity - toxicity_penalty - trend_penalty`
+    - **Hard gates:** TOXICITY_BLOCKED, SPREAD_TOO_WIDE, THIN_BOOK, WARMUP_INSUFFICIENT
+    - **Tie-breaking:** Deterministic by `(-score, symbol)` for stable ordering
+    - **Config:** `TopKConfigV1(k=3, spread_max_bps=100, thin_l1_min=1.0, warmup_min=10)`
+    - **Output:** `topk_v1_selected_symbols`, `topk_v1_scores`, `topk_v1_gate_excluded`
+    - **Fixture:** `sample_day_topk_v1` — 6 symbols, paper digest `63d981b60a8e9b3a`
+    - **NOT included:** real-time re-selection (selects once after warmup), adaptive scoring weights

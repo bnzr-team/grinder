@@ -1,0 +1,15 @@
+{
+  "name": "sample_day_topk_v1",
+  "description": "Fixture for testing Top-K v1 feature-based symbol selection",
+  "symbols": ["HIGHUSDT", "MEDUSDT", "LOWUSDT", "TRENDUSDT", "THINUSDT", "WIDEUSDT"],
+  "feature_engine_enabled": true,
+  "topk_v1_enabled": true,
+  "topk_v1_k": 3,
+  "topk_v1_spread_max_bps": 100,
+  "topk_v1_thin_l1_min": 1.0,
+  "topk_v1_warmup_min": 5,
+  "expected_selected": ["LOWUSDT", "HIGHUSDT", "MEDUSDT"],
+  "expected_gated": ["THINUSDT"],
+  "expected_paper_digest": "63d981b60a8e9b3a",
+  "notes": "6 symbols with varying characteristics: HIGHUSDT (high range, high liquidity), MEDUSDT (medium range, medium liquidity), LOWUSDT (low range, very high liquidity - selected first due to liquidity), TRENDUSDT (trending - high net_return penalty), THINUSDT (thin book - gated by THIN_BOOK), WIDEUSDT (moderate spread - not gated, just not selected)"
+}

@@ -26,6 +26,7 @@ from typing import Any
 
 from grinder.paper import PaperEngine
 from grinder.replay import ReplayEngine
+from grinder.selection import TopKConfigV1
 
 # Fixture discovery path
 FIXTURES_DIR = Path("tests/fixtures")
@@ -111,12 +112,16 @@ def run_paper(
     controller_enabled: bool = False,
     feature_engine_enabled: bool = False,
     adaptive_policy_enabled: bool = False,
+    topk_v1_enabled: bool = False,
+    topk_v1_config: TopKConfigV1 | None = None,
 ) -> str:
     """Run paper trading and return digest."""
     engine = PaperEngine(
         controller_enabled=controller_enabled,
         feature_engine_enabled=feature_engine_enabled,
         adaptive_policy_enabled=adaptive_policy_enabled,
+        topk_v1_enabled=topk_v1_enabled,
+        topk_v1_config=topk_v1_config,
     )
     result = engine.run(fixture_path)
     return result.digest
@@ -138,6 +143,19 @@ def check_fixture(fixture_path: Path, verbose: bool = False) -> FixtureCheck:
     controller_enabled = bool(config.get("controller_enabled", False))
     feature_engine_enabled = bool(config.get("feature_engine_enabled", False))
     adaptive_policy_enabled = bool(config.get("adaptive_policy_enabled", False))
+    topk_v1_enabled = bool(config.get("topk_v1_enabled", False))
+
+    # Build TopKConfigV1 if enabled
+    topk_v1_config = None
+    if topk_v1_enabled:
+        topk_v1_config = TopKConfigV1(
+            k=config.get("topk_v1_k", 3),
+            spread_max_bps=config.get("topk_v1_spread_max_bps", 100),
+            thin_l1_min=config.get("topk_v1_thin_l1_min", 1.0),
+            warmup_min=config.get("topk_v1_warmup_min", 10),
+        )
+        # If topk_v1 is enabled, feature_engine must also be enabled
+        feature_engine_enabled = True
 
     errors: list[str] = []
 
@@ -171,12 +189,16 @@ def check_fixture(fixture_path: Path, verbose: bool = False) -> FixtureCheck:
             controller_enabled=controller_enabled,
             feature_engine_enabled=feature_engine_enabled,
             adaptive_policy_enabled=adaptive_policy_enabled,
+            topk_v1_enabled=topk_v1_enabled,
+            topk_v1_config=topk_v1_config,
         )
         paper_2 = run_paper(
             fixture_path,
             controller_enabled=controller_enabled,
             feature_engine_enabled=feature_engine_enabled,
             adaptive_policy_enabled=adaptive_policy_enabled,
+            topk_v1_enabled=topk_v1_enabled,
+            topk_v1_config=topk_v1_config,
         )
     except Exception as e:
         errors.append(f"Paper error: {e}")

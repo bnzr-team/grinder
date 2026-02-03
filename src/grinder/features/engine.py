@@ -76,6 +76,8 @@ class FeatureEngine:
     # Per-symbol state
     _bar_builders: dict[str, BarBuilder] = field(default_factory=dict, repr=False)
     _bars: dict[str, deque[MidBar]] = field(default_factory=dict, repr=False)
+    # Cache of latest FeatureSnapshot per symbol (for Top-K v1 selection)
+    _latest_snapshots: dict[str, FeatureSnapshot] = field(default_factory=dict, repr=False)
 
     def _get_bar_builder(self, symbol: str) -> BarBuilder:
         """Get or create bar builder for symbol."""
@@ -132,7 +134,7 @@ class FeatureEngine:
         # Compute range/trend features
         sum_abs_bps, net_ret_bps, range_score = compute_range_trend(bars, self.config.range_horizon)
 
-        return FeatureSnapshot(
+        feature_snapshot = FeatureSnapshot(
             ts=snapshot.ts,
             symbol=symbol,
             mid_price=mid_price,
@@ -147,6 +149,11 @@ class FeatureEngine:
             warmup_bars=len(bars),
         )
 
+        # Cache latest snapshot for Top-K v1 selection
+        self._latest_snapshots[symbol] = feature_snapshot
+
+        return feature_snapshot
+
     def get_bar_count(self, symbol: str) -> int:
         """Get number of completed bars for a symbol."""
         if symbol in self._bars:
@@ -157,10 +164,26 @@ class FeatureEngine:
         """Get all symbols that have been processed."""
         return list(self._bar_builders.keys())
 
+    def get_latest_snapshot(self, symbol: str) -> FeatureSnapshot | None:
+        """Get the latest feature snapshot for a symbol.
+
+        Returns None if the symbol hasn't been processed yet.
+        """
+        return self._latest_snapshots.get(symbol)
+
+    def get_all_latest_snapshots(self) -> dict[str, FeatureSnapshot]:
+        """Get the latest feature snapshots for all symbols.
+
+        Returns a dict mapping symbol to its latest FeatureSnapshot.
+        Only includes symbols that have been processed at least once.
+        """
+        return dict(self._latest_snapshots)
+
     def reset(self) -> None:
         """Reset all state."""
         self._bar_builders.clear()
         self._bars.clear()
+        self._latest_snapshots.clear()
 
     def reset_symbol(self, symbol: str) -> None:
         """Reset state for a single symbol."""
@@ -168,3 +191,5 @@ class FeatureEngine:
             del self._bar_builders[symbol]
         if symbol in self._bars:
             del self._bars[symbol]
+        if symbol in self._latest_snapshots:
+            del self._latest_snapshots[symbol]
