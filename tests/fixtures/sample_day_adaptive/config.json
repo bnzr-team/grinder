@@ -1,0 +1,12 @@
+{
+  "name": "sample_day_adaptive",
+  "description": "Fixture for testing AdaptiveGridPolicy v1 with dynamic step/width/levels",
+  "symbols": ["ADAPTUSDT"],
+  "feature_engine_enabled": true,
+  "adaptive_policy_enabled": true,
+  "expected_regimes": ["RANGE"],
+  "expected_digest": "eff22d500f13e542",
+  "canonical_digest": "1b8af993a8435ee6",
+  "expected_paper_digest": "1b8af993a8435ee6",
+  "notes": "This fixture tests adaptive policy with feature engine. Expected to produce different GridPlans than static policy."
+}

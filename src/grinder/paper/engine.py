@@ -30,6 +30,7 @@ from grinder.paper.cycle_engine import CycleEngine
 from grinder.paper.fills import simulate_fills
 from grinder.paper.ledger import Ledger
 from grinder.policies.base import GridPlan  # noqa: TC001 - used at runtime
+from grinder.policies.grid.adaptive import AdaptiveGridConfig, AdaptiveGridPolicy
 from grinder.policies.grid.static import StaticGridPolicy
 from grinder.prefilter import TopKSelector, hard_filter
 from grinder.risk import DrawdownGuard, KillSwitch, KillSwitchReason
@@ -145,6 +146,9 @@ class PaperResult:
     # FeatureEngine results (v1 addition - ADR-019)
     # Note: These fields are NOT included in digest computation.
     feature_engine_enabled: bool = False
+    # AdaptiveGridPolicy results (v1 addition - ADR-022)
+    # Note: These fields are NOT included in digest computation.
+    adaptive_policy_enabled: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to JSON-serializable dict."""
@@ -174,6 +178,7 @@ class PaperResult:
             "final_drawdown_pct": self.final_drawdown_pct,
             "high_water_mark": self.high_water_mark,
             "feature_engine_enabled": self.feature_engine_enabled,
+            "adaptive_policy_enabled": self.adaptive_policy_enabled,
         }
 
     def to_json(self) -> str:
@@ -228,6 +233,9 @@ class PaperEngine:
         feature_atr_period: int = 14,
         feature_range_horizon: int = 14,
         feature_max_bars: int = 1000,
+        # AdaptiveGridPolicy parameters (ADR-022)
+        adaptive_policy_enabled: bool = False,
+        adaptive_config: AdaptiveGridConfig | None = None,
     ) -> None:
         """Initialize paper trading engine.
 
@@ -265,6 +273,8 @@ class PaperEngine:
             feature_atr_period: Period for ATR/NATR calculation (default 14)
             feature_range_horizon: Horizon for range/trend calculation (default 14)
             feature_max_bars: Maximum bars to keep per symbol (default 1000)
+            adaptive_policy_enabled: Enable AdaptiveGridPolicy for dynamic step/width/levels (default False)
+            adaptive_config: Configuration for AdaptiveGridPolicy (uses defaults if None)
         """
         # Policy and execution
         self._policy = StaticGridPolicy(
@@ -345,6 +355,17 @@ class PaperEngine:
                     range_horizon=feature_range_horizon,
                     max_bars=feature_max_bars,
                 )
+            )
+
+        # AdaptiveGridPolicy for dynamic step/width/levels (ADR-022)
+        self._adaptive_policy_enabled = adaptive_policy_enabled
+        self._adaptive_policy: AdaptiveGridPolicy | None = None
+        if adaptive_policy_enabled:
+            self._adaptive_policy = AdaptiveGridPolicy(
+                config=adaptive_config
+                or AdaptiveGridConfig(
+                    size_per_level=size_per_level,
+                ),
             )
 
         # Per-symbol execution state
@@ -545,11 +566,27 @@ class PaperEngine:
             "mid_price": snapshot.mid_price,
         }
         # Merge FeatureEngine features when enabled (ADR-020)
-        # StaticGridPolicy ignores extra keys; future policies can use them
+        # StaticGridPolicy ignores extra keys; AdaptiveGridPolicy uses them
         if policy_feature_inputs is not None:
             policy_features.update(policy_feature_inputs)
-        # Create a temporary policy with adjusted spacing if controller is active
-        if self._controller_enabled and effective_spacing_bps != self._base_spacing_bps:
+
+        # Determine which policy to use
+        if self._adaptive_policy_enabled and self._adaptive_policy is not None:
+            # AdaptiveGridPolicy: needs preliminary toxicity check for regime classification
+            # Record price for toxicity tracking
+            self._toxicity_gate.record_price(ts, symbol, snapshot.mid_price)
+            preliminary_toxicity = self._toxicity_gate.check(
+                ts, symbol, snapshot.spread_bps, snapshot.mid_price
+            )
+            # Use kill-switch state from previous cycles
+            kill_switch_active = self._kill_switch.is_triggered
+            plan = self._adaptive_policy.evaluate(
+                policy_features,
+                kill_switch_active=kill_switch_active,
+                toxicity_result=preliminary_toxicity,
+            )
+        elif self._controller_enabled and effective_spacing_bps != self._base_spacing_bps:
+            # Create a temporary policy with adjusted spacing if controller is active
             temp_policy = StaticGridPolicy(
                 spacing_bps=effective_spacing_bps,
                 levels=self._policy.levels,
@@ -770,6 +807,8 @@ class PaperEngine:
         result.controller_enabled = self._controller_enabled
         # FeatureEngine results (ADR-019)
         result.feature_engine_enabled = self._feature_engine_enabled
+        # AdaptiveGridPolicy results (ADR-022)
+        result.adaptive_policy_enabled = self._adaptive_policy_enabled
         if self._controller_enabled:
             # Compute final controller decisions for each symbol
             controller_decisions = []
