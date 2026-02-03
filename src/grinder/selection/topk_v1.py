@@ -114,7 +114,8 @@ class SelectionCandidate:
         symbol: Trading symbol
         range_score: From FeatureSnapshot (higher = more choppy = better)
         spread_bps: Bid-ask spread in bps
-        thin_l1: Thin-side depth (min of bid/ask qty)
+        thin_l1: Thin-side depth (min of bid/ask qty).
+            Note: Truncated to int for liquidity scoring (ilog10) to ensure determinism.
         net_return_bps: Net return over horizon (abs value = trend strength)
         warmup_bars: Number of completed bars
         toxicity_blocked: Whether toxicity gate blocked this symbol
