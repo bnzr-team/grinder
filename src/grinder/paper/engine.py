@@ -25,6 +25,7 @@ from grinder.contracts import Snapshot
 from grinder.controller import AdaptiveController, ControllerMode
 from grinder.execution import ExecutionEngine, ExecutionState, NoOpExchangePort
 from grinder.gating import GateReason, GatingResult, RateLimiter, RiskGate, ToxicityGate
+from grinder.paper.cycle_engine import CycleEngine
 from grinder.paper.fills import simulate_fills
 from grinder.paper.ledger import Ledger
 from grinder.policies.base import GridPlan  # noqa: TC001 - used at runtime
@@ -58,6 +59,9 @@ class PaperOutput:
     # Note: These fields are NOT included in digest computation for backward compatibility.
     drawdown_check: dict[str, Any] | None = None
     kill_switch_triggered: bool = False
+    # v1 additions: CycleEngine intents (ADR-017)
+    # Note: NOT included in digest computation for backward compatibility.
+    cycle_intents: list[dict[str, Any]] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to JSON-serializable dict."""
@@ -74,6 +78,7 @@ class PaperOutput:
             "pnl_snapshot": self.pnl_snapshot,
             "drawdown_check": self.drawdown_check,
             "kill_switch_triggered": self.kill_switch_triggered,
+            "cycle_intents": self.cycle_intents,
         }
 
     def to_digest_dict(self) -> dict[str, Any]:
@@ -205,6 +210,9 @@ class PaperEngine:
         kill_switch_enabled: bool = False,
         # Fill simulation mode (ADR-016)
         fill_mode: str = "crossing",
+        # CycleEngine parameters (ADR-017)
+        cycle_enabled: bool = False,
+        cycle_step_pct: Decimal = Decimal("0.001"),  # 10 bps default
     ) -> None:
         """Initialize paper trading engine.
 
@@ -235,6 +243,8 @@ class PaperEngine:
             max_drawdown_pct: Maximum drawdown percentage before kill-switch (default 5.0%)
             kill_switch_enabled: Enable drawdown guard and kill-switch (default False for backward compat)
             fill_mode: Fill simulation mode - "crossing" (default, v1.1) or "instant" (v1.0 compat)
+            cycle_enabled: Enable CycleEngine for TP + replenishment (default False for backward compat)
+            cycle_step_pct: Step percentage for TP/replenish placement (default 0.001 = 10 bps)
         """
         # Policy and execution
         self._policy = StaticGridPolicy(
@@ -293,6 +303,16 @@ class PaperEngine:
 
         # Fill simulation mode (ADR-016)
         self._fill_mode = fill_mode
+
+        # CycleEngine for TP + replenishment (ADR-017)
+        self._cycle_enabled = cycle_enabled
+        self._cycle_engine: CycleEngine | None = None
+        if cycle_enabled:
+            self._cycle_engine = CycleEngine(
+                step_pct=cycle_step_pct,
+                price_precision=price_precision,
+                quantity_precision=quantity_precision,
+            )
 
         # Per-symbol execution state
         self._states: dict[str, ExecutionState] = {}
@@ -545,6 +565,25 @@ class PaperEngine:
         # Get updated PnL snapshot after fills
         pnl_snap = self._ledger.get_pnl_snapshot(ts, symbol, snapshot.mid_price)
 
+        # Step 6.5: Process fills through CycleEngine (ADR-017)
+        # Generate TP + replenishment intents for each fill
+        cycle_intents_list: list[dict[str, Any]] = []
+        if self._cycle_enabled and self._cycle_engine is not None and fills:
+            # Determine adds_allowed based on controller/gating state
+            # In v1: adds_allowed=False if controller is paused or kill-switch latched
+            adds_allowed = True
+            if (
+                self._controller_enabled
+                and controller_decision is not None
+                and controller_decision.mode == ControllerMode.PAUSE
+            ):
+                adds_allowed = False
+            if self._kill_switch.is_triggered:
+                adds_allowed = False
+
+            cycle_result = self._cycle_engine.process_fills(fills, adds_allowed=adds_allowed)
+            cycle_intents_list = [i.to_dict() for i in cycle_result.intents]
+
         # Step 7: Drawdown check (ADR-013)
         # Compute total equity and check drawdown guard
         drawdown_check_dict: dict[str, Any] | None = None
@@ -588,6 +627,7 @@ class PaperEngine:
             pnl_snapshot=pnl_snap.to_dict(),
             drawdown_check=drawdown_check_dict,
             kill_switch_triggered=kill_switch_triggered_now,
+            cycle_intents=cycle_intents_list,
         )
 
     def run(self, fixture_path: Path) -> PaperResult:
