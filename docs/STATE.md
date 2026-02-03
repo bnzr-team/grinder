@@ -81,6 +81,15 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - **Top-K prefilter:** Two-pass processing — first scan for volatility scores, then filter to top K symbols
   - **Gating gates:** toxicity (spread spike, price impact) + rate limit (orders/minute, cooldown) + risk limits (notional, daily loss)
   - **Fill simulation v1.1 (crossing/touch model):** BUY fills if `mid_price <= limit_price`, SELL fills if `mid_price >= limit_price` (deterministic, see ADR-016)
+  - **CycleEngine v1** (`src/grinder/paper/cycle_engine.py`):
+    - Converts fills to TP + replenishment intents (§17.12.2)
+    - BUY fill → SELL TP at `p_fill * (1 + step_pct)` for same qty
+    - SELL fill → BUY TP at `p_fill * (1 - step_pct)` for same qty
+    - Replenishment: same-side order further out (only if `adds_allowed=True`)
+    - Deterministic intent IDs: `cycle_{type}_{fill_id}_{side}_{price}`
+    - Opt-in: `cycle_enabled=False` default (backward compat)
+    - Intents NOT included in digest (backward compat)
+    - See ADR-017
   - **Position tracking:** Per-symbol qty + avg_entry_price via `Ledger` class
   - **PnL tracking:** Realized (on close), Unrealized (mark-to-market), Total
   - **Output schema v1:** `PaperResult` includes `schema_version`, `total_fills`, `final_positions`, `total_realized_pnl`, `total_unrealized_pnl`, `topk_selected_symbols`, `topk_k`, `topk_scores`

@@ -405,3 +405,37 @@
   - Keep instant fill — rejected; too unrealistic for meaningful backtests
   - Probabilistic fill based on queue position — rejected; breaks determinism
   - Slippage model — deferred to v2; crossing/touch is sufficient for v1
+
+## ADR-017 — CycleEngine v1: fill → TP + replenishment
+- **Date:** 2026-02-03
+- **Status:** accepted
+- **Context:** Grid trading requires automatic cycle management: when a fill occurs, a take-profit (TP) order should be placed on the opposite side, and optionally a replenishment order to maintain grid depth. This is specified in §17.12.2 of the ASM v1 spec.
+- **Decision:**
+  - **CycleEngine module:** `src/grinder/paper/cycle_engine.py`
+  - **TP generation logic:**
+    - BUY fill at `p_fill` with `qty` → SELL TP at `p_fill * (1 + step_pct)` for same `qty`
+    - SELL fill at `p_fill` with `qty` → BUY TP at `p_fill * (1 - step_pct)` for same `qty`
+  - **Replenishment logic:**
+    - If `adds_allowed=True`: place new order further out (same side as fill, opposite direction)
+    - If `adds_allowed=False`: only TP orders, no new risk added
+  - **Determinism constraints:**
+    - Intent IDs: `cycle_{type}_{source_fill_id}_{side}_{price}`
+    - Ordering: fills processed in order; TP before replenishment for each fill
+    - Price/quantity: Decimal with configurable precision, ROUND_DOWN
+  - **Integration with PaperEngine:**
+    - `cycle_enabled` parameter (default False for backward compat)
+    - `cycle_step_pct` parameter (default 0.001 = 10 bps)
+    - `cycle_intents` field in PaperOutput (NOT included in digest for backward compat)
+  - **adds_allowed determination (v1):**
+    - False if controller mode is PAUSE
+    - False if kill-switch is triggered
+    - True otherwise
+- **Consequences:**
+  - CycleEngine generates CycleIntent objects representing desired TP/replenishment orders
+  - Intents are recorded in output for observability but don't affect canonical digests
+  - Foundation for full grid cycling in ASM v1 (next: intents → actual order placement)
+  - Backward compatible: existing digests unchanged when cycle_enabled=False
+- **Alternatives:**
+  - Immediate order placement from fills — rejected; need intent layer for gating/validation
+  - Fixed TP distance — rejected; step_pct allows adaptive sizing per controller
+  - Martingale sizing — rejected; bounded replenishment is safer per §17.11.3
