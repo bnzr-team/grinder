@@ -14,9 +14,12 @@ import subprocess
 import sys
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
+from unittest.mock import patch
 
 from grinder.contracts import Snapshot
 from grinder.paper import PaperEngine, PaperOutput, PaperResult
+from grinder.policies.grid.static import StaticGridPolicy
 
 FIXTURE_DIR = Path(__file__).parent.parent / "fixtures" / "sample_day"
 FIXTURE_ALLOWED_DIR = Path(__file__).parent.parent / "fixtures" / "sample_day_allowed"
@@ -532,3 +535,167 @@ class TestFeatureEngineIntegration:
 
         # Verify feature engine state is cleared
         assert engine._feature_engine.get_all_symbols() == []
+
+
+class TestPolicyFeaturesPlumbing:
+    """Tests for feature plumbing to policy (ADR-020)."""
+
+    def test_policy_receives_features_when_enabled(self) -> None:
+        """Test that policy receives full features dict when feature_engine enabled."""
+        engine = PaperEngine(
+            feature_engine_enabled=True,
+            size_per_level=Decimal("0.01"),  # Small size to avoid notional limits
+        )
+        snapshot = Snapshot(
+            ts=1000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50010"),
+            bid_qty=Decimal("2"),
+            ask_qty=Decimal("1"),
+            last_price=Decimal("50005"),
+            last_qty=Decimal("0.1"),
+        )
+
+        # Capture the features dict passed to policy.evaluate()
+        captured_features: list[dict[str, Any]] = []
+        original_evaluate = engine._policy.evaluate
+
+        def capture_evaluate(features: dict[str, Any]) -> Any:
+            captured_features.append(features.copy())
+            return original_evaluate(features)
+
+        with patch.object(engine._policy, "evaluate", side_effect=capture_evaluate):
+            engine.process_snapshot(snapshot)
+
+        # Verify features were captured
+        assert len(captured_features) == 1
+        features = captured_features[0]
+
+        # Check that FeatureSnapshot fields are present
+        assert "mid_price" in features
+        assert "spread_bps" in features
+        assert "imbalance_l1_bps" in features
+        assert "thin_l1" in features
+        assert "natr_bps" in features
+        assert "warmup_bars" in features
+
+        # Verify values
+        assert features["mid_price"] == Decimal("50005")
+        assert features["spread_bps"] == 1  # ~2 bps truncated
+        assert features["imbalance_l1_bps"] == 3333  # (2-1)/(2+1)
+
+    def test_policy_receives_only_mid_price_when_disabled(self) -> None:
+        """Test that policy only receives mid_price when feature_engine disabled."""
+        engine = PaperEngine(feature_engine_enabled=False)
+        snapshot = Snapshot(
+            ts=1000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50010"),
+            bid_qty=Decimal("1"),
+            ask_qty=Decimal("1"),
+            last_price=Decimal("50005"),
+            last_qty=Decimal("0.1"),
+        )
+
+        captured_features: list[dict[str, Any]] = []
+        original_evaluate = engine._policy.evaluate
+
+        def capture_evaluate(features: dict[str, Any]) -> Any:
+            captured_features.append(features.copy())
+            return original_evaluate(features)
+
+        with patch.object(engine._policy, "evaluate", side_effect=capture_evaluate):
+            engine.process_snapshot(snapshot)
+
+        # Verify features were captured
+        assert len(captured_features) == 1
+        features = captured_features[0]
+
+        # Should only have mid_price (no FeatureEngine features)
+        assert "mid_price" in features
+        assert features["mid_price"] == Decimal("50005")
+
+        # FeatureSnapshot fields should NOT be present
+        assert "spread_bps" not in features
+        assert "imbalance_l1_bps" not in features
+        assert "natr_bps" not in features
+
+    def test_static_grid_policy_ignores_extra_features(self) -> None:
+        """Test that StaticGridPolicy works with extra feature keys."""
+        policy = StaticGridPolicy(spacing_bps=10.0, levels=5, size_per_level=Decimal("1"))
+
+        # Pass features dict with extra keys (simulating FeatureSnapshot)
+        features = {
+            "mid_price": Decimal("50000"),
+            "spread_bps": 5,
+            "imbalance_l1_bps": 1000,
+            "thin_l1": Decimal("10"),
+            "natr_bps": 200,
+            "warmup_bars": 15,
+            "range_score": 50,
+        }
+
+        # Should work without error
+        plan = policy.evaluate(features)
+
+        # Verify correct behavior
+        assert plan.center_price == Decimal("50000")
+        assert plan.spacing_bps == 10.0
+        assert plan.levels_up == 5
+
+    def test_digests_unchanged_with_policy_features(self) -> None:
+        """Test canonical digests unchanged when features passed to policy."""
+        # This is a regression test for backward compatibility
+        engine = PaperEngine(feature_engine_enabled=True)
+        result = engine.run(FIXTURE_DIR)
+
+        # Digest should match expected (features in policy_features don't affect digest)
+        assert result.digest == EXPECTED_PAPER_DIGEST_SAMPLE_DAY, (
+            f"Digest changed with policy features: got {result.digest}, "
+            f"expected {EXPECTED_PAPER_DIGEST_SAMPLE_DAY}"
+        )
+
+    def test_mid_price_not_silently_overridden(self) -> None:
+        """Test that mid_price from FeatureSnapshot matches base mid_price (no silent override).
+
+        ADR-020: When feature_engine_enabled=True, policy_features.update() merges
+        FeatureSnapshot.to_policy_features() which includes mid_price. This test verifies
+        that both sources compute the same mid_price (from snapshot.mid_price), so the
+        override is intentional and consistent.
+        """
+        engine = PaperEngine(
+            feature_engine_enabled=True,
+            size_per_level=Decimal("0.01"),
+        )
+        snapshot = Snapshot(
+            ts=1000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50010"),
+            bid_qty=Decimal("1"),
+            ask_qty=Decimal("1"),
+            last_price=Decimal("50005"),
+            last_qty=Decimal("0.1"),
+        )
+
+        # Capture policy features to verify mid_price
+        captured_features: list[dict[str, Any]] = []
+        original_evaluate = engine._policy.evaluate
+
+        def capture_evaluate(features: dict[str, Any]) -> Any:
+            captured_features.append(features.copy())
+            return original_evaluate(features)
+
+        with patch.object(engine._policy, "evaluate", side_effect=capture_evaluate):
+            engine.process_snapshot(snapshot)
+
+        # Verify mid_price matches snapshot.mid_price
+        assert len(captured_features) == 1
+        features = captured_features[0]
+
+        # Both base and FeatureSnapshot compute mid_price from snapshot
+        # They should be identical, so no "silent" override occurs
+        assert features["mid_price"] == snapshot.mid_price
+        assert features["mid_price"] == Decimal("50005")

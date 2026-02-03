@@ -515,3 +515,33 @@
   - External TA library (TA-Lib) — rejected; Decimal precision lost, extra dependency
   - Time-weighted VWAP bars — deferred to v2; mid-bars sufficient for v1
   - Volume bars — deferred; tick-based sufficient for initial ASM
+
+## ADR-020 — Policy features plumbing (ASM-P1-03)
+- **Date:** 2026-02-03
+- **Status:** accepted
+- **Context:** FeatureEngine computes market features (ADR-019), and PaperEngine integrates it (ASM-P1-02). The next step is to pass features to the policy for adaptive behavior. Per ASM v1 spec §17.6, policies need access to volatility (NATR), L1 microstructure (imbalance, thin_l1), and range metrics for dynamic parameter adjustment. However, this must be done without changing existing behavior (StaticGridPolicy ignores extra features).
+- **Decision:**
+  - **Plumbing approach:**
+    - `FeatureSnapshot.to_policy_features()` returns typed dict with: mid_price, spread_bps, imbalance_l1_bps, natr_bps, thin_l1, range_score, net_return_bps, sum_abs_returns_bps, is_warmed_up
+    - PaperEngine merges these features into `policy_features` dict when `feature_engine_enabled=True`
+    - Policy receives full features dict via existing `evaluate(features: dict[str, Any])` interface
+  - **Backward compatibility:**
+    - `StaticGridPolicy` only uses `mid_price` from features dict, ignores extra keys
+    - When `feature_engine_enabled=False` (default), policy receives only `{"mid_price": ...}` (existing behavior)
+    - Canonical digests unchanged — features affect policy input but StaticGridPolicy ignores them
+  - **No behavior change:**
+    - This PR is pure plumbing — StaticGridPolicy behavior is identical with or without extra features
+    - Future policies (e.g., AdaptiveGridPolicy) will use the additional features
+  - **Testing:**
+    - `test_policy_receives_features_when_enabled`: verifies full features dict passed to policy
+    - `test_policy_receives_only_mid_price_when_disabled`: verifies minimal dict when disabled
+    - `test_static_grid_policy_ignores_extra_features`: verifies StaticGridPolicy works with extra keys
+    - `test_digests_unchanged_with_policy_features`: regression test for digest stability
+- **Consequences:**
+  - Policy interface unchanged (`GridPolicy.evaluate(features: dict[str, Any])` already accepts generic dict)
+  - Foundation for ASM v1 adaptive policies that will use features
+  - Determinism maintained — same inputs produce same outputs
+- **Alternatives:**
+  - Add explicit features parameter to policy — rejected; dict is flexible for future features
+  - Pass FeatureSnapshot directly — rejected; dict is more generic and allows policy to not depend on features module
+  - Change StaticGridPolicy to use features — deferred to AdaptiveGridPolicy (ASM-P1-05)
