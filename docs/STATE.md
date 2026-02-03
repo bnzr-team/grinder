@@ -304,6 +304,18 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - `tests/unit/test_ha.py`: HA role, state management, fail-safe semantics (17 tests)
   - See ADR-015 for design decisions
   - **Limitations:** Single-host only (Redis is SPOF), no protection against host/VM failure (v1 scope)
+- **HA Runbooks + Release Procedure v1** (PR-M3-012):
+  - **HA Operations runbook** (`docs/runbooks/07_HA_OPERATIONS.md`):
+    - Rolling restart procedure (zero-downtime HTTP)
+    - One node down triage and recovery
+    - Redis down/flapping troubleshooting
+    - Failover testing procedures
+  - **Release Checklist v1** (`docs/HOW_TO_OPERATE.md#deploying-a-release`):
+    - Pre-flight: CI gates (checks, soak-gate, docker-smoke, ha-smoke, determinism)
+    - Deployment steps: single-instance and HA rolling restart
+    - Post-deployment verification checklist
+    - Rollback plan with exact commands
+  - **Navigation updated:** `docs/DOCS_INDEX.md`, `docs/runbooks/README.md`
 
 ## Partially implemented
 - Структура пакета `src/grinder/*` (core, protocols/interfaces) — каркас.

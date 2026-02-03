@@ -45,7 +45,7 @@ Where to find information:
 ---
 
 ## Operations
-- `docs/HOW_TO_OPERATE.md` — operator's guide
+- `docs/HOW_TO_OPERATE.md` — operator's guide (includes Release Checklist v1)
 - `docs/OBSERVABILITY_STACK.md` — Prometheus + Grafana setup
 - `docs/runbooks/` — operational runbooks:
   - `01_STARTUP_SHUTDOWN.md` — starting/stopping the system
@@ -54,6 +54,7 @@ Where to find information:
   - `04_KILL_SWITCH.md` — kill-switch events and recovery
   - `05_SOAK_GATE.md` — running soak tests
   - `06_ALERT_RESPONSE.md` — responding to alerts
+  - `07_HA_OPERATIONS.md` — HA deployment, failover, rolling restart
 
 ---
 

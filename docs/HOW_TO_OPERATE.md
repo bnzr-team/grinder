@@ -106,42 +106,100 @@ curl -fsS http://localhost:9090/healthz
 
 ## Deploying a Release
 
-### Current Process (Simple)
+### Release Checklist v1
 
-1. **Merge PR to main**
-   - All CI checks must pass
-   - Soak gate must be green
+This is the canonical checklist for deploying a release to production.
 
-2. **Pull latest on server**
+#### Pre-flight
+
+- [ ] **PR merged to main** with all CI checks green:
+  - [ ] `checks` (ruff, mypy, pytest)
+  - [ ] `soak-gate` PASS
+  - [ ] `docker-smoke` PASS (includes `/readyz` verification)
+  - [ ] `ha-smoke` PASS (if HA deployment)
+  - [ ] `determinism-suite` PASS
+
+  **Note:** Some workflows are path-filtered and may not auto-trigger on docs-only PRs.
+  To verify CI status: `gh pr checks <PR_NUMBER>`
+  To manually re-run a workflow: `gh run rerun <RUN_ID>` or use GitHub Actions UI.
+
+- [ ] **No pending migrations** (check DECISIONS.md for breaking changes)
+- [ ] **Config verified**: environment variables match deployment target
+- [ ] **Rollback plan ready** (see below)
+
+#### Deployment Steps
+
+1. **Pull latest on server:**
    ```bash
    git pull origin main
    ```
 
-3. **Restart with new code**
+2. **For single-instance deployment:**
    ```bash
    docker compose -f docker-compose.observability.yml down
    docker compose -f docker-compose.observability.yml up --build -d
    ```
 
-4. **Verify deployment**
-   ```bash
-   # Check health
-   curl -fsS http://localhost:9090/healthz
+3. **For HA deployment (rolling restart):**
+   See [07_HA_OPERATIONS.md](runbooks/07_HA_OPERATIONS.md#rolling-restart-zero-downtime-http) for zero-downtime procedure.
 
-   # Check metrics are flowing
+4. **Verify deployment:**
+   ```bash
+   # Health check
+   curl -fsS http://localhost:9090/healthz
+   # Expected: {"status": "ok", "uptime_s": ...}
+
+   # Readiness check (for HA)
+   curl -fsS http://localhost:9090/readyz
+   # Expected: {"ready": true, "role": "active"} or role=unknown in non-HA
+
+   # Metrics flowing
    curl -fsS http://localhost:9090/metrics | head
 
-   # Check logs for errors
-   docker logs grinder --tail=50
+   # No errors in logs
+   docker logs grinder --tail=50 | grep -i error
    ```
 
-### What "Good" Looks Like After Deploy
+#### Post-deployment Verification
 
-- `/healthz` returns `{"status": "ok"}`
-- All metrics present in `/metrics`
-- No errors in logs
-- Grafana dashboard showing data
-- No alerts firing
+- [ ] `/healthz` returns `{"status": "ok"}`
+- [ ] `/readyz` returns expected role (active/standby/unknown)
+- [ ] All metrics present in `/metrics`
+- [ ] Grafana dashboard showing data
+- [ ] **Alerts quiet** for 5 minutes after deploy
+- [ ] No errors in container logs
+
+#### Rollback Plan
+
+If deployment fails or causes issues:
+
+1. **Identify the problem:**
+   ```bash
+   docker logs grinder --tail=100
+   curl -fsS http://localhost:9090/healthz
+   ```
+
+2. **Quick rollback (revert to previous image):**
+   ```bash
+   git checkout HEAD~1
+   docker compose -f docker-compose.observability.yml up --build -d
+   ```
+
+3. **Verify rollback:**
+   ```bash
+   curl -fsS http://localhost:9090/healthz
+   ```
+
+4. **Escalate:** If rollback doesn't fix the issue, check recent commits and DECISIONS.md for breaking changes.
+
+#### Signals to Watch After Deploy
+
+| Metric | Normal | Action if Abnormal |
+|--------|--------|-------------------|
+| `grinder_up` | 1 | Container not running |
+| `grinder_kill_switch_triggered` | 0 | Check kill-switch runbook |
+| `grinder_ha_role{role="active"}` | 1 on one instance | Check HA runbook |
+| Container restarts | 0 | Check logs for crash loop |
 
 ---
 
@@ -150,7 +208,10 @@ curl -fsS http://localhost:9090/healthz
 | Endpoint | Method | Purpose | Expected Response |
 |----------|--------|---------|-------------------|
 | `/healthz` | GET | Liveness check | `{"status": "ok", "uptime_s": N}` |
+| `/readyz` | GET | Readiness check (HA-aware) | `{"ready": true/false, "role": "active/standby/unknown"}` |
 | `/metrics` | GET | Prometheus metrics | Prometheus text format |
+
+**Note:** `/readyz` returns HTTP 200 if ACTIVE, HTTP 503 if STANDBY or UNKNOWN. In non-HA mode, role is "unknown" and returns 503.
 
 ---
 
