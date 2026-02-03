@@ -3,6 +3,8 @@
 > SSOT for: **market regime selection**, **adaptive grid step**, and **auto-reset**.
 >
 > This spec defines **target behavior**. Unless `docs/STATE.md` says implemented, treat as *Planned*.
+>
+> **See also:** [`docs/17_ADAPTIVE_SMART_GRID_V1.md`](17_ADAPTIVE_SMART_GRID_V1.md) — comprehensive Adaptive Smart Grid v1 spec covering regime-driven behavior, auto-sizing, L1/L2-aware features, and risk budgeting.
 
 ---
 
