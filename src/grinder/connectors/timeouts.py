@@ -115,5 +115,5 @@ def create_named_task(
     task = asyncio.create_task(coro, name=name)
     if tasks_set is not None:
         tasks_set.add(task)
-        task.add_done_callback(lambda t: tasks_set.discard(t))
+        task.add_done_callback(tasks_set.discard)
     return task
