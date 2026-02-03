@@ -80,14 +80,14 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - **Pipeline:** `Snapshot` -> `Top-K filter` -> `hard_filter()` -> `gating check (toxicity -> rate limit -> risk)` -> `StaticGridPolicy.evaluate()` -> `ExecutionEngine.evaluate()` -> `simulate_fills()` -> `Ledger.apply_fills()` -> `PaperOutput`
   - **Top-K prefilter:** Two-pass processing — first scan for volatility scores, then filter to top K symbols
   - **Gating gates:** toxicity (spread spike, price impact) + rate limit (orders/minute, cooldown) + risk limits (notional, daily loss)
-  - **Fill simulation:** All PLACE orders fill immediately at limit price (deterministic)
+  - **Fill simulation v1.1 (crossing/touch model):** BUY fills if `mid_price <= limit_price`, SELL fills if `mid_price >= limit_price` (deterministic, see ADR-016)
   - **Position tracking:** Per-symbol qty + avg_entry_price via `Ledger` class
   - **PnL tracking:** Realized (on close), Unrealized (mark-to-market), Total
   - **Output schema v1:** `PaperResult` includes `schema_version`, `total_fills`, `final_positions`, `total_realized_pnl`, `total_unrealized_pnl`, `topk_selected_symbols`, `topk_k`, `topk_scores`
   - **Contract tests:** `tests/unit/test_paper_contracts.py` (27 tests) verify schema stability
   - Output format: `Paper trading completed. Events processed: N\nOutput digest: <16-char-hex>`
   - Deterministic digest for fixture-based runs
-  - **Canonical digests:** `sample_day` = `66b29a4e92192f8f`, `sample_day_allowed` = `ec223bce78d7926f`, `sample_day_toxic` = `66d57776b7be4797`, `sample_day_multisymbol` = `7c4f4b07ec7b391f`
+  - **Canonical digests (v1.1):** `sample_day` = `66b29a4e92192f8f`, `sample_day_allowed` = `3ecf49cd03db1b07`, `sample_day_toxic` = `a31ead72fc1f197e`, `sample_day_multisymbol` = `22acba5cb8b81ab4`
   - **Limitations:** no live feed, no real orders, no slippage, no partial fills
 - **Adaptive Controller v0** (`src/grinder/controller/`):
   - Rule-based controller that adjusts policy parameters based on recent market conditions

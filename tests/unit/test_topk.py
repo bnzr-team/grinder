@@ -214,11 +214,14 @@ class TestTopKIntegration:
         assert result3.topk_selected_symbols == ["TESTUSDT"]
 
     def test_canonical_digests_preserved(self) -> None:
-        """Existing canonical digests are preserved with Top-K integration."""
+        """Existing canonical digests are preserved with Top-K integration.
+
+        Note: Digests updated in PR-ASM-P0-01 for crossing/touch fill model (v1.1).
+        """
         expected = {
-            "sample_day": "66b29a4e92192f8f",
-            "sample_day_allowed": "ec223bce78d7926f",
-            "sample_day_toxic": "66d57776b7be4797",
+            "sample_day": "66b29a4e92192f8f",  # blocked by gating, 0 fills
+            "sample_day_allowed": "3ecf49cd03db1b07",  # v1.1 crossing/touch fills
+            "sample_day_toxic": "a31ead72fc1f197e",  # v1.1 crossing/touch fills
         }
 
         for fixture, expected_digest in expected.items():

@@ -1,14 +1,18 @@
 """Deterministic fill simulation for paper trading.
 
-Fill logic:
-- All PLACE orders fill immediately at their limit price
+Fill logic (v1 crossing/touch model):
+- LIMIT BUY fills if mid_price <= limit_price (price crosses or touches)
+- LIMIT SELL fills if mid_price >= limit_price (price crosses or touches)
 - No slippage, no partial fills (paper trading simplification)
 - Fill events are fully deterministic given the same inputs
 
-This module is intentionally simple for v0. Future versions may add:
+v0 behavior (instant fills for all PLACE orders) is preserved via
+fill_mode="instant" for backward compatibility. Default is now "crossing".
+
+Future versions may add:
 - Simulated slippage based on order size vs liquidity
-- Partial fills
-- Fill probability based on price distance from mid
+- Partial fills (PR-ASM-P0-02+)
+- L2-based impact model
 """
 
 from __future__ import annotations
@@ -66,19 +70,29 @@ def simulate_fills(
     ts: int,
     symbol: str,
     actions: list[dict[str, Any]],
+    mid_price: Decimal | None = None,
+    fill_mode: str = "crossing",
 ) -> list[Fill]:
-    """Simulate fills for PLACE actions.
+    """Simulate fills for PLACE actions using crossing/touch model.
 
-    In paper trading v0, all PLACE orders fill immediately at their limit price.
-    CANCEL actions do not generate fills.
+    v1 crossing/touch model (default):
+    - LIMIT BUY fills if mid_price <= limit_price
+    - LIMIT SELL fills if mid_price >= limit_price
+
+    v0 instant mode (fill_mode="instant"):
+    - All PLACE orders fill immediately at their limit price
+
+    CANCEL actions never generate fills.
 
     Args:
         ts: Current timestamp
         symbol: Trading symbol
         actions: List of action dicts from ExecutionEngine
+        mid_price: Current mid price for crossing check (required for crossing mode)
+        fill_mode: "crossing" (default) or "instant" (v0 backward compat)
 
     Returns:
-        List of Fill objects for PLACE actions
+        List of Fill objects for orders that would fill
     """
     fills: list[Fill] = []
 
@@ -87,17 +101,31 @@ def simulate_fills(
         if action.get("action_type") != "PLACE":
             continue
 
+        limit_price = Decimal(str(action["price"]))
+        side = action["side"]
+
+        # Check if order would fill based on fill_mode
+        if fill_mode == "crossing" and mid_price is not None:
+            # v1: crossing/touch model
+            # BUY fills if mid <= limit (price has come down to our buy level)
+            # SELL fills if mid >= limit (price has come up to our sell level)
+            if side == "BUY" and mid_price > limit_price:
+                continue  # No fill - price hasn't reached our buy level
+            if side == "SELL" and mid_price < limit_price:
+                continue  # No fill - price hasn't reached our sell level
+        # else: instant mode (v0) - all orders fill
+
         # Generate deterministic order_id if not present
         order_id = action.get("order_id")
         if order_id is None:
             # Deterministic ID based on ts, symbol, index, side, price
-            order_id = f"paper_{ts}_{symbol}_{idx}_{action['side']}_{action['price']}"
+            order_id = f"paper_{ts}_{symbol}_{idx}_{side}_{action['price']}"
 
         fill = Fill(
             ts=ts,
             symbol=symbol,
-            side=action["side"],
-            price=Decimal(str(action["price"])),
+            side=side,
+            price=limit_price,
             quantity=Decimal(str(action["quantity"])),
             order_id=order_id,
         )

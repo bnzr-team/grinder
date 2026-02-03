@@ -81,6 +81,9 @@ class TestKillSwitchIntegration:
             # Increase notional limits to allow trading at high BTC prices
             max_notional_per_symbol=Decimal("50000"),
             max_notional_total=Decimal("200000"),
+            # Use instant fill mode (v1.0) - this test needs fills to trigger drawdown
+            # Crossing/touch mode (v1.1) doesn't fill orders placed below mid on falling prices
+            fill_mode="instant",
         )
         result = engine.run(drawdown_fixture_path)
 
@@ -105,6 +108,8 @@ class TestKillSwitchIntegration:
             levels=3,
             max_notional_per_symbol=Decimal("50000"),
             max_notional_total=Decimal("200000"),
+            # Use instant fill mode - this test needs fills to trigger kill-switch
+            fill_mode="instant",
         )
         result = engine.run(drawdown_fixture_path)
 

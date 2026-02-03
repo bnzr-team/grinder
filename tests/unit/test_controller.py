@@ -299,12 +299,15 @@ class TestControllerIntegration:
         assert result.controller_decisions == []
 
     def test_existing_digests_preserved_with_controller_disabled(self) -> None:
-        """Existing canonical digests are preserved when controller is disabled."""
+        """Existing canonical digests are preserved when controller is disabled.
+
+        Note: Digests updated in PR-ASM-P0-01 for crossing/touch fill model (v1.1).
+        """
         expected = {
-            "sample_day": "66b29a4e92192f8f",
-            "sample_day_allowed": "ec223bce78d7926f",
-            "sample_day_toxic": "66d57776b7be4797",
-            "sample_day_multisymbol": "7c4f4b07ec7b391f",
+            "sample_day": "66b29a4e92192f8f",  # blocked by gating, 0 fills
+            "sample_day_allowed": "3ecf49cd03db1b07",  # v1.1 crossing/touch fills
+            "sample_day_toxic": "a31ead72fc1f197e",  # v1.1 crossing/touch fills
+            "sample_day_multisymbol": "22acba5cb8b81ab4",  # v1.1 crossing/touch fills
         }
 
         for fixture, expected_digest in expected.items():
