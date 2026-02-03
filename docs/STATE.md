@@ -51,6 +51,12 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - See ADR-010 for design decisions
   - **Limitations:** no adaptive scoring, no stability controls
 - **GridPolicy v0** (`src/grinder/policies/grid/static.py`): StaticGridPolicy producing symmetric bilateral grids. GridPlan includes: regime, width_bps, reset_action, reason_codes. Limitations: no adaptive step, no inventory skew, no regime switching.
+- **Sizing Units SSOT (ADR-018):**
+  - `GridPlan.size_schedule` is ALWAYS **base asset quantity** (e.g., BTC, ETH), NOT notional (USD)
+  - `notional_to_qty(notional, price, precision)` utility in `src/grinder/policies/base.py` for explicit conversion
+  - Formula: `qty = notional / price`, rounded down to precision
+  - Example: `notional_to_qty(Decimal("500"), Decimal("50000"))` → `Decimal("0.01")` (0.01 BTC)
+  - All code interpreting `size_schedule` MUST treat values as base asset quantity
 - **Execution stub v0** (`src/grinder/execution/`): ExchangePort protocol + NoOpExchangePort stub, ExecutionEngine with reconcile logic (PAUSE/EMERGENCY -> cancel all, HARD reset -> rebuild grid, SOFT reset -> replace non-conforming, NONE -> reconcile). Deterministic order ID generation. ExecutionMetrics for observability. Limitations: no live exchange writes, no rate limiting, no error recovery.
 - **Replay engine v0** (`src/grinder/replay/`):
   - **Responsibilities:** Load fixture -> parse SNAPSHOT events -> apply prefilter gates -> evaluate policy -> execute via ExecutionEngine -> compute deterministic digest

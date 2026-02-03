@@ -47,7 +47,7 @@ class StaticGridPolicy(GridPolicy):
         Args:
             spacing_bps: Grid spacing in basis points (default 10 bps)
             levels: Number of levels on each side (symmetric)
-            size_per_level: Order size per level in quote currency (USD)
+            size_per_level: Order quantity per level (base asset, e.g., BTC)
         """
         if spacing_bps <= 0:
             raise ValueError("spacing_bps must be positive")
