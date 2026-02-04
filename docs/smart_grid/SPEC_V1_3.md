@@ -1,15 +1,12 @@
-# 17. Adaptive Smart Grid v1
-**Regime-driven • Auto-sizing • L1/L2-aware • Deterministic replay/paper • Top-K 3–5**
-
-> **⚠️ DEPRECATED:** This file is superseded by versioned specs in `docs/smart_grid/`.
-> See `docs/smart_grid/README.md` for the version matrix and current spec.
-> This file remains for backward compatibility with existing links.
+# Adaptive Smart Grid v1.3
+**Portfolio inventory + survivability controls**
 
 ### Status
-- **This document defines the target behavior for v1.**
-- Components are marked as **Implemented / Planned** and must match `docs/STATE.md`.
+- This document is a **versioned specification**. It must remain consistent with `docs/STATE.md`.
+- Any contract/behavior changes require an ADR entry in `docs/DECISIONS.md` and determinism proofs.
 
 ---
+
 
 ## 17.1 Motivation
 
@@ -560,3 +557,42 @@ A feature is “implemented” only if:
    - enforce caps; if violated → adjust or throttle/pause
    - output GridPlan with reason codes
 6) execution reconciles desired orders, CycleEngine handles fill→TP cycles
+
+
+---
+
+## v1.3 Addendum: Portfolio Inventory & Survivability Controls
+
+This version focuses on multi-symbol portfolio risk and inventory management under adverse regimes.
+
+### Changes vs v1.2
+1. **Portfolio allocator becomes dynamic**
+   - Re-weights budgets across Top-K based on:
+     - current inventory utilization,
+     - realized volatility,
+     - liquidity/impact,
+     - regime stability.
+   - Allocator must remain deterministic.
+
+2. **Concentration & correlation guard (simple v1.3)**
+   - Prevent too much exposure to highly correlated symbols:
+     - correlation proxy (e.g., rolling returns correlation from mid-bars).
+   - Enforce concentration caps with reason codes.
+
+3. **Enhanced skew logic**
+   - Skew becomes a function of:
+     - inventory utilization,
+     - distance-to-stop (DD utilization),
+     - regime (stronger in TREND/SHOCK).
+   - Adds-off triggers earlier when inventory utilization is high.
+
+4. **Damage control playbooks**
+   - Deterministic “unwind ladder” generation:
+     - reduce-only levels for unloading,
+     - cooldown timers,
+     - optional time-stop (policy parameter).
+
+### Required fixtures / tests
+- `multi_symbol_adverse`: portfolio-level caps and allocator shifts.
+- `correlated_pair_stress`: concentration guard triggers.
+- Determinism suite updated with portfolio metrics and stable digests.

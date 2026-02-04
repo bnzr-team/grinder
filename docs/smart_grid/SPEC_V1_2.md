@@ -1,15 +1,12 @@
-# 17. Adaptive Smart Grid v1
-**Regime-driven • Auto-sizing • L1/L2-aware • Deterministic replay/paper • Top-K 3–5**
-
-> **⚠️ DEPRECATED:** This file is superseded by versioned specs in `docs/smart_grid/`.
-> See `docs/smart_grid/README.md` for the version matrix and current spec.
-> This file remains for backward compatibility with existing links.
+# Adaptive Smart Grid v1.2
+**L2-first-class microstructure grid**
 
 ### Status
-- **This document defines the target behavior for v1.**
-- Components are marked as **Implemented / Planned** and must match `docs/STATE.md`.
+- This document is a **versioned specification**. It must remain consistent with `docs/STATE.md`.
+- Any contract/behavior changes require an ADR entry in `docs/DECISIONS.md` and determinism proofs.
 
 ---
+
 
 ## 17.1 Motivation
 
@@ -560,3 +557,35 @@ A feature is “implemented” only if:
    - enforce caps; if violated → adjust or throttle/pause
    - output GridPlan with reason codes
 6) execution reconciles desired orders, CycleEngine handles fill→TP cycles
+
+
+---
+
+## v1.2 Addendum: L2-First-Class Microstructure Grid
+
+This version makes L2 signals a primary input for selection, gating, sizing, and execution realism.
+
+### Changes vs v1.1
+1. **L2 contract promoted**
+   - `Snapshot.book` is expected in “L2-enabled” fixtures and live connectors.
+   - When missing/stale, the system degrades to L1 proxies and may enter THIN_BOOK.
+
+2. **Impact-aware sizing and gating**
+   - `impact_estimate_bps(Q)` becomes a core constraint:
+     - per-level notional must satisfy `impact_estimate_bps(per_level_notional) <= impact_budget_bps`
+   - Introduce `ImpactGate` (or extend ToxicityGate) with explicit reason codes.
+
+3. **Spread-at-depth and thinness thresholds**
+   - `spread_at_depth(Q)` and `depth_topN_usd` are used for:
+     - Top-K selection,
+     - throttle/pause decisions,
+     - dynamic l2_penalty in X_stress.
+
+4. **Execution: walk-the-book (deterministic)**
+   - For taker-like or “crossing” behavior, fills can be priced by walking the book.
+   - Partial fills occur if available depth is insufficient.
+
+### Required fixtures / tests
+- `thin_book_l2`: forces THIN_BOOK transitions + throttle/pause.
+- `impact_spike_l2`: forces ImpactGate behavior.
+- `walk_book_exec_l2`: validates deterministic walk-the-book pricing.

@@ -401,9 +401,25 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
 - Adaptive Controller v1 (EMA-based adaptive step, trend detection, DRAWDOWN mode).
 - Live Binance WebSocket connector (implementing DataConnector ABC).
 
+## Smart Grid Spec Version
+
+| Spec | Location | Status |
+|------|----------|--------|
+| v1.0 | `docs/smart_grid/SPEC_V1_0.md` | ✅ Implemented (ASM-P1-01..06) |
+| v1.1 | `docs/smart_grid/SPEC_V1_1.md` | ✅ Implemented (FeatureEngine) |
+| v1.2 | `docs/smart_grid/SPEC_V1_2.md` | ✅ Implemented (AdaptiveGridPolicy) |
+| v1.3 | `docs/smart_grid/SPEC_V1_3.md` | ✅ Implemented (Top-K v1) |
+| v2.0 | `docs/smart_grid/SPEC_V2_0.md` | 🔜 Planned (L2, partial fills, DD allocator) |
+| v3.0 | `docs/smart_grid/SPEC_V3_0.md` | 🔜 Planned (multi-venue, full production) |
+
+**Current target:** `docs/smart_grid/SPEC_V1_3.md`
+**Roadmap:** `docs/smart_grid/ROADMAP.md`
+
+---
+
 ## Planned (spec exists, not implemented)
 
-### Adaptive Smart Grid v1 (`docs/17_ADAPTIVE_SMART_GRID_V1.md`)
+### Adaptive Smart Grid v2.0+ (`docs/smart_grid/SPEC_V2_0.md`)
 Comprehensive adaptive grid system design:
 - **Regime-driven behavior:** RANGE / TREND / VOL_SHOCK / THIN_BOOK / TOXIC / PAUSED / EMERGENCY
 - **Auto-sizing:** dynamic step, width, levels, and size schedule from market features

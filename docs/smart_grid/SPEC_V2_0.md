@@ -1,15 +1,12 @@
-# 17. Adaptive Smart Grid v1
-**Regime-driven • Auto-sizing • L1/L2-aware • Deterministic replay/paper • Top-K 3–5**
-
-> **⚠️ DEPRECATED:** This file is superseded by versioned specs in `docs/smart_grid/`.
-> See `docs/smart_grid/README.md` for the version matrix and current spec.
-> This file remains for backward compatibility with existing links.
+# Adaptive Smart Grid v2.0
+**ML-assisted regimes + offline calibration**
 
 ### Status
-- **This document defines the target behavior for v1.**
-- Components are marked as **Implemented / Planned** and must match `docs/STATE.md`.
+- This document is a **versioned specification**. It must remain consistent with `docs/STATE.md`.
+- Any contract/behavior changes require an ADR entry in `docs/DECISIONS.md` and determinism proofs.
 
 ---
+
 
 ## 17.1 Motivation
 
@@ -560,3 +557,38 @@ A feature is “implemented” only if:
    - enforce caps; if violated → adjust or throttle/pause
    - output GridPlan with reason codes
 6) execution reconciles desired orders, CycleEngine handles fill→TP cycles
+
+
+---
+
+## v2.0 Addendum: ML-Assisted (Offline) Regimes & Calibration
+
+This version introduces ML as an offline-trained, deterministic inference layer.
+
+### Changes vs v1.3
+1. **Regime classifier replaces heuristics (optional switch)**
+   - Inputs: NATR, trend, L1/L2 microstructure, toxicity signals.
+   - Output: regime probabilities; final regime decided deterministically (argmax with tie-break rules).
+
+2. **Execution-quality model (optional)**
+   - Predicts expected fill probability and expected impact risk.
+   - Used to adjust:
+     - order placement aggressiveness,
+     - Top-K scoring,
+     - size schedule scaling.
+
+3. **Offline calibration pipeline**
+   - Walk-forward evaluation to tune:
+     - `alpha`, `k_tail`, thresholds, score weights.
+   - Produces a versioned config artifact.
+
+### Determinism & artifact governance
+- All ML artifacts must be:
+  - versioned and pinned by hash,
+  - loaded deterministically,
+  - tested in CI (inference outputs on fixtures must be stable).
+- No online training in production.
+
+### Required fixtures / tests
+- `ml_regime_eval_suite`: fixtures spanning regimes with expected regime labels/probability bounds.
+- `ml_inference_determinism`: asserts stable outputs across runs.
