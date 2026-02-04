@@ -602,6 +602,18 @@ class TestRetryIdempotencyIntegration:
                 self._order_counter += 1
                 return f"order-{self._order_counter}"
 
+            def cancel_order(self, order_id: str) -> bool:  # noqa: ARG002
+                return True
+
+            def replace_order(
+                self,
+                order_id: str,  # noqa: ARG002
+                new_price: Decimal,  # noqa: ARG002
+                new_quantity: Decimal,  # noqa: ARG002
+                ts: int,  # noqa: ARG002
+            ) -> str:
+                return "replaced-order"
+
             def fetch_open_orders(self, symbol: str) -> list[Any]:  # noqa: ARG002
                 return []
 
@@ -649,6 +661,18 @@ class TestRetryIdempotencyIntegration:
                 if self.call_count == 1:
                     raise ValueError("Simulated failure")
                 return "order-success"
+
+            def cancel_order(self, order_id: str) -> bool:  # noqa: ARG002
+                return True
+
+            def replace_order(
+                self,
+                order_id: str,  # noqa: ARG002
+                new_price: Decimal,  # noqa: ARG002
+                new_quantity: Decimal,  # noqa: ARG002
+                ts: int,  # noqa: ARG002
+            ) -> str:
+                return "replaced-order"
 
             def fetch_open_orders(self, symbol: str) -> list[Any]:  # noqa: ARG002
                 return []
