@@ -26,6 +26,7 @@ from grinder.connectors.errors import (
     ConnectorTimeoutError,
     ConnectorTransientError,
 )
+from grinder.connectors.metrics import get_connector_metrics
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -112,6 +113,19 @@ def is_retryable(error: Exception, policy: RetryPolicy) -> bool:
     return False
 
 
+def _classify_retry_reason(error: Exception) -> str:
+    """Classify error into metric reason category.
+
+    Returns:
+        One of: "transient", "timeout", "other"
+    """
+    if isinstance(error, ConnectorTransientError):
+        return "transient"
+    if isinstance(error, ConnectorTimeoutError):
+        return "timeout"
+    return "other"
+
+
 async def retry_with_policy(
     op_name: str,
     operation: Callable[[], Awaitable[T]],
@@ -174,6 +188,9 @@ async def retry_with_policy(
             delay_ms = policy.compute_delay_ms(attempt)
             stats.retries += 1
             stats.total_delay_ms += delay_ms
+
+            # Record metric (H5 observability)
+            get_connector_metrics().record_retry(op_name, _classify_retry_reason(e))
 
             logger.debug(
                 "Retrying %s (attempt %d/%d) after %dms: %s",

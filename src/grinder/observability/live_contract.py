@@ -29,6 +29,13 @@ GET /metrics:
         - grinder_drawdown_pct (gauge)
         - grinder_high_water_mark (gauge)
         - grinder_ha_role (gauge with role label)
+        - grinder_connector_retries_total (counter, H2)
+        - grinder_idempotency_hits_total (counter, H3)
+        - grinder_idempotency_conflicts_total (counter, H3)
+        - grinder_idempotency_misses_total (counter, H3)
+        - grinder_circuit_state (gauge, H4)
+        - grinder_circuit_rejected_total (counter, H4)
+        - grinder_circuit_trips_total (counter, H4)
 """
 
 from __future__ import annotations
@@ -141,4 +148,19 @@ REQUIRED_METRICS_PATTERNS = [
     "# HELP grinder_ha_role",
     "# TYPE grinder_ha_role",
     "grinder_ha_role",
+    # Connector metrics (H2/H3/H4)
+    "# HELP grinder_connector_retries_total",
+    "# TYPE grinder_connector_retries_total",
+    "# HELP grinder_idempotency_hits_total",
+    "# TYPE grinder_idempotency_hits_total",
+    "# HELP grinder_idempotency_conflicts_total",
+    "# TYPE grinder_idempotency_conflicts_total",
+    "# HELP grinder_idempotency_misses_total",
+    "# TYPE grinder_idempotency_misses_total",
+    "# HELP grinder_circuit_state",
+    "# TYPE grinder_circuit_state",
+    "# HELP grinder_circuit_rejected_total",
+    "# TYPE grinder_circuit_rejected_total",
+    "# HELP grinder_circuit_trips_total",
+    "# TYPE grinder_circuit_trips_total",
 ]

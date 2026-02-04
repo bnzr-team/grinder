@@ -34,6 +34,12 @@ from grinder.connectors.idempotency import (
     compute_idempotency_key,
     compute_request_fingerprint,
 )
+from grinder.connectors.metrics import (
+    CircuitMetricState,
+    ConnectorMetrics,
+    get_connector_metrics,
+    reset_connector_metrics,
+)
 from grinder.connectors.retries import (
     RetryPolicy,
     RetryStats,
@@ -46,11 +52,13 @@ __all__ = [
     "CircuitBreaker",
     "CircuitBreakerConfig",
     "CircuitBreakerStats",
+    "CircuitMetricState",
     "CircuitOpenError",
     "CircuitState",
     "ConnectorClosedError",
     "ConnectorError",
     "ConnectorIOError",
+    "ConnectorMetrics",
     "ConnectorNonRetryableError",
     "ConnectorState",
     "ConnectorTimeoutError",
@@ -71,6 +79,8 @@ __all__ = [
     "compute_idempotency_key",
     "compute_request_fingerprint",
     "default_trip_on",
+    "get_connector_metrics",
     "is_retryable",
+    "reset_connector_metrics",
     "retry_with_policy",
 ]

@@ -5,6 +5,7 @@ Consolidates all metrics into a single Prometheus-compatible text output:
 - Gating metrics (allowed/blocked counters)
 - Risk metrics (kill-switch, drawdown)
 - HA metrics (role)
+- Connector metrics (retries, idempotency, circuit breaker) - H5
 """
 
 from __future__ import annotations
@@ -13,6 +14,7 @@ import time
 from dataclasses import dataclass, field
 from decimal import Decimal
 
+from grinder.connectors.metrics import get_connector_metrics
 from grinder.gating import get_gating_metrics
 from grinder.ha.role import HARole, get_ha_state
 
@@ -82,6 +84,9 @@ class MetricsBuilder:
 
         # HA metrics
         lines.extend(self._build_ha_metrics())
+
+        # Connector metrics (H2/H3/H4)
+        lines.extend(self._build_connector_metrics())
 
         return "\n".join(lines)
 
@@ -165,6 +170,11 @@ class MetricsBuilder:
             value = 1 if role == current_role else 0
             lines.append(f'grinder_ha_role{{role="{role.value}"}} {value}')
         return lines
+
+    def _build_connector_metrics(self) -> list[str]:
+        """Build connector metrics (H2 retries, H3 idempotency, H4 circuit breaker)."""
+        connector_metrics = get_connector_metrics()
+        return connector_metrics.to_prometheus_lines()
 
 
 class _BuilderHolder:

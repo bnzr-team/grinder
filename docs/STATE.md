@@ -200,7 +200,17 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - `grinder_high_water_mark` (gauge): current equity high-water mark
   - **HA metrics:**
     - `grinder_ha_role{role}` (gauge): 1 for current role (active/standby/unknown)
-  - **Contract tests:** `tests/unit/test_live_contracts.py`, `tests/unit/test_observability.py`
+  - **Connector metrics (H5 Observability):**
+    - `grinder_connector_retries_total{op, reason}` (counter): retry events by operation and reason
+    - `grinder_idempotency_hits_total{op}` (counter): idempotency cache hits
+    - `grinder_idempotency_conflicts_total{op}` (counter): idempotency conflicts (INFLIGHT duplicates)
+    - `grinder_idempotency_misses_total{op}` (counter): idempotency cache misses
+    - `grinder_circuit_state{op, state}` (gauge): circuit breaker state (1 for current, 0 for others)
+    - `grinder_circuit_rejected_total{op}` (counter): calls rejected by OPEN circuit
+    - `grinder_circuit_trips_total{op, reason}` (counter): circuit trips (CLOSED → OPEN)
+    - Labels: `op` = operation name, `reason` = transient/timeout/other/threshold, `state` = closed/open/half_open
+    - See ADR-028 for design decisions
+  - **Contract tests:** `tests/unit/test_live_contracts.py`, `tests/unit/test_observability.py`, `tests/unit/test_connector_metrics.py`
   - **SSOT:** This section is the canonical list of exported metrics
 - **Determinism Gate v1** (`scripts/verify_determinism_suite.py`):
   - CI gate that catches silent drift across all fixtures and backtest
