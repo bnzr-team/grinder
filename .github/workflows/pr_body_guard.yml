@@ -13,9 +13,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Validate PR description contains Proof Bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           python - <<'PY'
-          import json, os, re, sys
+          import json, os, re, sys, urllib.request
 
           event_path = os.environ.get("GITHUB_EVENT_PATH")
           if not event_path or not os.path.exists(event_path):
@@ -26,7 +28,27 @@ jobs:
             event = json.load(f)
 
           pr = event.get("pull_request") or {}
-          body = pr.get("body") or ""
+          number = pr.get("number")
+          repo = (event.get("repository") or {}).get("full_name")
+          token = os.environ.get("GH_TOKEN", "")
+
+          # Fetch fresh PR body from API (not stale event payload)
+          body = ""
+          if number and repo and token:
+            try:
+              url = f"https://api.github.com/repos/{repo}/pulls/{number}"
+              req = urllib.request.Request(url)
+              req.add_header("Accept", "application/vnd.github+json")
+              req.add_header("Authorization", f"Bearer {token}")
+              with urllib.request.urlopen(req) as r:
+                pr_data = json.loads(r.read().decode("utf-8"))
+                body = (pr_data.get("body") or "").strip()
+                print(f"INFO: Fetched PR body from API (bytes: {len(body.encode('utf-8'))})")
+            except Exception as e:
+              print(f"WARNING: API fetch failed ({e}), falling back to event payload")
+              body = pr.get("body") or ""
+          else:
+            body = pr.get("body") or ""
 
           # Normalize newlines
           body_n = body.replace("\r\n", "\n").replace("\r", "\n")

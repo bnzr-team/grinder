@@ -16,6 +16,12 @@ from grinder.connectors.errors import (
     ConnectorTimeoutError,
     ConnectorTransientError,
 )
+from grinder.connectors.retries import (
+    RetryPolicy,
+    RetryStats,
+    is_retryable,
+    retry_with_policy,
+)
 
 __all__ = [
     "BinanceWsMockConnector",
@@ -30,5 +36,9 @@ __all__ = [
     "ExchangeConnector",
     "MockConnectorStats",
     "RetryConfig",
+    "RetryPolicy",
+    "RetryStats",
     "TimeoutConfig",
+    "is_retryable",
+    "retry_with_policy",
 ]
