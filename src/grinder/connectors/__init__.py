@@ -46,6 +46,15 @@ from grinder.connectors.metrics import (
     get_connector_metrics,
     reset_connector_metrics,
 )
+from grinder.connectors.paper_execution import (
+    OrderRequest,
+    OrderResult,
+    OrderType,
+    PaperExecutionAdapter,
+    PaperExecutionStats,
+    PaperOrder,
+    PaperOrderError,
+)
 from grinder.connectors.retries import (
     RetryPolicy,
     RetryStats,
@@ -81,6 +90,13 @@ __all__ = [
     "LiveConnectorStats",
     "LiveConnectorV0",
     "MockConnectorStats",
+    "OrderRequest",
+    "OrderResult",
+    "OrderType",
+    "PaperExecutionAdapter",
+    "PaperExecutionStats",
+    "PaperOrder",
+    "PaperOrderError",
     "RetryConfig",
     "RetryPolicy",
     "RetryStats",

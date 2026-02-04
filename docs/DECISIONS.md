@@ -910,7 +910,7 @@
   - **Safe defaults:**
     - Default mode is `READ_ONLY` — must explicitly opt into trading
     - Default URL is Binance testnet (`wss://testnet.binance.vision/ws`) — must explicitly configure mainnet
-    - Method `assert_mode(required_mode)` — raises `PermissionError` if current mode is insufficient
+    - Method `assert_mode(required_mode)` — raises `ConnectorNonRetryableError` if current mode is insufficient
   - **LiveConnectorV0** extends `DataConnector` ABC:
     - `connect()`: establish WebSocket connection with H2 retries and H4 circuit breaker
     - `close()`: clean shutdown with task cancellation
@@ -948,3 +948,59 @@
   - No SafeMode, rely on URL config only — rejected; too easy to accidentally trade on mainnet
   - Separate read/write connectors — rejected; unnecessary complexity for v0
   - Real WebSocket in v0 — rejected; contract-first approach, real integration in v1
+
+## ADR-030 — Paper Write-Path v0: Simulated Trading (M3-LC-02)
+- **Date:** 2026-02-04
+- **Status:** accepted
+- **Context:** Paper trading mode (`SafeMode.PAPER`) was defined in ADR-029 but had no write operations implemented. Need to add `place_order`, `cancel_order`, `replace_order` to `LiveConnectorV0` while maintaining safety guarantees (no network calls, deterministic behavior).
+- **Decision:**
+  - **PaperExecutionAdapter** (`src/grinder/connectors/paper_execution.py`):
+    - In-memory order storage (no persistence)
+    - Deterministic order ID generation: `{prefix}_{seq:08d}` (e.g., `PAPER_00000001`)
+    - Injectable `clock` for deterministic timestamps
+    - No network calls — pure simulation
+  - **V0 Order Semantics (instant fill):**
+    - `place_order`: Creates order → immediately FILLED (no market simulation)
+    - `cancel_order`: If OPEN/PENDING → CANCELLED; if FILLED → `PaperOrderError`; if CANCELLED → idempotent return
+    - `replace_order`: Cancel old order + place new order (cancel+new pattern), returns NEW order_id
+  - **SafeMode Enforcement:**
+    - `READ_ONLY`: All write operations raise `ConnectorNonRetryableError` (non-retryable by design)
+    - `PAPER`: Write operations delegated to `PaperExecutionAdapter`
+    - `LIVE_TRADE`: Not implemented in v0, raises `ConnectorNonRetryableError`
+  - **Wire-up in LiveConnectorV0:**
+    - `paper_adapter` property — `PaperExecutionAdapter | None`, initialized only in PAPER mode
+    - `place_order(symbol, side, price, quantity, client_order_id)` → `OrderResult`
+    - `cancel_order(order_id)` → `OrderResult`
+    - `replace_order(order_id, new_price, new_quantity)` → `OrderResult`
+    - All methods check `ConnectorState.CLOSED` first
+  - **Types:**
+    - `OrderRequest`: Frozen dataclass for place/replace input
+    - `OrderResult`: Frozen dataclass for operation result (snapshot of order state)
+    - `PaperOrder`: Mutable internal order record
+    - `OrderType`: Enum (LIMIT, MARKET)
+    - `PaperOrderError`: Non-retryable error for paper order failures
+  - **No H2/H4 Wiring for Paper:**
+    - Paper execution is synchronous and never fails transiently
+    - Retries and circuit breaker not needed for in-memory simulation
+    - Errors are logical (invalid state) not transient (network)
+- **Mode → Operations → Backend Table:**
+  | Mode        | stream_ticks | place_order | cancel_order | replace_order | Backend           |
+  |-------------|--------------|-------------|--------------|---------------|-------------------|
+  | READ_ONLY   | ✓            | ✗           | ✗            | ✗             | N/A               |
+  | PAPER       | ✓            | ✓           | ✓            | ✓             | PaperExecutionAdapter |
+  | LIVE_TRADE  | ✓            | ✗ (v0)      | ✗ (v0)       | ✗ (v0)        | Not implemented   |
+- **Consequences:**
+  - Paper mode provides full order lifecycle without exchange dependency
+  - Order IDs are deterministic for replay/testing
+  - No network calls in PAPER mode — tests are fast and reliable
+  - Unit tests: 21 tests in `test_paper_execution.py`
+  - Integration tests: 17 tests in `test_paper_write_path.py`
+- **Out of Scope (v0):**
+  - Real trading (testnet/mainnet) — deferred to M3-LC-03
+  - Partial fills / slippage / L2 market simulation — deferred
+  - PnL calculation and commission modeling — deferred
+  - Persistent order storage — deferred
+- **Alternatives:**
+  - Shared adapter for PAPER and LIVE_TRADE — rejected; different requirements (mock vs real API)
+  - Random order IDs — rejected; breaks determinism for replay
+  - Async paper operations — rejected; unnecessary complexity for in-memory simulation

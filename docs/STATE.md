@@ -343,9 +343,35 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - `stream_ticks()` yields nothing (placeholder for real WebSocket)
     - Contract verified, hardening wired, tests pass
     - Real WebSocket integration in v1
+  - **Paper write-path (PAPER mode only):**
+    - `place_order(symbol, side, price, quantity)` → `OrderResult` (instant fill v0)
+    - `cancel_order(order_id)` → `OrderResult` (error if filled)
+    - `replace_order(order_id, new_price, new_quantity)` → `OrderResult` (cancel+new)
+    - Deterministic order IDs: `PAPER_{seq:08d}`
+    - No network calls — pure in-memory simulation via `PaperExecutionAdapter`
   - **Unit tests:** `tests/unit/test_live_connector.py` (31 tests)
   - **Integration tests:** `tests/integration/test_live_connector_integration.py` (6 tests)
-  - See ADR-029 for design decisions
+  - See ADR-029 (live connector v0), ADR-030 (paper write-path v0)
+- **PaperExecutionAdapter** (`src/grinder/connectors/paper_execution.py`):
+  - In-memory order execution backend for PAPER mode
+  - **Features:**
+    - Deterministic order ID generation (`{prefix}_{seq:08d}`)
+    - V0 semantics: instant fill on place, cancel+new on replace
+    - Injectable `clock` for deterministic timestamps
+    - No persistence, no network calls
+  - **Types:**
+    - `OrderRequest`: Place/replace input (frozen dataclass)
+    - `OrderResult`: Operation result snapshot (frozen dataclass)
+    - `PaperOrder`: Mutable internal order record
+    - `OrderType`: LIMIT, MARKET
+    - `PaperOrderError`: Non-retryable error for order failures
+  - **How to verify paper mode:**
+    ```bash
+    PYTHONPATH=src pytest tests/unit/test_paper_execution.py tests/integration/test_paper_write_path.py -v
+    ```
+  - **Unit tests:** `tests/unit/test_paper_execution.py` (21 tests)
+  - **Integration tests:** `tests/integration/test_paper_write_path.py` (17 tests)
+  - See ADR-030 for design decisions
 - **DrawdownGuard v0** (`src/grinder/risk/drawdown.py`):
   - Tracks equity high-water mark (HWM)
   - Computes drawdown: `(HWM - equity) / HWM`
