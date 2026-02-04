@@ -1153,3 +1153,86 @@
   - Equal allocation — rejected; ignores risk differences
   - Inverse-volatility weighting — rejected; requires vol estimates we may not have
   - Risk parity — rejected; needs covariance matrix
+
+## ADR-033 — Drawdown Guard Wiring v1: Intent-Based Risk Blocking (ASM-P2-03)
+- **Date:** 2026-02-04
+- **Status:** accepted
+- **Context:** ASM-P2-01/02 provide auto-sizing and DD allocation, but there's no mechanism to enforce risk limits at runtime. When portfolio or symbol DD exceeds limits, the system should block risk-increasing orders while allowing risk-reducing ones. This requires a deterministic guard that can be wired into the policy/execution pipeline.
+- **Decision:**
+  - **DrawdownGuardV1 Module** (`src/grinder/risk/drawdown_guard_v1.py`):
+    - Tracks DD at portfolio level AND per-symbol level
+    - GuardState: `NORMAL` | `DRAWDOWN`
+    - OrderIntent: `INCREASE_RISK` | `REDUCE_RISK` | `CANCEL`
+    - Transition NORMAL → DRAWDOWN when:
+      - Portfolio DD >= portfolio_dd_limit, OR
+      - Symbol loss >= symbol_dd_budget
+  - **Intent Classification (v1 rules):**
+    - `INCREASE_RISK`: New positions, grid entries, orders that increase exposure
+    - `REDUCE_RISK`: Closes, exits, flatten intents that decrease exposure
+    - `CANCEL`: Cancellation of existing orders
+  - **Allow Decision Logic:**
+    | State | Intent | Allowed | Reason |
+    |-------|--------|---------|--------|
+    | NORMAL | INCREASE_RISK | ✓ | NORMAL_STATE |
+    | NORMAL | REDUCE_RISK | ✓ | NORMAL_STATE |
+    | NORMAL | CANCEL | ✓ | CANCEL_ALWAYS_ALLOWED |
+    | DRAWDOWN | INCREASE_RISK | ✗ | DD_PORTFOLIO_BREACH or DD_SYMBOL_BREACH |
+    | DRAWDOWN | REDUCE_RISK | ✓ | REDUCE_RISK_ALLOWED |
+    | DRAWDOWN | CANCEL | ✓ | CANCEL_ALWAYS_ALLOWED |
+  - **No Auto-Recovery:**
+    - Once in DRAWDOWN, stays there until explicit `reset()` call
+    - Prevents flapping and ensures deterministic replay behavior
+    - Reset intended for new session/day start only
+  - **Reason Codes (stable, low-cardinality):**
+    - `NORMAL_STATE`: All intents allowed in normal operation
+    - `REDUCE_RISK_ALLOWED`: Reduce-only allowed in DRAWDOWN
+    - `CANCEL_ALWAYS_ALLOWED`: Cancels always permitted
+    - `DD_PORTFOLIO_BREACH`: Blocked due to portfolio DD limit
+    - `DD_SYMBOL_BREACH`: Blocked due to symbol DD limit
+  - **Wiring Point:**
+    - Guard sits BEFORE order generation/placement
+    - Policy checks `guard.allow(intent)` before creating order intents
+    - If blocked, policy skips order or only generates reduce-only intents
+  - **Loss Calculation (v1):**
+    - Uses realized PnL (simpler, deterministic)
+    - Portfolio DD = (equity_start - equity_current) / equity_start
+    - Symbol loss = absolute USD loss (positive value)
+- **Configuration:**
+  ```python
+  guard = DrawdownGuardV1(DrawdownGuardV1Config(
+      portfolio_dd_limit=Decimal("0.20"),  # 20%
+      symbol_dd_budgets={
+          "BTCUSDT": Decimal("1000"),
+          "ETHUSDT": Decimal("500"),
+      },
+  ))
+
+  # On each tick
+  guard.update(
+      equity_current=equity,
+      equity_start=session_start_equity,
+      symbol_losses=ledger.get_realized_losses(),
+  )
+
+  # Before placing order
+  decision = guard.allow(OrderIntent.INCREASE_RISK, symbol="BTCUSDT")
+  if not decision.allowed:
+      logger.warning("Blocked by DD guard: %s", decision.reason.value)
+      return  # Skip order
+  ```
+- **Consequences:**
+  - Risk limits are enforced deterministically at runtime
+  - Policy can't accidentally increase risk beyond limits
+  - Reduce-only orders always pass (allows position unwinding)
+  - Unit tests: 34 tests in `test_drawdown_guard_v1.py`
+  - All 5 invariants from v0 DrawdownGuard preserved
+- **Out of Scope (v1):**
+  - Auto-recovery / hysteresis / cooldown
+  - Partial degradation states (WARN, DEGRADED)
+  - Mark-to-market PnL (uses realized only)
+  - Full policy/execution wiring (guard module only)
+  - Kill-switch integration (separate from DD guard)
+- **Alternatives:**
+  - Auto-recovery with cooldown — rejected; non-deterministic, risk of flapping
+  - Single state (just block all in DD) — rejected; need reduce-only for position exit
+  - Probabilistic blocking — rejected; breaks determinism
