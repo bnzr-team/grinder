@@ -413,6 +413,7 @@ class ExecutionEngine:
                         state=OrderState.OPEN,
                         level_id=action.level_id,
                         created_ts=ts,
+                        placed_tick=tick,  # LC-03: Track tick for fill delay
                     )
 
         new_state = ExecutionState(

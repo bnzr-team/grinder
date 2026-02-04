@@ -92,6 +92,17 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - **Top-K prefilter:** Two-pass processing — first scan for volatility scores, then filter to top K symbols
   - **Gating gates:** toxicity (spread spike, price impact) + rate limit (orders/minute, cooldown) + risk limits (notional, daily loss)
   - **Fill simulation v1.1 (crossing/touch model):** BUY fills if `mid_price <= limit_price`, SELL fills if `mid_price >= limit_price` (deterministic, see ADR-016)
+  - **Tick-delay fills v0.1 (LC-03):**
+    - Orders stay OPEN for N ticks before fill-eligible (configurable via `fill_after_ticks`)
+    - `fill_after_ticks=0` (default): instant/crossing behavior (backward compatible)
+    - `fill_after_ticks=1+`: fill on tick N after placement (if price crosses)
+    - Order lifecycle: `PLACE → OPEN → (N ticks) → FILLED`
+    - Cancel before fill prevents filling
+    - Deterministic: same inputs → same fills (no randomness)
+    - Added `placed_tick` to `OrderRecord` for tracking
+    - Uses per-symbol `tick_counter` in `ExecutionState`
+    - 18 unit tests in `tests/unit/test_paper_realism.py`
+    - See ADR-034
   - **CycleEngine v1** (`src/grinder/paper/cycle_engine.py`):
     - Converts fills to TP + replenishment intents (§17.12.2)
     - BUY fill → SELL TP at `p_fill * (1 + step_pct)` for same qty
@@ -372,6 +383,50 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - **Unit tests:** `tests/unit/test_paper_execution.py` (21 tests)
   - **Integration tests:** `tests/integration/test_paper_write_path.py` (17 tests)
   - See ADR-030 for design decisions
+- **BinanceExchangePort v0.1** (`src/grinder/execution/binance_port.py`):
+  - Live exchange port implementing ExchangePort protocol for Binance Spot Testnet (LC-04)
+  - **Safety by design:**
+    - `SafeMode.READ_ONLY` (default): blocks ALL write operations → 0 risk
+    - `SafeMode.LIVE_TRADE` required for real API calls (explicit opt-in)
+    - Mainnet URLs (`api.binance.com`) forbidden in v0.1 (raises `ConnectorNonRetryableError`)
+    - Default URL: `https://testnet.binance.vision` (testnet only)
+  - **Injectable HTTP client:**
+    - `HttpClient` protocol for HTTP operations
+    - `NoopHttpClient` for mock transport testing (records calls but no real HTTP)
+    - `dry_run=True` config: returns synthetic results WITHOUT calling http_client (0 calls)
+    - Enables deterministic testing without external dependencies
+  - **Symbol whitelist:**
+    - `symbol_whitelist` config parameter
+    - Blocks trades for unlisted symbols (empty = all allowed)
+  - **Error mapping:**
+    - 5xx → `ConnectorTransientError` (retryable)
+    - 429 → `ConnectorTransientError` (rate limit)
+    - 418 → `ConnectorNonRetryableError` (IP ban)
+    - 4xx → `ConnectorNonRetryableError` (client error)
+  - **H2/H3/H4 integration:**
+    - Wrap with `IdempotentExchangePort` for idempotency + circuit breaker
+    - Replace = cancel + place with shared idempotency key (safe under retries)
+  - **Operations:**
+    - `place_order()`: POST /api/v3/order
+    - `cancel_order()`: DELETE /api/v3/order
+    - `replace_order()`: cancel + place
+    - `fetch_open_orders()`: GET /api/v3/openOrders
+  - **How to verify:**
+    ```bash
+    PYTHONPATH=src pytest tests/unit/test_binance_port.py -v
+    ```
+  - **Unit tests:** `tests/unit/test_binance_port.py` (28 tests)
+    - Dry-run tests prove NoopHttpClient makes 0 HTTP calls
+    - SafeMode tests prove READ_ONLY blocks writes
+    - Mainnet tests prove api.binance.com is rejected
+    - Error mapping tests prove correct classification
+    - Idempotency integration tests prove caching works
+  - **Limitations (v0.1):**
+    - Testnet only (mainnet forbidden)
+    - HTTP REST only (no WebSocket streaming)
+    - Spot only (no futures/margin)
+    - Real AiohttpClient not implemented (only protocol)
+  - See ADR-035 for design decisions
 - **DrawdownGuard v0** (`src/grinder/risk/drawdown.py`):
   - Tracks equity high-water mark (HWM)
   - Computes drawdown: `(HWM - equity) / HWM`
@@ -380,6 +435,77 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - **Equity definition:** `equity = initial_capital + total_realized_pnl + total_unrealized_pnl`
   - **HWM initialization:** First equity sample (starts at `initial_capital`)
   - See ADR-013 for design decisions
+- **AutoSizer v1** (`src/grinder/sizing/auto_sizer.py`):
+  - Risk-budget-based position sizing for grid policies (ASM-P2-01)
+  - **Core formula:** `qty_per_level = (equity * dd_budget) / (n_levels * price * adverse_move)`
+  - **Risk guarantee:** worst_case_loss <= equity * dd_budget
+  - **Sizing modes:** UNIFORM (default), PYRAMID, INVERSE_PYRAMID
+  - **Inputs:** equity, dd_budget (e.g., 0.20), adverse_move (e.g., 0.25), grid_shape, price
+  - **Output:** SizeSchedule with qty_per_level[], risk_utilization, worst_case_loss
+  - **Integration:** AdaptiveGridPolicy (opt-in via `auto_sizing_enabled=True`)
+  - **Backward compat:** When disabled, uses legacy uniform `size_per_level`
+  - **How to verify:**
+    ```bash
+    PYTHONPATH=src pytest tests/unit/test_auto_sizer.py tests/unit/test_adaptive_policy.py::TestAutoSizingIntegration -v
+    ```
+  - **Unit tests:** `tests/unit/test_auto_sizer.py` (36 tests)
+  - **Integration tests:** `tests/unit/test_adaptive_policy.py::TestAutoSizingIntegration` (5 tests)
+  - See ADR-031 for design decisions
+- **DdAllocator v1** (`src/grinder/sizing/dd_allocator.py`):
+  - Portfolio-to-symbol DD budget distribution (ASM-P2-02)
+  - **Inputs:** equity, portfolio_dd_budget, candidates[] (symbol, tier, weight, enabled)
+  - **Output:** AllocationResult with per-symbol dd_budget fractions and residual
+  - **Algorithm:** `risk_weight = user_weight / tier_factor`, normalize, distribute, ROUND_DOWN
+  - **Tier factors:** LOW=1.0, MED=1.5, HIGH=2.0 (higher = less budget)
+  - **Invariants (all tested):**
+    1. Non-negativity: all budgets >= 0
+    2. Conservation: sum(budgets) + residual == portfolio_budget
+    3. Determinism: same inputs → same outputs
+    4. Monotonicity: larger budget → no decrease
+    5. Tier ordering: HIGH <= MED <= LOW (at equal weights)
+  - **Residual policy:** ROUND_DOWN residual stays in cash reserve
+  - **Integration:** Output feeds into AdaptiveGridConfig.dd_budget → AutoSizer
+  - **How to verify:**
+    ```bash
+    PYTHONPATH=src pytest tests/unit/test_dd_allocator.py tests/unit/test_adaptive_policy.py::TestDdAllocatorIntegration -v
+    ```
+  - **Unit tests:** `tests/unit/test_dd_allocator.py` (28 tests)
+  - **Integration tests:** `tests/unit/test_adaptive_policy.py::TestDdAllocatorIntegration` (3 tests)
+  - See ADR-032 for design decisions
+- **DrawdownGuardV1** (`src/grinder/risk/drawdown_guard_v1.py`):
+  - Intent-based DD guard for portfolio and per-symbol risk enforcement (ASM-P2-03)
+  - **GuardState:** `NORMAL` (all intents allowed) | `DRAWDOWN` (reduce-only)
+  - **OrderIntent:** `INCREASE_RISK` | `REDUCE_RISK` | `CANCEL`
+  - **Transition triggers:**
+    - Portfolio DD >= portfolio_dd_limit, OR
+    - Symbol loss >= symbol_dd_budget
+  - **No auto-recovery:** Once in DRAWDOWN, stays until explicit `reset()` (deterministic)
+  - **Allow decision table:**
+    | State | Intent | Allowed | Reason |
+    |-------|--------|---------|--------|
+    | NORMAL | * | Yes | NORMAL_STATE |
+    | DRAWDOWN | INCREASE_RISK | No | DD_PORTFOLIO_BREACH / DD_SYMBOL_BREACH |
+    | DRAWDOWN | REDUCE_RISK | Yes | REDUCE_RISK_ALLOWED |
+    | DRAWDOWN | CANCEL | Yes | CANCEL_ALWAYS_ALLOWED |
+  - **PaperEngine wiring:** `src/grinder/paper/engine.py` Step 3.5 (lines 717-767)
+    - Enabled via `dd_guard_v1_enabled=True` in constructor
+    - Wiring point: after gating check, before execution
+    - Blocks INCREASE_RISK orders when in DRAWDOWN state
+  - **Reduce-only path (P2-04b):**
+    - `PaperEngine.flatten_position(symbol, price, ts)` — closes entire position
+    - Checks `guard.allow(REDUCE_RISK, symbol)` before executing
+    - Deterministic: same inputs → same fill output
+    - Allows emergency exit when DRAWDOWN is triggered
+  - **Reset hook (P2-04c):**
+    - `PaperEngine.reset_dd_guard_v1()` — returns guard to NORMAL state
+    - Use case: new session/day start
+    - Also called by `PaperEngine.reset()` (general reset)
+  - **How to verify:**
+    ```bash
+    PYTHONPATH=src pytest tests/unit/test_drawdown_guard_v1.py -v
+    ```
+  - **Unit tests:** `tests/unit/test_drawdown_guard_v1.py` (55 tests: 43 guard/wiring + 6 reduce-only + 6 reset)
+  - See ADR-033 for design decisions
 - **KillSwitch v0** (`src/grinder/risk/kill_switch.py`):
   - Simple emergency halt latch for trading
   - **Idempotent:** triggering twice is a no-op
@@ -536,7 +662,7 @@ Comprehensive adaptive grid system design:
     - **Formulas:** step=max(5, 0.3*NATR*regime_mult), width=clamp(2.0*NATR*sqrt(H/TF), 20, 500), levels=clamp(ceil(width/step), 2, 20)
     - **Regime multipliers:** RANGE=1.0, VOL_SHOCK=1.5, THIN_BOOK=2.0, TREND asymmetric (1.3× on against-trend side)
     - **Units:** All thresholds/multipliers as integer bps (×100 scale) for determinism
-    - **NOT included:** auto-sizing (legacy size_per_level), DD allocator, L2 features, Top-K integration
+    - **NOT included:** DD allocator, L2 features (auto-sizing now available via ASM-P2-01)
     - **Fixture:** `sample_day_adaptive` — paper digest `1b8af993a8435ee6`
   - ✅ **Top-K v1 (ASM-P1-06):** Feature-based symbol selection (see ADR-023)
     - **Opt-in:** `topk_v1_enabled=False` default (backward compat with existing digests)

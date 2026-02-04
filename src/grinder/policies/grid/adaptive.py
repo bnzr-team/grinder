@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any
 from grinder.controller.regime import Regime, RegimeConfig, classify_regime
 from grinder.core import GridMode, MarketRegime, ResetAction
 from grinder.policies.base import GridPlan, GridPolicy
+from grinder.sizing import AutoSizer, AutoSizerConfig, GridShape
 
 if TYPE_CHECKING:
     from grinder.features.types import FeatureSnapshot
@@ -85,11 +86,18 @@ class AdaptiveGridConfig:
     thin_book_step_mult: int = 200  # 2.00
     trend_width_mult: int = 130  # 1.30
 
-    # Size schedule (legacy)
+    # Size schedule (legacy - used when auto_sizing_enabled=False)
     size_per_level: Decimal = field(default_factory=lambda: Decimal("0.01"))
 
     # Regime config
     regime_config: RegimeConfig = field(default_factory=RegimeConfig)
+
+    # Auto-sizing (ASM-P2-01) - when enabled, computes size_schedule from risk budget
+    auto_sizing_enabled: bool = False
+    equity: Decimal | None = None  # Account equity (USD)
+    dd_budget: Decimal | None = None  # Max drawdown as decimal (0.20 = 20%)
+    adverse_move: Decimal | None = None  # Worst-case price move as decimal (0.25 = 25%)
+    auto_sizer_config: AutoSizerConfig = field(default_factory=AutoSizerConfig)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to JSON-serializable dict."""
@@ -108,6 +116,10 @@ class AdaptiveGridConfig:
             "trend_width_mult": self.trend_width_mult,
             "size_per_level": str(self.size_per_level),
             "regime_config": self.regime_config.to_dict(),
+            "auto_sizing_enabled": self.auto_sizing_enabled,
+            "equity": str(self.equity) if self.equity else None,
+            "dd_budget": str(self.dd_budget) if self.dd_budget else None,
+            "adverse_move": str(self.adverse_move) if self.adverse_move else None,
         }
 
 
@@ -346,9 +358,13 @@ class AdaptiveGridPolicy(GridPolicy):
         # Compute average width for GridPlan
         avg_width_bps = (width_up_bps + width_down_bps) // 2
 
-        # Build size schedule (legacy: uniform size)
+        # Build size schedule
         max_levels = max(levels_up, levels_down)
-        size_schedule = [self.config.size_per_level] * max_levels
+        size_schedule = self._compute_size_schedule(
+            max_levels=max_levels,
+            step_bps=step_bps,
+            price=mid_price,
+        )
 
         # Build reason codes
         reason_codes = [f"REGIME_{regime_decision.regime.value}"]
@@ -427,6 +443,55 @@ class AdaptiveGridPolicy(GridPolicy):
             reset_action=ResetAction.HARD,
             reason_codes=[reason],
         )
+
+    def _compute_size_schedule(
+        self,
+        max_levels: int,
+        step_bps: int,
+        price: Decimal,
+    ) -> list[Decimal]:
+        """Compute size schedule for grid levels.
+
+        If auto_sizing_enabled, uses AutoSizer to compute risk-aware quantities.
+        Otherwise, uses legacy uniform sizing from config.size_per_level.
+
+        Args:
+            max_levels: Maximum number of levels (for schedule length)
+            step_bps: Grid step in basis points
+            price: Current market price (for notional calculation)
+
+        Returns:
+            List of quantities per level (base asset units)
+        """
+        if not self.config.auto_sizing_enabled:
+            # Legacy: uniform sizing
+            return [self.config.size_per_level] * max_levels
+
+        # Auto-sizing: compute from risk budget
+        if (
+            self.config.equity is None
+            or self.config.dd_budget is None
+            or self.config.adverse_move is None
+        ):
+            # Missing required params - fall back to legacy
+            return [self.config.size_per_level] * max_levels
+
+        sizer = AutoSizer(self.config.auto_sizer_config)
+        grid_shape = GridShape(
+            levels=max_levels,
+            step_bps=float(step_bps),
+            top_k=0,  # Use all levels
+        )
+
+        schedule = sizer.compute(
+            equity=self.config.equity,
+            dd_budget=self.config.dd_budget,
+            adverse_move=self.config.adverse_move,
+            grid_shape=grid_shape,
+            price=price,
+        )
+
+        return schedule.qty_per_level
 
     def should_activate(self, features: dict[str, Any]) -> bool:
         """Check if this policy should be active.

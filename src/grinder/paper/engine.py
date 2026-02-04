@@ -23,17 +23,25 @@ from typing import Any
 
 from grinder.contracts import Snapshot
 from grinder.controller import AdaptiveController, ControllerMode
-from grinder.execution import ExecutionEngine, ExecutionState, NoOpExchangePort
+from grinder.core import OrderState
+from grinder.execution import ExecutionEngine, ExecutionState, NoOpExchangePort, OrderRecord
 from grinder.features import FeatureEngine, FeatureEngineConfig
 from grinder.gating import GateReason, GatingResult, RateLimiter, RiskGate, ToxicityGate
 from grinder.paper.cycle_engine import CycleEngine
-from grinder.paper.fills import simulate_fills
+from grinder.paper.fills import Fill, check_pending_fills, simulate_fills
 from grinder.paper.ledger import Ledger
 from grinder.policies.base import GridPlan  # noqa: TC001 - used at runtime
 from grinder.policies.grid.adaptive import AdaptiveGridConfig, AdaptiveGridPolicy
 from grinder.policies.grid.static import StaticGridPolicy
 from grinder.prefilter import TopKSelector, hard_filter
-from grinder.risk import DrawdownGuard, KillSwitch, KillSwitchReason
+from grinder.risk import (
+    DrawdownGuard,
+    DrawdownGuardV1,
+    DrawdownGuardV1Config,
+    KillSwitch,
+    KillSwitchReason,
+    OrderIntent,
+)
 from grinder.selection import SelectionCandidate, SelectionResult, TopKConfigV1, select_topk_v1
 
 # Output schema version for contract stability
@@ -72,6 +80,10 @@ class PaperOutput:
     # Note: NOT included in digest computation for backward compatibility.
     not_in_topk: bool = False
     topk_v1_rank: int | None = None
+    # v1 additions: DrawdownGuardV1 intent blocking (ADR-033)
+    # Note: NOT included in digest computation for backward compatibility.
+    blocked_by_dd_guard_v1: bool = False
+    dd_guard_v1_decision: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to JSON-serializable dict."""
@@ -92,6 +104,8 @@ class PaperOutput:
             "features": self.features,
             "not_in_topk": self.not_in_topk,
             "topk_v1_rank": self.topk_v1_rank,
+            "blocked_by_dd_guard_v1": self.blocked_by_dd_guard_v1,
+            "dd_guard_v1_decision": self.dd_guard_v1_decision,
         }
 
     def to_digest_dict(self) -> dict[str, Any]:
@@ -241,6 +255,8 @@ class PaperEngine:
         kill_switch_enabled: bool = False,
         # Fill simulation mode (ADR-016)
         fill_mode: str = "crossing",
+        # LC-03: Tick-delay fill model
+        fill_after_ticks: int = 0,  # 0 = instant/crossing (current), 1+ = tick delay
         # CycleEngine parameters (ADR-017)
         cycle_enabled: bool = False,
         cycle_step_pct: Decimal = Decimal("0.001"),  # 10 bps default
@@ -256,6 +272,9 @@ class PaperEngine:
         # Top-K v1 selection parameters (ADR-023)
         topk_v1_enabled: bool = False,
         topk_v1_config: TopKConfigV1 | None = None,
+        # DrawdownGuardV1 parameters (ADR-033)
+        dd_guard_v1_enabled: bool = False,
+        dd_guard_v1_config: DrawdownGuardV1Config | None = None,
     ) -> None:
         """Initialize paper trading engine.
 
@@ -286,6 +305,7 @@ class PaperEngine:
             max_drawdown_pct: Maximum drawdown percentage before kill-switch (default 5.0%)
             kill_switch_enabled: Enable drawdown guard and kill-switch (default False for backward compat)
             fill_mode: Fill simulation mode - "crossing" (default, v1.1) or "instant" (v1.0 compat)
+            fill_after_ticks: Ticks before order is fill-eligible (0=instant, 1+=delay) (LC-03)
             cycle_enabled: Enable CycleEngine for TP + replenishment (default False for backward compat)
             cycle_step_pct: Step percentage for TP/replenish placement (default 0.001 = 10 bps)
             feature_engine_enabled: Enable FeatureEngine for L1/volatility features (default False)
@@ -297,6 +317,8 @@ class PaperEngine:
             adaptive_config: Configuration for AdaptiveGridPolicy (uses defaults if None)
             topk_v1_enabled: Enable Top-K v1 selection with feature-based scoring (default False)
             topk_v1_config: Configuration for Top-K v1 selection (uses defaults if None)
+            dd_guard_v1_enabled: Enable DrawdownGuardV1 for intent-based blocking (default False)
+            dd_guard_v1_config: Configuration for DrawdownGuardV1 (uses defaults if None)
         """
         # Policy and execution
         self._policy = StaticGridPolicy(
@@ -355,6 +377,9 @@ class PaperEngine:
 
         # Fill simulation mode (ADR-016)
         self._fill_mode = fill_mode
+        # LC-03: Tick-delay fill model
+        self._fill_after_ticks = fill_after_ticks
+        self._snapshot_counter = 0  # Global tick counter for fill delay tracking
 
         # CycleEngine for TP + replenishment (ADR-017)
         self._cycle_enabled = cycle_enabled
@@ -396,6 +421,14 @@ class PaperEngine:
         # Cache for latest Top-K v1 selection result
         self._topk_v1_result: SelectionResult | None = None
 
+        # DrawdownGuardV1 for intent-based blocking (ADR-033)
+        self._dd_guard_v1_enabled = dd_guard_v1_enabled
+        self._dd_guard_v1: DrawdownGuardV1 | None = None
+        if dd_guard_v1_enabled:
+            self._dd_guard_v1 = DrawdownGuardV1(
+                config=dd_guard_v1_config or DrawdownGuardV1Config()
+            )
+
         # Per-symbol execution state
         self._states: dict[str, ExecutionState] = {}
 
@@ -415,6 +448,42 @@ class PaperEngine:
         if symbol not in self._states:
             self._states[symbol] = ExecutionState()
         return self._states[symbol]
+
+    def _update_orders_to_filled(self, symbol: str, filled_order_ids: set[str]) -> None:
+        """Update order states to FILLED for filled orders (LC-03).
+
+        Args:
+            symbol: Symbol to update
+            filled_order_ids: Set of order IDs that were filled
+        """
+        if symbol not in self._states:
+            return
+
+        state = self._states[symbol]
+        new_orders = dict(state.open_orders)
+
+        for order_id in filled_order_ids:
+            if order_id in new_orders:
+                old_order = new_orders[order_id]
+                # Create new OrderRecord with FILLED state
+                new_orders[order_id] = OrderRecord(
+                    order_id=old_order.order_id,
+                    symbol=old_order.symbol,
+                    side=old_order.side,
+                    price=old_order.price,
+                    quantity=old_order.quantity,
+                    state=OrderState.FILLED,
+                    level_id=old_order.level_id,
+                    created_ts=old_order.created_ts,
+                    placed_tick=old_order.placed_tick,
+                )
+
+        # Update state with new orders dict
+        self._states[symbol] = ExecutionState(
+            open_orders=new_orders,
+            last_plan_digest=state.last_plan_digest,
+            tick_counter=state.tick_counter,
+        )
 
     def _build_topk_v1_candidates(self) -> list[SelectionCandidate]:
         """Build Top-K v1 selection candidates from cached features and toxicity state.
@@ -536,6 +605,9 @@ class PaperEngine:
         """
         symbol = snapshot.symbol
         ts = snapshot.ts
+
+        # LC-03: Increment snapshot counter (for tick-delay fills)
+        self._snapshot_counter += 1
 
         # Track last price for unrealized PnL
         self._last_prices[symbol] = snapshot.mid_price
@@ -687,6 +759,58 @@ class PaperEngine:
                 features=features_dict,
             )
 
+        # Step 3.5: DrawdownGuardV1 intent-based blocking (ADR-033)
+        # Check BEFORE execution if INCREASE_RISK orders would be blocked
+        dd_guard_v1_decision_dict: dict[str, Any] | None = None
+        if self._dd_guard_v1_enabled and self._dd_guard_v1 is not None:
+            # Compute current equity = initial_capital + total_realized + total_unrealized
+            total_realized = self._ledger.get_total_realized_pnl()
+            total_unrealized = Decimal("0")
+            for sym, last_price in self._last_prices.items():
+                total_unrealized += self._ledger.get_unrealized_pnl(sym, last_price)
+            current_equity = self._initial_capital + total_realized + total_unrealized
+
+            # Compute symbol losses (negative total PnL → positive loss value)
+            symbol_losses: dict[str, Decimal] = {}
+            for sym in self._last_prices:
+                pos = self._ledger.get_position(sym)
+                unrealized = self._ledger.get_unrealized_pnl(sym, self._last_prices[sym])
+                total_pnl = pos.realized_pnl + unrealized
+                if total_pnl < Decimal("0"):
+                    symbol_losses[sym] = -total_pnl  # Convert to positive loss
+
+            # Update guard state with current equity and losses
+            self._dd_guard_v1.update(
+                equity_start=self._initial_capital,
+                equity_current=current_equity,
+                symbol_losses=symbol_losses,
+            )
+
+            # Classify intent: if plan places new orders → INCREASE_RISK
+            # (v1 simplification: any levels > 0 means new orders)
+            has_entry_orders = plan.levels_up > 0 or plan.levels_down > 0
+            if has_entry_orders:
+                dd_decision = self._dd_guard_v1.allow(OrderIntent.INCREASE_RISK, symbol)
+                dd_guard_v1_decision_dict = dd_decision.to_dict()
+
+                if not dd_decision.allowed:
+                    self._orders_blocked += 1
+                    return PaperOutput(
+                        ts=ts,
+                        symbol=symbol,
+                        prefilter_result=filter_result.to_dict(),
+                        gating_result=gating_result.to_dict(),
+                        plan=self._plan_to_dict(plan),
+                        actions=[],
+                        events=[],
+                        blocked_by_gating=False,
+                        fills=[],
+                        pnl_snapshot=pnl_snap.to_dict(),
+                        features=features_dict,
+                        blocked_by_dd_guard_v1=True,
+                        dd_guard_v1_decision=dd_guard_v1_decision_dict,
+                    )
+
         # Step 4: Execution
         state = self._get_state(symbol)
         result = self._engine.evaluate(plan, symbol, state, ts)
@@ -704,13 +828,43 @@ class PaperEngine:
         # Update state
         self._states[symbol] = result.state
 
-        # Step 5: Simulate fills for PLACE actions
-        # v1.1 (crossing): orders fill only if mid_price crosses/touches the limit price
-        # v1.0 (instant): all PLACE orders fill immediately (for backward compat)
+        # Step 5: Simulate fills
+        # LC-03: Two modes based on fill_after_ticks
+        # - fill_after_ticks=0: Original behavior (simulate_fills on PLACE actions)
+        # - fill_after_ticks>0: Tick-delay model (check ALL open orders for fill eligibility)
         action_dicts = [a.to_dict() for a in result.actions]
-        fills = simulate_fills(
-            ts, symbol, action_dicts, mid_price=snapshot.mid_price, fill_mode=self._fill_mode
-        )
+
+        if self._fill_after_ticks == 0:
+            # Original mode: fills based on PLACE actions and crossing model
+            fills = simulate_fills(
+                ts, symbol, action_dicts, mid_price=snapshot.mid_price, fill_mode=self._fill_mode
+            )
+        else:
+            # LC-03 tick-delay mode: check ALL open orders for fill eligibility
+            # Get updated state (includes newly placed orders with placed_tick set)
+            state = self._states[symbol]
+
+            # Collect OPEN orders for this symbol
+            open_orders = [
+                order
+                for order in state.open_orders.values()
+                if order.symbol == symbol and order.state == OrderState.OPEN
+            ]
+
+            # Check which orders are fill-eligible
+            # Use per-symbol tick_counter for consistency with placed_tick
+            fill_result = check_pending_fills(
+                ts=ts,
+                open_orders=open_orders,
+                mid_price=snapshot.mid_price,
+                current_tick=state.tick_counter,
+                fill_after_ticks=self._fill_after_ticks,
+            )
+            fills = fill_result.fills
+
+            # Update order states to FILLED for filled orders
+            if fill_result.filled_order_ids:
+                self._update_orders_to_filled(symbol, fill_result.filled_order_ids)
 
         # Step 6: Apply fills to ledger and get updated PnL
         self._ledger.apply_fills(fills)
@@ -1069,6 +1223,128 @@ class PaperEngine:
         content = json.dumps(outputs, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(content.encode()).hexdigest()[:16]
 
+    def flatten_position(
+        self,
+        symbol: str,
+        current_price: Decimal,
+        ts: int,
+    ) -> dict[str, Any]:
+        """Flatten (close) position for a symbol via reduce-only path.
+
+        This method implements the REDUCE_RISK path (P2-04b):
+        1. Checks if there's an open position for the symbol
+        2. Checks if REDUCE_RISK is allowed via DrawdownGuardV1
+        3. If allowed, generates a fill to close the entire position
+        4. Applies the fill to the ledger
+
+        Args:
+            symbol: Trading symbol to flatten
+            current_price: Current market price for the fill
+            ts: Timestamp for the fill
+
+        Returns:
+            Dict with:
+                - executed: bool - whether flatten was executed
+                - reason: str - why flatten did/didn't execute
+                - position_before: dict | None - position state before flatten
+                - position_after: dict | None - position state after flatten
+                - fill: dict | None - the fill that closed the position
+                - dd_guard_v1_decision: dict | None - guard decision if checked
+        """
+        result: dict[str, Any] = {
+            "executed": False,
+            "reason": "",
+            "position_before": None,
+            "position_after": None,
+            "fill": None,
+            "dd_guard_v1_decision": None,
+        }
+
+        # Check if position exists
+        pos = self._ledger.get_position(symbol)
+        if pos.quantity == Decimal("0"):
+            result["reason"] = "NO_POSITION"
+            return result
+
+        result["position_before"] = pos.to_dict()
+
+        # Check DrawdownGuardV1 if enabled
+        if self._dd_guard_v1_enabled and self._dd_guard_v1 is not None:
+            dd_decision = self._dd_guard_v1.allow(OrderIntent.REDUCE_RISK, symbol)
+            result["dd_guard_v1_decision"] = dd_decision.to_dict()
+
+            if not dd_decision.allowed:
+                # This shouldn't happen - REDUCE_RISK is always allowed
+                # But include for completeness
+                result["reason"] = "REDUCE_RISK_BLOCKED"
+                return result
+
+        # Generate fill to close position
+        # If long (qty > 0), we SELL to close
+        # If short (qty < 0), we BUY to close
+        side = "SELL" if pos.quantity > Decimal("0") else "BUY"
+        close_qty = abs(pos.quantity)
+
+        fill = Fill(
+            ts=ts,
+            symbol=symbol,
+            side=side,
+            price=current_price,
+            quantity=close_qty,
+            order_id=f"flatten_{ts}_{symbol}_{side}_{current_price}",
+        )
+
+        # Apply fill to ledger
+        self._ledger.apply_fill(fill)
+        self._total_fills += 1
+
+        # Update last price
+        self._last_prices[symbol] = current_price
+
+        # Get position after flatten
+        pos_after = self._ledger.get_position(symbol)
+        result["position_after"] = pos_after.to_dict()
+        result["fill"] = fill.to_dict()
+        result["executed"] = True
+        result["reason"] = "FLATTEN_EXECUTED"
+
+        return result
+
+    def reset_dd_guard_v1(self) -> dict[str, Any]:
+        """Reset DrawdownGuardV1 to NORMAL state.
+
+        Use this method at new session/day start to exit DRAWDOWN state.
+        This is the ONLY way to exit DRAWDOWN (no auto-recovery).
+
+        Returns:
+            Dict with:
+                - reset: bool - whether reset was performed
+                - state_before: str - state before reset
+                - state_after: str - state after reset
+                - reason: str - why reset did/didn't happen
+        """
+        result: dict[str, Any] = {
+            "reset": False,
+            "state_before": None,
+            "state_after": None,
+            "reason": "",
+        }
+
+        if not self._dd_guard_v1_enabled or self._dd_guard_v1 is None:
+            result["reason"] = "DD_GUARD_V1_NOT_ENABLED"
+            return result
+
+        result["state_before"] = self._dd_guard_v1.state.value
+
+        # Call reset on the guard
+        self._dd_guard_v1.reset()
+
+        result["state_after"] = self._dd_guard_v1.state.value
+        result["reset"] = True
+        result["reason"] = "RESET_TO_NORMAL"
+
+        return result
+
     def reset(self) -> None:
         """Reset all engine state for fresh run."""
         self._port.reset()
@@ -1081,6 +1357,8 @@ class PaperEngine:
         self._kill_switch.reset()
         if self._drawdown_guard is not None:
             self._drawdown_guard.reset()
+        if self._dd_guard_v1 is not None:
+            self._dd_guard_v1.reset()
         if self._feature_engine is not None:
             self._feature_engine.reset()
         self._topk_v1_result = None
@@ -1089,3 +1367,4 @@ class PaperEngine:
         self._orders_placed = 0
         self._orders_blocked = 0
         self._total_fills = 0
+        self._snapshot_counter = 0  # LC-03: Reset tick counter

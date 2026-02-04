@@ -1004,3 +1004,420 @@
   - Shared adapter for PAPER and LIVE_TRADE — rejected; different requirements (mock vs real API)
   - Random order IDs — rejected; breaks determinism for replay
   - Async paper operations — rejected; unnecessary complexity for in-memory simulation
+
+
+## ADR-031 — Auto-Sizing v1: Risk-Budget-Based Position Sizing (ASM-P2-01)
+- **Date:** 2026-02-04
+- **Status:** accepted
+- **Context:** Grid policies used uniform `size_per_level` without risk awareness. Position sizes were manually configured and didn't adapt to account equity, drawdown limits, or adverse market scenarios. This made it hard to ensure portfolio-level risk stayed within bounds.
+- **Decision:**
+  - **AutoSizer Module** (`src/grinder/sizing/auto_sizer.py`):
+    - Pure function computing size_schedule from risk parameters
+    - Inputs: `equity`, `dd_budget`, `adverse_move`, `grid_shape`, `price`
+    - Output: `SizeSchedule` with `qty_per_level[]` and risk metrics
+  - **Core Formula:**
+    ```
+    max_loss_usd = equity * dd_budget
+    total_qty_allowed = max_loss_usd / (price * adverse_move)
+    qty_per_level = total_qty_allowed / n_levels  (for uniform mode)
+    ```
+    - Worst-case assumption: All levels fill on one side, price moves by `adverse_move`
+    - Always rounds DOWN to stay within risk budget
+  - **Sizing Modes:**
+    - `UNIFORM`: Equal quantity at each level (default)
+    - `PYRAMID`: Larger quantities at outer levels
+    - `INVERSE_PYRAMID`: Smaller quantities at outer levels
+  - **Integration with AdaptiveGridPolicy:**
+    - `auto_sizing_enabled: bool` flag in config (default False for backward compat)
+    - When enabled, `_compute_size_schedule()` uses AutoSizer instead of legacy uniform sizing
+    - Falls back to legacy if equity/dd_budget/adverse_move are missing
+  - **Determinism:**
+    - Pure function: same inputs → same outputs
+    - Integer bps for risk parameters
+    - Decimal arithmetic with explicit rounding
+- **Risk Bound Guarantee:**
+  ```
+  worst_case_loss = sum(qty_i * price) * adverse_move
+  constraint: worst_case_loss <= equity * dd_budget
+  ```
+  - Due to ROUND_DOWN, actual utilization is always <= 100%
+  - `risk_utilization` metric tracks efficiency (should be ~90-99%)
+- **Configuration:**
+  ```python
+  AdaptiveGridConfig(
+      auto_sizing_enabled=True,
+      equity=Decimal("10000"),          # Account equity
+      dd_budget=Decimal("0.20"),        # 20% max drawdown
+      adverse_move=Decimal("0.25"),     # 25% worst-case price move
+      auto_sizer_config=AutoSizerConfig(
+          sizing_mode=SizingMode.UNIFORM,
+          min_qty=Decimal("0.0001"),    # Exchange minimum
+          qty_precision=8,
+      ),
+  )
+  ```
+- **Consequences:**
+  - Size schedules automatically adapt to account equity and risk parameters
+  - Risk bound is enforced: worst-case loss stays within dd_budget
+  - Backward compatible: legacy uniform sizing when auto_sizing_enabled=False
+  - Unit tests: 36 tests in `test_auto_sizer.py`
+  - Integration tests: 5 tests in `test_adaptive_policy.py::TestAutoSizingIntegration`
+- **Out of Scope (v1):**
+  - Multi-symbol DD allocation (deferred to ASM-P2-02)
+  - Dynamic equity tracking (equity is static config, not live P&L)
+  - Position-aware sizing (doesn't account for existing inventory)
+  - L2 depth-aware sizing
+- **Alternatives:**
+  - Kelly criterion sizing — rejected; requires probability estimates we don't have
+  - VaR-based sizing — rejected; needs distribution assumptions
+  - Fixed notional sizing — rejected; doesn't scale with account size
+
+## ADR-032 — DD Allocator v1: Portfolio-to-Symbol Budget Distribution (ASM-P2-02)
+- **Date:** 2026-02-04
+- **Status:** accepted
+- **Context:** ASM-P2-01 (AutoSizer) computes per-symbol size schedules from `dd_budget`, but doesn't address how to distribute a portfolio-level drawdown budget across multiple symbols. Manual allocation is error-prone and doesn't account for relative risk (volatility tiers).
+- **Decision:**
+  - **DdAllocator Module** (`src/grinder/sizing/dd_allocator.py`):
+    - Pure function distributing portfolio DD budget across symbols
+    - Inputs: `equity`, `portfolio_dd_budget`, `candidates[]` (symbol, tier, weight, enabled)
+    - Output: `AllocationResult` with per-symbol budgets and residual
+  - **Algorithm:**
+    1. Filter to enabled symbols only
+    2. Compute `risk_weight = user_weight / tier_factor` for each symbol
+    3. Normalize weights to sum to 1.0
+    4. Multiply normalized weights by `portfolio_budget_usd`
+    5. ROUND_DOWN to `budget_precision` decimal places
+    6. Residual goes to cash reserve (not reallocated)
+  - **Tier Factors (v1):**
+    - `LOW`: 1.0 (lowest risk, gets most budget)
+    - `MED`: 1.5
+    - `HIGH`: 2.0 (highest risk, gets least budget)
+    - Higher factor = higher risk = smaller budget allocation
+  - **Invariants (must always hold):**
+    1. **Non-negativity:** All budgets >= 0
+    2. **Conservation:** `sum(budgets) + residual == portfolio_budget` (exact with Decimal)
+    3. **Determinism:** Same inputs → same outputs (sorted by symbol)
+    4. **Monotonicity:** Larger portfolio budget → no symbol budget decreases
+    5. **Tier ordering:** At equal weights, HIGH <= MED <= LOW budget
+  - **Integration with AutoSizer:**
+    - DdAllocator output: `allocations[symbol]` = per-symbol dd_budget fraction
+    - Feed to AdaptiveGridConfig: `dd_budget=allocations[symbol]`
+    - AutoSizer then computes size_schedule using this per-symbol budget
+  - **Residual Policy:**
+    - ROUND_DOWN creates small residual (< sum of rounding errors)
+    - Residual stays in `residual_usd` field (cash reserve)
+    - Not reallocated to avoid complexity; caller can add to lowest-risk symbol if desired
+- **Configuration:**
+  ```python
+  allocator = DdAllocator(DdAllocatorConfig(
+      tier_factors={
+          RiskTier.LOW: Decimal("1.0"),
+          RiskTier.MED: Decimal("1.5"),
+          RiskTier.HIGH: Decimal("2.0"),
+      },
+      budget_precision=2,      # Round to cents
+      min_budget_usd=Decimal("1.0"),  # Below this = 0
+  ))
+
+  result = allocator.allocate(
+      equity=Decimal("100000"),
+      portfolio_dd_budget=Decimal("0.20"),  # 20% total
+      candidates=[
+          SymbolCandidate(symbol="BTCUSDT", tier=RiskTier.HIGH),
+          SymbolCandidate(symbol="ETHUSDT", tier=RiskTier.MED),
+          SymbolCandidate(symbol="BNBUSDT", tier=RiskTier.LOW),
+      ],
+  )
+  # result.allocations = {"BNBUSDT": 0.0869..., "BTCUSDT": 0.0434..., "ETHUSDT": 0.0580...}
+  ```
+- **Example (3 symbols, equal weights, default tiers):**
+  | Symbol | Tier | Factor | Risk Weight | Normalized | Budget USD |
+  |--------|------|--------|-------------|------------|------------|
+  | BNBUSDT | LOW | 1.0 | 1.0 | 0.4348 | $8,695.65 |
+  | ETHUSDT | MED | 1.5 | 0.667 | 0.2899 | $5,797.10 |
+  | BTCUSDT | HIGH | 2.0 | 0.5 | 0.2174 | $4,347.83 |
+  | **Total** | | | | 1.0 | $18,840.58 |
+  | Residual | | | | | $1,159.42 |
+- **Consequences:**
+  - Portfolio-level risk is automatically distributed to symbols
+  - Higher-risk symbols get smaller budgets (conservative)
+  - Custom weights allow overriding tier-based allocation
+  - Unit tests: 28 tests in `test_dd_allocator.py` (all 5 invariants covered)
+  - Integration tests: 3 tests in `test_adaptive_policy.py::TestDdAllocatorIntegration`
+- **Out of Scope (v1):**
+  - Dynamic correlation-aware allocation (Markowitz-style)
+  - Real-time volatility estimation for tier assignment
+  - Learning/EMA adaptation of tier factors
+  - Residual reallocation strategies
+- **Alternatives:**
+  - Equal allocation — rejected; ignores risk differences
+  - Inverse-volatility weighting — rejected; requires vol estimates we may not have
+  - Risk parity — rejected; needs covariance matrix
+
+## ADR-033 — Drawdown Guard Wiring v1: Intent-Based Risk Blocking (ASM-P2-03)
+- **Date:** 2026-02-04
+- **Status:** accepted
+- **Context:** ASM-P2-01/02 provide auto-sizing and DD allocation, but there's no mechanism to enforce risk limits at runtime. When portfolio or symbol DD exceeds limits, the system should block risk-increasing orders while allowing risk-reducing ones. This requires a deterministic guard that can be wired into the policy/execution pipeline.
+- **Decision:**
+  - **DrawdownGuardV1 Module** (`src/grinder/risk/drawdown_guard_v1.py`):
+    - Tracks DD at portfolio level AND per-symbol level
+    - GuardState: `NORMAL` | `DRAWDOWN`
+    - OrderIntent: `INCREASE_RISK` | `REDUCE_RISK` | `CANCEL`
+    - Transition NORMAL → DRAWDOWN when:
+      - Portfolio DD >= portfolio_dd_limit, OR
+      - Symbol loss >= symbol_dd_budget
+  - **Intent Classification (v1 rules):**
+    - `INCREASE_RISK`: New positions, grid entries, orders that increase exposure
+    - `REDUCE_RISK`: Closes, exits, flatten intents that decrease exposure
+    - `CANCEL`: Cancellation of existing orders
+  - **Allow Decision Logic:**
+    | State | Intent | Allowed | Reason |
+    |-------|--------|---------|--------|
+    | NORMAL | INCREASE_RISK | ✓ | NORMAL_STATE |
+    | NORMAL | REDUCE_RISK | ✓ | NORMAL_STATE |
+    | NORMAL | CANCEL | ✓ | CANCEL_ALWAYS_ALLOWED |
+    | DRAWDOWN | INCREASE_RISK | ✗ | DD_PORTFOLIO_BREACH or DD_SYMBOL_BREACH |
+    | DRAWDOWN | REDUCE_RISK | ✓ | REDUCE_RISK_ALLOWED |
+    | DRAWDOWN | CANCEL | ✓ | CANCEL_ALWAYS_ALLOWED |
+  - **No Auto-Recovery:**
+    - Once in DRAWDOWN, stays there until explicit `reset()` call
+    - Prevents flapping and ensures deterministic replay behavior
+    - Reset intended for new session/day start only
+  - **Global DRAWDOWN State (P2-04a):**
+    - Guard state is GLOBAL, not per-symbol
+    - When ANY symbol breaches its DD budget → entire guard transitions to DRAWDOWN
+    - In DRAWDOWN, INCREASE_RISK is blocked for ALL symbols, not just the breached one
+    - Rationale: Portfolio risk is correlated; if one symbol is losing, reducing exposure everywhere is prudent
+    - Example: BTCUSDT breaches $1000 budget → ETHUSDT INCREASE_RISK also blocked with reason `DD_SYMBOL_BREACH`
+  - **Reduce-Only Semantics (P2-04b):**
+    - In DRAWDOWN, `REDUCE_RISK` intent is always allowed
+    - Reduce-only action: `PaperEngine.flatten_position(symbol, price, ts)`
+    - Closes entire position at given price (no partial reduce in v0)
+    - If LONG → generates SELL fill; if SHORT → generates BUY fill
+    - Deterministic: same inputs → same fill output
+    - Guards checked: `guard.allow(REDUCE_RISK, symbol)` → always allowed in any state
+    - Use case: emergency position exit when DD limit breached
+  - **Reset Hook (P2-04c):**
+    - `PaperEngine.reset_dd_guard_v1()` — returns guard to NORMAL state
+    - Use case: new session/day start
+    - Transition: DRAWDOWN → NORMAL (or NORMAL → NORMAL, safe no-op)
+    - After reset: `INCREASE_RISK` is allowed again
+    - Also called by `PaperEngine.reset()` (general reset)
+    - Returns: `{reset: bool, state_before: str, state_after: str, reason: str}`
+  - **Reason Codes (stable, low-cardinality):**
+    - `NORMAL_STATE`: All intents allowed in normal operation
+    - `REDUCE_RISK_ALLOWED`: Reduce-only allowed in DRAWDOWN
+    - `CANCEL_ALWAYS_ALLOWED`: Cancels always permitted
+    - `DD_PORTFOLIO_BREACH`: Blocked due to portfolio DD limit
+    - `DD_SYMBOL_BREACH`: Blocked due to symbol DD limit
+  - **Wiring Point:** `src/grinder/paper/engine.py` Step 3.5 (lines 717-767)
+    - Guard sits BETWEEN gating check AND execution (BEFORE `ExecutionEngine.evaluate()`)
+    - Location: After `if not gating_result.allowed: return ...` block
+    - Flow: gating → **DD guard check** → execution
+    - On each snapshot:
+      1. Compute current equity from ledger (initial_capital + realized + unrealized)
+      2. Compute symbol losses (negative total PnL → positive loss value)
+      3. Call `guard.update(equity_start, equity_current, symbol_losses)`
+      4. If plan has entry levels, call `guard.allow(OrderIntent.INCREASE_RISK, symbol)`
+      5. If blocked, return early with `blocked_by_dd_guard_v1=True`
+    - Enabled via `dd_guard_v1_enabled=True` in PaperEngine constructor
+  - **Loss Calculation (v1):**
+    - Uses realized PnL (simpler, deterministic)
+    - Portfolio DD = (equity_start - equity_current) / equity_start
+    - Symbol loss = absolute USD loss (positive value)
+- **Configuration:**
+  ```python
+  guard = DrawdownGuardV1(DrawdownGuardV1Config(
+      portfolio_dd_limit=Decimal("0.20"),  # 20%
+      symbol_dd_budgets={
+          "BTCUSDT": Decimal("1000"),
+          "ETHUSDT": Decimal("500"),
+      },
+  ))
+
+  # On each tick
+  guard.update(
+      equity_current=equity,
+      equity_start=session_start_equity,
+      symbol_losses=ledger.get_realized_losses(),
+  )
+
+  # Before placing order
+  decision = guard.allow(OrderIntent.INCREASE_RISK, symbol="BTCUSDT")
+  if not decision.allowed:
+      logger.warning("Blocked by DD guard: %s", decision.reason.value)
+      return  # Skip order
+  ```
+- **Consequences:**
+  - Risk limits are enforced deterministically at runtime
+  - Policy can't accidentally increase risk beyond limits
+  - Reduce-only orders always pass (allows position unwinding)
+  - Unit tests: 39 tests in `test_drawdown_guard_v1.py` (34 guard + 5 wiring)
+  - All 5 invariants from v0 DrawdownGuard preserved
+  - Wiring integration tests verify blocking behavior in PaperEngine
+- **Out of Scope (v1):**
+  - Auto-recovery / hysteresis / cooldown
+  - Partial degradation states (WARN, DEGRADED)
+  - Mark-to-market PnL (uses realized only)
+  - Kill-switch integration (separate from DD guard)
+- **Alternatives:**
+  - Auto-recovery with cooldown — rejected; non-deterministic, risk of flapping
+  - Single state (just block all in DD) — rejected; need reduce-only for position exit
+  - Probabilistic blocking — rejected; breaks determinism
+
+---
+
+## ADR-034: Paper Realism v0.1 — Tick-Delay Fills (LC-03)
+
+- **Status:** Accepted
+- **Context:**
+  - Paper trading previously used instant fills (v0) or immediate crossing fills (v1)
+  - Real exchanges have latency: orders stay OPEN before being matched
+  - Instant fills make backtesting overly optimistic (no adverse selection modeling)
+  - Need deterministic fill model that's more realistic without randomness
+- **Decision:**
+  - Implement **tick-delay fill model** in `PaperEngine`
+  - New parameter: `fill_after_ticks: int = 0` (0 = current behavior, 1+ = delay)
+  - Order lifecycle: `PLACE → OPEN → (N ticks) → FILLED` (if price crosses)
+  - Cancel semantics: Cancel OPEN order before fill-eligible prevents fill
+  - Replace semantics: Replace OPEN order = cancel + place new (both get new tick count)
+- **Fill Rule (tick-count model):**
+  ```
+  Order placed at tick T fills at tick T + N (where N = fill_after_ticks)
+  IF price crossing condition is met:
+    - BUY fills if mid_price <= limit_price
+    - SELL fills if mid_price >= limit_price
+  ```
+- **Order State Tracking:**
+  - Added `placed_tick: int` to `OrderRecord` (tracks tick when placed)
+  - Each symbol has its own `tick_counter` in `ExecutionState`
+  - Orders in `FILLED` state are not re-checked for fills
+  - Orders in `CANCELLED` state are skipped
+- **Implementation:**
+  - `check_pending_fills()` in `fills.py` — checks existing OPEN orders
+  - `_update_orders_to_filled()` in `engine.py` — transitions order state
+  - `_snapshot_counter` in `PaperEngine` — global counter (for debugging)
+- **Determinism:**
+  - Same inputs → same fills (no randomness, no wall-clock)
+  - Fill order is deterministic (sorted by order_id)
+  - Tick count is discrete (integer), not time-based
+- **Backward Compatibility:**
+  - `fill_after_ticks=0` preserves existing behavior (instant/crossing)
+  - Default is 0 to avoid breaking existing fixtures/digests
+  - `placed_tick` defaults to 0 in `OrderRecord.from_dict()` for old data
+- **Configuration Example:**
+  ```python
+  engine = PaperEngine(
+      fill_after_ticks=1,  # Fill on next tick after placement
+      fill_mode="crossing",  # Price must still cross for fill
+  )
+  ```
+- **Consequences:**
+  - More realistic simulation (orders don't fill instantly)
+  - Cancel-before-fill is now possible (order management testing)
+  - Grid reconciliation works correctly with OPEN orders
+  - 18 unit tests in `test_paper_realism.py`
+  - Determinism preserved (replay produces identical results)
+- **Out of Scope (v0.1):**
+  - Partial fills
+  - Slippage / fees
+  - Order book depth (L2) simulation
+  - Probabilistic models (random delays)
+  - Time-based delays (uses tick count, not milliseconds)
+- **Future Extensions:**
+  - v0.2: Price-sensitive delay (further orders = longer delay)
+  - v0.3: Partial fills based on available liquidity
+  - v1.0: L2-based fill simulation
+
+## ADR-035: BinanceExchangePort v0.1 — Live Write-Path (LC-04)
+- **Date:** 2026-02-04
+- **Status:** Accepted
+- **Context:**
+  - Paper trading uses NoOpExchangePort (no real exchange calls)
+  - Need real Binance Spot API integration for live trading
+  - Must be impossible to accidentally trade real money (safety by default)
+  - Must integrate with existing H2/H3/H4/H5 hardening (retries, idempotency, circuit breaker, metrics)
+  - DoD v2 requires: testnet only in v0.1, symbol whitelist, injectable HTTP client for testing
+- **Decision:**
+  - **BinanceExchangePort** implements `ExchangePort` protocol (`src/grinder/execution/binance_port.py`)
+  - **SafeMode enforcement:**
+    - `SafeMode.READ_ONLY` (default): blocks all write operations → 0 risk
+    - `SafeMode.PAPER`: blocks write operations (use PaperExecutionAdapter instead)
+    - `SafeMode.LIVE_TRADE`: explicit opt-in required for real API calls
+    - Mode validation happens BEFORE any HTTP call
+  - **Mainnet forbidden in v0.1:**
+    - Config rejects any URL containing `api.binance.com`
+    - Default URL: `https://testnet.binance.vision` (safe by design)
+    - Raises `ConnectorNonRetryableError` if mainnet URL detected
+  - **Injectable HTTP client:**
+    - `HttpClient` protocol for HTTP operations
+    - `NoopHttpClient` for dry-run testing (0 real HTTP calls)
+    - Allows proving dry-run mode makes no network I/O
+  - **Symbol whitelist:**
+    - `symbol_whitelist` config parameter
+    - Blocks trades for symbols not in list (empty = all allowed)
+    - Raises `ConnectorNonRetryableError` if symbol blocked
+  - **Error mapping:**
+    - 5xx → `ConnectorTransientError` (retryable)
+    - 429 → `ConnectorTransientError` (rate limit, retryable)
+    - 418 → `ConnectorNonRetryableError` (IP ban, not retryable)
+    - 4xx → `ConnectorNonRetryableError` (client error, not retryable)
+    - Binance -1000 series → `ConnectorTransientError` (WAF, overload)
+    - Binance -1100/-2000 series → `ConnectorNonRetryableError` (validation)
+  - **H3 idempotency via IdempotentExchangePort wrapper:**
+    - Wrap `BinanceExchangePort` with `IdempotentExchangePort` for production use
+    - Replace = cancel + place with shared idempotency key
+    - Safe under retries: same request key → 1 side-effect
+  - **H4 circuit breaker via IdempotentExchangePort:**
+    - Optional `breaker` parameter in wrapper
+    - Fast-fail when upstream degraded (OPEN state)
+- **Implementation:**
+  - `BinanceExchangePort.place_order()`: POST /api/v3/order
+  - `BinanceExchangePort.cancel_order()`: DELETE /api/v3/order
+  - `BinanceExchangePort.replace_order()`: cancel + place (with contextlib.suppress)
+  - `BinanceExchangePort.fetch_open_orders()`: GET /api/v3/openOrders
+  - Order ID format: `grinder_{symbol}_{level_id}_{ts}_{counter}`
+  - HMAC-SHA256 signing for authenticated endpoints
+- **Testing:**
+  - 28 unit tests in `test_binance_port.py`
+  - Dry-run tests prove `NoopHttpClient` makes 0 HTTP calls
+  - SafeMode tests prove READ_ONLY/PAPER block writes
+  - Mainnet tests prove api.binance.com is rejected
+  - Whitelist tests prove unlisted symbols are blocked
+  - Error mapping tests prove correct classification
+  - Idempotency integration tests prove caching works
+  - Circuit breaker integration tests prove fast-fail works
+- **Consequences:**
+  - Live trading possible with explicit `SafeMode.LIVE_TRADE` opt-in
+  - Cannot accidentally trade on mainnet (forbidden in v0.1)
+  - Injectable HTTP client enables deterministic testing
+  - Integrates cleanly with existing H2/H3/H4/H5 stack
+- **SafeMode vs KillSwitch (Clarification):**
+  - **SafeMode** is a static, per-run configuration that controls whether the port CAN make HTTP calls
+    - Set at construction time, doesn't change during a run
+    - `READ_ONLY` → 0 writes allowed (safe by default)
+    - `LIVE_TRADE` → writes allowed (explicit opt-in)
+  - **KillSwitch** is a dynamic, runtime latch that blocks trading when triggered (ADR-013)
+    - Checked at orchestrator level (PaperEngine), NOT built into BinanceExchangePort
+    - Can trip mid-run (e.g., drawdown exceeded)
+    - Once triggered, stays triggered until explicit reset
+  - **Difference from RISK_SPEC.md "arming":**
+    - RISK_SPEC.md describes KillSwitch with `armed` flag (must arm before trigger works)
+    - Current implementation is simpler: `trip()` always works, `is_triggered` is the guard
+    - SafeMode does NOT replace arming - they're orthogonal:
+      - SafeMode = "can the port make API calls at all?"
+      - KillSwitch = "should we block trading right now?"
+  - **Integration pattern:**
+    - Orchestrator checks `kill_switch.is_triggered` BEFORE calling `port.place_order()`
+    - If triggered, skip the call (0 HTTP calls, no SafeMode check needed)
+    - If not triggered, SafeMode validation happens inside the port
+- **dry_run mode:**
+  - `BinanceExchangePortConfig.dry_run=True` returns synthetic results WITHOUT calling http_client
+  - Distinct from NoopHttpClient (which still receives calls for recording)
+  - `dry_run=True` guarantees 0 `http_client.request()` calls
+- **Out of Scope (v0.1):**
+  - WebSocket streaming (uses HTTP REST only)
+  - Mainnet support (testnet only)
+  - Futures/margin trading (spot only)
+  - Real AiohttpClient implementation (only protocol defined)
+  - Rate limiting (handled by H4 circuit breaker)
