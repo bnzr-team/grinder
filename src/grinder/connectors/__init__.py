@@ -34,6 +34,12 @@ from grinder.connectors.idempotency import (
     compute_idempotency_key,
     compute_request_fingerprint,
 )
+from grinder.connectors.live_connector import (
+    LiveConnectorConfig,
+    LiveConnectorStats,
+    LiveConnectorV0,
+    SafeMode,
+)
 from grinder.connectors.metrics import (
     CircuitMetricState,
     ConnectorMetrics,
@@ -71,10 +77,14 @@ __all__ = [
     "IdempotencyStatus",
     "IdempotencyStore",
     "InMemoryIdempotencyStore",
+    "LiveConnectorConfig",
+    "LiveConnectorStats",
+    "LiveConnectorV0",
     "MockConnectorStats",
     "RetryConfig",
     "RetryPolicy",
     "RetryStats",
+    "SafeMode",
     "TimeoutConfig",
     "compute_idempotency_key",
     "compute_request_fingerprint",

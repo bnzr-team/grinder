@@ -897,3 +897,54 @@
   - High-cardinality labels (symbol, order_id) — rejected; Prometheus cardinality explosion
   - Separate metrics endpoints — rejected; single `/metrics` is simpler and standard
   - Histogram for retry delays — deferred; counters sufficient for v1
+
+## ADR-029 — Live Connector v0: SafeMode + Hardening (M3-LC-01)
+- **Date:** 2026-02-04
+- **Status:** accepted
+- **Context:** Production deployment requires a live WebSocket connector for real-time market data from Binance. Connector must integrate existing hardening (H2 retries, H4 circuit breaker, H5 metrics) while enforcing safety constraints to prevent accidental live trading.
+- **Decision:**
+  - **SafeMode enum** (`src/grinder/connectors/live_connector.py`):
+    - `READ_ONLY` (default): Only read market data, no trading operations
+    - `PAPER`: Read data + simulated trading (paper mode)
+    - `LIVE_TRADE`: Full trading capability (requires explicit opt-in)
+  - **Safe defaults:**
+    - Default mode is `READ_ONLY` — must explicitly opt into trading
+    - Default URL is Binance testnet (`wss://testnet.binance.vision/ws`) — must explicitly configure mainnet
+    - Method `assert_mode(required_mode)` — raises `PermissionError` if current mode is insufficient
+  - **LiveConnectorV0** extends `DataConnector` ABC:
+    - `connect()`: establish WebSocket connection with H2 retries and H4 circuit breaker
+    - `close()`: clean shutdown with task cancellation
+    - `stream_ticks()` / `iter_snapshots()`: yield `Snapshot` objects (DataConnector compliance)
+    - `subscribe(symbols)`: add symbols to subscription
+    - `reconnect()`: reconnect after failure, preserving `last_seen_ts` for idempotency
+  - **H2/H4/H5 integration:**
+    - `RetryPolicy` for transient connection failures (configurable attempts, backoff)
+    - `CircuitBreaker` for fast-fail when upstream is degraded
+    - `get_connector_metrics()` integration for observability
+  - **Bounded-time testing:**
+    - Injectable `clock` parameter for deterministic time control
+    - Injectable `sleep_func` parameter for instant test execution
+    - FakeClock + FakeSleep utilities in tests
+  - **Configuration** (`LiveConnectorConfig`):
+    - `mode`: SafeMode (default: READ_ONLY)
+    - `symbols`: List of symbols to subscribe
+    - `ws_url`: WebSocket URL (default: testnet)
+    - `timeout_config`: TimeoutConfig for connect/read/close
+    - `retry_policy`: RetryPolicy for connection retries
+    - `circuit_breaker_config`: CircuitBreakerConfig for fast-fail
+  - **Statistics** (`LiveConnectorStats`):
+    - `ticks_received`, `connection_attempts`, `reconnections`, `retries`, `circuit_trips`, `timeouts`, `errors`
+  - **V0 scope** (mock implementation):
+    - `stream_ticks()` yields nothing (placeholder for real WebSocket integration)
+    - Contract verified, hardening wired, integration tests pass
+    - Real WebSocket integration deferred to v1
+- **Consequences:**
+  - Live connector is safe by default — must explicitly opt into trading
+  - Existing hardening (H2/H4/H5) reused without duplication
+  - Bounded-time tests complete in milliseconds, no flaky waits
+  - Unit tests: 31 tests in `test_live_connector.py`
+  - Integration tests: 6 tests in `test_live_connector_integration.py`
+- **Alternatives:**
+  - No SafeMode, rely on URL config only — rejected; too easy to accidentally trade on mainnet
+  - Separate read/write connectors — rejected; unnecessary complexity for v0
+  - Real WebSocket in v0 — rejected; contract-first approach, real integration in v1

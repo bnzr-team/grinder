@@ -323,6 +323,29 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - **Integration tests:** `tests/integration/test_connector_integration.py` (8 tests)
   - **Limitations:** no live WebSocket
   - See ADR-024 (H1 hardening), ADR-025 (H2 retries)
+- **LiveConnectorV0** (`src/grinder/connectors/live_connector.py`):
+  - Live WebSocket connector with SafeMode enforcement (read_only/paper/live_trade)
+  - **Features:**
+    - `SafeMode` enum: `READ_ONLY` (default), `PAPER`, `LIVE_TRADE`
+    - Default URL: Binance testnet (safe by design)
+    - `assert_mode(required_mode)` — raises `ConnectorNonRetryableError` if insufficient (non-retryable by design)
+    - Extends `DataConnector` ABC: `connect()`, `close()`, `stream_ticks()`, `subscribe()`, `reconnect()`
+    - H2/H4/H5 hardening: retries, circuit breaker, metrics integration
+  - **Configuration** (`LiveConnectorConfig`):
+    - `mode`: SafeMode (default: READ_ONLY)
+    - `symbols`: List of symbols to subscribe
+    - `ws_url`: WebSocket URL (default: testnet)
+    - `timeout_config`, `retry_policy`, `circuit_breaker_config`
+  - **Bounded-time testing:**
+    - Injectable `clock` and `sleep_func` parameters
+    - Tests complete in milliseconds with FakeClock/FakeSleep
+  - **V0 scope (mock implementation):**
+    - `stream_ticks()` yields nothing (placeholder for real WebSocket)
+    - Contract verified, hardening wired, tests pass
+    - Real WebSocket integration in v1
+  - **Unit tests:** `tests/unit/test_live_connector.py` (31 tests)
+  - **Integration tests:** `tests/integration/test_live_connector_integration.py` (6 tests)
+  - See ADR-029 for design decisions
 - **DrawdownGuard v0** (`src/grinder/risk/drawdown.py`):
   - Tracks equity high-water mark (HWM)
   - Computes drawdown: `(HWM - equity) / HWM`
@@ -445,7 +468,7 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
 ## Planned next
 - Расширить тесты до >50% coverage.
 - Adaptive Controller v1 (EMA-based adaptive step, trend detection, DRAWDOWN mode).
-- Live Binance WebSocket connector (implementing DataConnector ABC).
+- Live Connector v1 (real WebSocket integration for LiveConnectorV0).
 
 ## Smart Grid Spec Version
 
