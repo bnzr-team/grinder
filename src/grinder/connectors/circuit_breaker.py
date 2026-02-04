@@ -40,6 +40,8 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
+from grinder.connectors.metrics import CircuitMetricState, get_connector_metrics
+
 if TYPE_CHECKING:
     from collections.abc import Callable
 
@@ -159,7 +161,7 @@ class CircuitBreaker:
         """
         with self._lock:
             op_state = self._get_state(op_name)
-            self._maybe_transition_to_half_open(op_state)
+            self._maybe_transition_to_half_open(op_name, op_state)
             return op_state.state
 
     def allow(self, op_name: str) -> bool:
@@ -175,13 +177,14 @@ class CircuitBreaker:
             op_state = self._get_state(op_name)
 
             # Check for OPEN → HALF_OPEN transition
-            self._maybe_transition_to_half_open(op_state)
+            self._maybe_transition_to_half_open(op_name, op_state)
 
             if op_state.state == CircuitState.CLOSED:
                 return True
 
             if op_state.state == CircuitState.OPEN:
                 self._stats.rejected_calls += 1
+                get_connector_metrics().record_circuit_rejected(op_name)
                 return False
 
             # HALF_OPEN: allow limited probes
@@ -191,6 +194,7 @@ class CircuitBreaker:
 
             # Too many probes in HALF_OPEN, reject
             self._stats.rejected_calls += 1
+            get_connector_metrics().record_circuit_rejected(op_name)
             return False
 
     def before_call(self, op_name: str) -> None:
@@ -226,7 +230,7 @@ class CircuitBreaker:
                 op_state.consecutive_successes += 1
                 if op_state.consecutive_successes >= self._config.success_threshold:
                     # Enough successes, close the circuit
-                    self._transition_to_closed(op_state)
+                    self._transition_to_closed(op_name, op_state)
 
     def record_failure(self, op_name: str, reason: str = "") -> None:  # noqa: ARG002
         """Record failed operation.
@@ -247,14 +251,14 @@ class CircuitBreaker:
                 op_state.consecutive_successes = 0
 
                 if op_state.consecutive_failures >= self._config.failure_threshold:
-                    self._transition_to_open(op_state)
+                    self._transition_to_open(op_name, op_state)
                 return
 
             if op_state.state == CircuitState.HALF_OPEN:
                 # Any failure in HALF_OPEN → back to OPEN
-                self._transition_to_open(op_state)
+                self._transition_to_open(op_name, op_state)
 
-    def _maybe_transition_to_half_open(self, op_state: _OperationState) -> None:
+    def _maybe_transition_to_half_open(self, op_name: str, op_state: _OperationState) -> None:
         """Transition from OPEN → HALF_OPEN if cooldown elapsed.
 
         Must be called while holding lock.
@@ -268,8 +272,9 @@ class CircuitBreaker:
             op_state.half_open_probes = 0
             op_state.consecutive_successes = 0
             self._stats.state_transitions += 1
+            get_connector_metrics().set_circuit_state(op_name, CircuitMetricState.HALF_OPEN)
 
-    def _transition_to_open(self, op_state: _OperationState) -> None:
+    def _transition_to_open(self, op_name: str, op_state: _OperationState) -> None:
         """Transition to OPEN state.
 
         Must be called while holding lock.
@@ -279,8 +284,11 @@ class CircuitBreaker:
         op_state.half_open_probes = 0
         op_state.consecutive_successes = 0
         self._stats.state_transitions += 1
+        metrics = get_connector_metrics()
+        metrics.set_circuit_state(op_name, CircuitMetricState.OPEN)
+        metrics.record_circuit_trip(op_name, "threshold")
 
-    def _transition_to_closed(self, op_state: _OperationState) -> None:
+    def _transition_to_closed(self, op_name: str, op_state: _OperationState) -> None:
         """Transition to CLOSED state.
 
         Must be called while holding lock.
@@ -290,6 +298,7 @@ class CircuitBreaker:
         op_state.consecutive_successes = 0
         op_state.half_open_probes = 0
         self._stats.state_transitions += 1
+        get_connector_metrics().set_circuit_state(op_name, CircuitMetricState.CLOSED)
 
     @property
     def stats(self) -> CircuitBreakerStats:

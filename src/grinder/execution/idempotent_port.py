@@ -45,6 +45,7 @@ from grinder.connectors.idempotency import (
     compute_idempotency_key,
     compute_request_fingerprint,
 )
+from grinder.connectors.metrics import get_connector_metrics
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -164,10 +165,12 @@ class IdempotentExchangePort:
             if existing.status == IdempotencyStatus.DONE:
                 # Return cached result (don't record_success, it's a cache hit)
                 self._stats.place_cached += 1
+                get_connector_metrics().record_idempotency_hit("place")
                 return str(existing.result)
             if existing.status == IdempotencyStatus.INFLIGHT:
                 # Fast-fail on duplicate in-flight
                 self._stats.place_conflicts += 1
+                get_connector_metrics().record_idempotency_conflict("place")
                 raise IdempotencyConflictError(key, "INFLIGHT")
             # FAILED status - allow retry
 
@@ -186,9 +189,14 @@ class IdempotentExchangePort:
             existing = self.store.get(key)
             if existing and existing.status == IdempotencyStatus.DONE:
                 self._stats.place_cached += 1
+                get_connector_metrics().record_idempotency_hit("place")
                 return str(existing.result)
             self._stats.place_conflicts += 1
+            get_connector_metrics().record_idempotency_conflict("place")
             raise IdempotencyConflictError(key, "INFLIGHT")
+
+        # Successfully claimed the key (miss)
+        get_connector_metrics().record_idempotency_miss("place")
 
         # Step 3: Execute the actual operation
         try:
@@ -251,9 +259,11 @@ class IdempotentExchangePort:
         if existing is not None:
             if existing.status == IdempotencyStatus.DONE:
                 self._stats.cancel_cached += 1
+                get_connector_metrics().record_idempotency_hit("cancel")
                 return bool(existing.result)
             if existing.status == IdempotencyStatus.INFLIGHT:
                 self._stats.place_conflicts += 1
+                get_connector_metrics().record_idempotency_conflict("cancel")
                 raise IdempotencyConflictError(key, "INFLIGHT")
 
         # Create INFLIGHT entry
@@ -270,8 +280,13 @@ class IdempotentExchangePort:
             existing = self.store.get(key)
             if existing and existing.status == IdempotencyStatus.DONE:
                 self._stats.cancel_cached += 1
+                get_connector_metrics().record_idempotency_hit("cancel")
                 return bool(existing.result)
+            get_connector_metrics().record_idempotency_conflict("cancel")
             raise IdempotencyConflictError(key, "INFLIGHT")
+
+        # Successfully claimed the key (miss)
+        get_connector_metrics().record_idempotency_miss("cancel")
 
         # Step 3: Execute the actual operation
         try:
@@ -337,8 +352,10 @@ class IdempotentExchangePort:
         if existing is not None:
             if existing.status == IdempotencyStatus.DONE:
                 self._stats.replace_cached += 1
+                get_connector_metrics().record_idempotency_hit("replace")
                 return str(existing.result)
             if existing.status == IdempotencyStatus.INFLIGHT:
+                get_connector_metrics().record_idempotency_conflict("replace")
                 raise IdempotencyConflictError(key, "INFLIGHT")
 
         # Create INFLIGHT entry
@@ -355,8 +372,13 @@ class IdempotentExchangePort:
             existing = self.store.get(key)
             if existing and existing.status == IdempotencyStatus.DONE:
                 self._stats.replace_cached += 1
+                get_connector_metrics().record_idempotency_hit("replace")
                 return str(existing.result)
+            get_connector_metrics().record_idempotency_conflict("replace")
             raise IdempotencyConflictError(key, "INFLIGHT")
+
+        # Successfully claimed the key (miss)
+        get_connector_metrics().record_idempotency_miss("replace")
 
         # Step 3: Execute the actual operation
         try:

@@ -843,3 +843,57 @@
   - Global circuit (not per-op) — rejected; too coarse, one bad endpoint shouldn't block all
   - No HALF_OPEN, manual reset only — rejected; auto-recovery is essential for hands-off operation
   - Retry OPEN calls with backoff — rejected; defeats purpose of circuit breaker, use HALF_OPEN probes instead
+
+## ADR-028 — Connector Observability v1: H2/H3/H4 Metrics (PR-H5)
+- **Date:** 2026-02-04
+- **Status:** accepted
+- **Context:** Following H2 (Retries), H3 (Idempotency), and H4 (Circuit Breaker), we need Prometheus metrics to observe these components in production. Without metrics, operators cannot detect retry storms, idempotency conflicts, or circuit breaker trips until they cause visible failures.
+- **Decision:**
+  - **Metric naming convention:**
+    - Prefix: `grinder_` (consistent with existing metrics)
+    - Counter metrics: `_total` suffix
+    - Gauge metrics: no suffix (state)
+  - **H2 Retry metrics:**
+    - `grinder_connector_retries_total{op, reason}` (counter): total retry events
+    - Labels: `op` = operation name (place, cancel, replace, etc.), `reason` = transient, timeout, other
+  - **H3 Idempotency metrics:**
+    - `grinder_idempotency_hits_total{op}` (counter): cached result returned (no upstream call)
+    - `grinder_idempotency_conflicts_total{op}` (counter): INFLIGHT duplicate rejected
+    - `grinder_idempotency_misses_total{op}` (counter): new key, upstream call made
+  - **H4 Circuit Breaker metrics:**
+    - `grinder_circuit_state{op, state}` (gauge): 1 for current state, 0 for others
+    - States: closed, open, half_open
+    - `grinder_circuit_rejected_total{op}` (counter): calls rejected due to OPEN circuit
+    - `grinder_circuit_trips_total{op, reason}` (counter): circuit trips (CLOSED → OPEN)
+    - Reason: threshold (consecutive failures exceeded)
+  - **Cardinality rules (low cardinality only):**
+    - `op` — operation name only (place, cancel, replace, test_op, etc.)
+    - `reason` — enum values only (transient, timeout, other, threshold)
+    - `state` — enum values only (closed, open, half_open)
+    - **EXCLUDED from labels:** symbol, order_id, idempotency_key, timestamps, client_id
+    - Rationale: high-cardinality labels cause Prometheus scrape timeouts and memory issues
+  - **Module:** `src/grinder/connectors/metrics.py` with:
+    - `ConnectorMetrics` — dataclass tracking all counters/gauges
+    - `to_prometheus_lines()` — Prometheus text format output
+    - `get_connector_metrics()` / `reset_connector_metrics()` — global singleton
+    - `CircuitMetricState` — enum for state gauge (CLOSED, OPEN, HALF_OPEN)
+  - **Integration points:**
+    - `retries.py` — records retry metric after each retry event
+    - `idempotent_port.py` — records hit/conflict/miss metrics
+    - `circuit_breaker.py` — records state/rejected/trip metrics
+    - `metrics_builder.py` — includes connector metrics in `/metrics` output
+    - `live_contract.py` — updated REQUIRED_METRICS_PATTERNS
+  - **Compatibility policy:**
+    - Metric names and label keys are stable contracts (same as gating metrics)
+    - Adding new label values is safe (append-only)
+    - Removing/renaming metrics or labels is a breaking change requiring ADR
+    - Dashboards/alerts can rely on these metric names
+- **Consequences:**
+  - Operators can monitor retry rates, idempotency behavior, and circuit breaker health
+  - Alerts can trigger on: high retry rate, frequent conflicts, circuit trips
+  - Low cardinality ensures Prometheus stability at scale
+  - Unit tests: 45+ tests in `test_connector_metrics.py` covering all metric types
+- **Alternatives:**
+  - High-cardinality labels (symbol, order_id) — rejected; Prometheus cardinality explosion
+  - Separate metrics endpoints — rejected; single `/metrics` is simpler and standard
+  - Histogram for retry delays — deferred; counters sufficient for v1
