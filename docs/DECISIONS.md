@@ -1071,3 +1071,85 @@
   - Kelly criterion sizing — rejected; requires probability estimates we don't have
   - VaR-based sizing — rejected; needs distribution assumptions
   - Fixed notional sizing — rejected; doesn't scale with account size
+
+## ADR-032 — DD Allocator v1: Portfolio-to-Symbol Budget Distribution (ASM-P2-02)
+- **Date:** 2026-02-04
+- **Status:** accepted
+- **Context:** ASM-P2-01 (AutoSizer) computes per-symbol size schedules from `dd_budget`, but doesn't address how to distribute a portfolio-level drawdown budget across multiple symbols. Manual allocation is error-prone and doesn't account for relative risk (volatility tiers).
+- **Decision:**
+  - **DdAllocator Module** (`src/grinder/sizing/dd_allocator.py`):
+    - Pure function distributing portfolio DD budget across symbols
+    - Inputs: `equity`, `portfolio_dd_budget`, `candidates[]` (symbol, tier, weight, enabled)
+    - Output: `AllocationResult` with per-symbol budgets and residual
+  - **Algorithm:**
+    1. Filter to enabled symbols only
+    2. Compute `risk_weight = user_weight / tier_factor` for each symbol
+    3. Normalize weights to sum to 1.0
+    4. Multiply normalized weights by `portfolio_budget_usd`
+    5. ROUND_DOWN to `budget_precision` decimal places
+    6. Residual goes to cash reserve (not reallocated)
+  - **Tier Factors (v1):**
+    - `LOW`: 1.0 (lowest risk, gets most budget)
+    - `MED`: 1.5
+    - `HIGH`: 2.0 (highest risk, gets least budget)
+    - Higher factor = higher risk = smaller budget allocation
+  - **Invariants (must always hold):**
+    1. **Non-negativity:** All budgets >= 0
+    2. **Conservation:** `sum(budgets) + residual == portfolio_budget` (exact with Decimal)
+    3. **Determinism:** Same inputs → same outputs (sorted by symbol)
+    4. **Monotonicity:** Larger portfolio budget → no symbol budget decreases
+    5. **Tier ordering:** At equal weights, HIGH <= MED <= LOW budget
+  - **Integration with AutoSizer:**
+    - DdAllocator output: `allocations[symbol]` = per-symbol dd_budget fraction
+    - Feed to AdaptiveGridConfig: `dd_budget=allocations[symbol]`
+    - AutoSizer then computes size_schedule using this per-symbol budget
+  - **Residual Policy:**
+    - ROUND_DOWN creates small residual (< sum of rounding errors)
+    - Residual stays in `residual_usd` field (cash reserve)
+    - Not reallocated to avoid complexity; caller can add to lowest-risk symbol if desired
+- **Configuration:**
+  ```python
+  allocator = DdAllocator(DdAllocatorConfig(
+      tier_factors={
+          RiskTier.LOW: Decimal("1.0"),
+          RiskTier.MED: Decimal("1.5"),
+          RiskTier.HIGH: Decimal("2.0"),
+      },
+      budget_precision=2,      # Round to cents
+      min_budget_usd=Decimal("1.0"),  # Below this = 0
+  ))
+
+  result = allocator.allocate(
+      equity=Decimal("100000"),
+      portfolio_dd_budget=Decimal("0.20"),  # 20% total
+      candidates=[
+          SymbolCandidate(symbol="BTCUSDT", tier=RiskTier.HIGH),
+          SymbolCandidate(symbol="ETHUSDT", tier=RiskTier.MED),
+          SymbolCandidate(symbol="BNBUSDT", tier=RiskTier.LOW),
+      ],
+  )
+  # result.allocations = {"BNBUSDT": 0.0869..., "BTCUSDT": 0.0434..., "ETHUSDT": 0.0580...}
+  ```
+- **Example (3 symbols, equal weights, default tiers):**
+  | Symbol | Tier | Factor | Risk Weight | Normalized | Budget USD |
+  |--------|------|--------|-------------|------------|------------|
+  | BNBUSDT | LOW | 1.0 | 1.0 | 0.4348 | $8,695.65 |
+  | ETHUSDT | MED | 1.5 | 0.667 | 0.2899 | $5,797.10 |
+  | BTCUSDT | HIGH | 2.0 | 0.5 | 0.2174 | $4,347.83 |
+  | **Total** | | | | 1.0 | $18,840.58 |
+  | Residual | | | | | $1,159.42 |
+- **Consequences:**
+  - Portfolio-level risk is automatically distributed to symbols
+  - Higher-risk symbols get smaller budgets (conservative)
+  - Custom weights allow overriding tier-based allocation
+  - Unit tests: 28 tests in `test_dd_allocator.py` (all 5 invariants covered)
+  - Integration tests: 3 tests in `test_adaptive_policy.py::TestDdAllocatorIntegration`
+- **Out of Scope (v1):**
+  - Dynamic correlation-aware allocation (Markowitz-style)
+  - Real-time volatility estimation for tier assignment
+  - Learning/EMA adaptation of tier factors
+  - Residual reallocation strategies
+- **Alternatives:**
+  - Equal allocation — rejected; ignores risk differences
+  - Inverse-volatility weighting — rejected; requires vol estimates we may not have
+  - Risk parity — rejected; needs covariance matrix
