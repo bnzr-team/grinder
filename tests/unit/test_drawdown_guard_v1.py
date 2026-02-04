@@ -1211,3 +1211,194 @@ class TestReduceOnlyPath:
         assert result1["fill"] == result2["fill"]
         assert result1["position_before"] == result2["position_before"]
         assert result1["position_after"] == result2["position_after"]
+
+
+# --- Test Class: Reset Hook (P2-04c) ---
+
+
+class TestResetHook:
+    """Tests for reset hook verification (P2-04c).
+
+    Proves that:
+    1. reset_dd_guard_v1() exits DRAWDOWN state and returns to NORMAL
+    2. After reset, INCREASE_RISK is allowed again
+    3. Reset is the ONLY way to exit DRAWDOWN (no auto-recovery)
+    """
+
+    def test_reset_exits_drawdown_to_normal(self) -> None:
+        """reset_dd_guard_v1() transitions DRAWDOWN → NORMAL."""
+        config = DrawdownGuardV1Config(
+            portfolio_dd_limit=Decimal("0.10"),
+        )
+
+        engine = PaperEngine(
+            initial_capital=Decimal("100000"),
+            dd_guard_v1_enabled=True,
+            dd_guard_v1_config=config,
+        )
+
+        # Trigger DRAWDOWN
+        assert engine._dd_guard_v1 is not None
+        engine._dd_guard_v1.update(
+            equity_start=Decimal("100000"),
+            equity_current=Decimal("89000"),  # 11% DD
+            symbol_losses={},
+        )
+        assert engine._dd_guard_v1.is_drawdown is True
+
+        # Call reset
+        result = engine.reset_dd_guard_v1()
+
+        # Verify reset worked
+        assert result["reset"] is True
+        assert result["state_before"] == "DRAWDOWN"
+        assert result["state_after"] == "NORMAL"
+        assert result["reason"] == "RESET_TO_NORMAL"
+
+        # Verify guard is now NORMAL
+        assert engine._dd_guard_v1.is_drawdown is False
+        assert engine._dd_guard_v1.state == GuardState.NORMAL
+
+    def test_reset_allows_increase_risk_again(self) -> None:
+        """After reset, INCREASE_RISK is allowed again."""
+        config = DrawdownGuardV1Config(
+            portfolio_dd_limit=Decimal("0.10"),
+        )
+
+        engine = PaperEngine(
+            initial_capital=Decimal("100000"),
+            dd_guard_v1_enabled=True,
+            dd_guard_v1_config=config,
+        )
+
+        assert engine._dd_guard_v1 is not None
+
+        # Trigger DRAWDOWN
+        engine._dd_guard_v1.update(
+            equity_start=Decimal("100000"),
+            equity_current=Decimal("89000"),
+            symbol_losses={},
+        )
+
+        # Verify INCREASE_RISK is blocked
+        decision_before = engine._dd_guard_v1.allow(OrderIntent.INCREASE_RISK, "BTCUSDT")
+        assert decision_before.allowed is False
+
+        # Reset
+        engine.reset_dd_guard_v1()
+
+        # Verify INCREASE_RISK is now allowed
+        decision_after = engine._dd_guard_v1.allow(OrderIntent.INCREASE_RISK, "BTCUSDT")
+        assert decision_after.allowed is True
+        assert decision_after.reason == AllowReason.NORMAL_STATE
+
+    def test_reset_on_normal_state_is_noop(self) -> None:
+        """Resetting when already NORMAL is a safe no-op."""
+        config = DrawdownGuardV1Config(
+            portfolio_dd_limit=Decimal("0.10"),
+        )
+
+        engine = PaperEngine(
+            initial_capital=Decimal("100000"),
+            dd_guard_v1_enabled=True,
+            dd_guard_v1_config=config,
+        )
+
+        assert engine._dd_guard_v1 is not None
+        assert engine._dd_guard_v1.state == GuardState.NORMAL
+
+        # Call reset on already-NORMAL guard
+        result = engine.reset_dd_guard_v1()
+
+        # Should still succeed
+        assert result["reset"] is True
+        assert result["state_before"] == "NORMAL"
+        assert result["state_after"] == "NORMAL"
+        assert result["reason"] == "RESET_TO_NORMAL"
+
+    def test_reset_when_guard_disabled(self) -> None:
+        """reset_dd_guard_v1() handles disabled guard gracefully."""
+        engine = PaperEngine(
+            initial_capital=Decimal("100000"),
+            dd_guard_v1_enabled=False,  # Disabled
+        )
+
+        result = engine.reset_dd_guard_v1()
+
+        assert result["reset"] is False
+        assert result["reason"] == "DD_GUARD_V1_NOT_ENABLED"
+
+    def test_full_cycle_breach_reset_trade(self) -> None:
+        """Full cycle: normal → breach → DRAWDOWN → reset → normal trading.
+
+        This is the key use case for session/day start reset.
+        """
+        config = DrawdownGuardV1Config(
+            portfolio_dd_limit=Decimal("0.10"),
+            symbol_dd_budgets={"BTCUSDT": Decimal("1000")},
+        )
+
+        engine = PaperEngine(
+            initial_capital=Decimal("100000"),
+            dd_guard_v1_enabled=True,
+            dd_guard_v1_config=config,
+        )
+
+        assert engine._dd_guard_v1 is not None
+
+        # Phase 1: NORMAL state - trading allowed
+        decision = engine._dd_guard_v1.allow(OrderIntent.INCREASE_RISK, "BTCUSDT")
+        assert decision.allowed is True
+        assert decision.reason == AllowReason.NORMAL_STATE
+
+        # Phase 2: Trigger DRAWDOWN via symbol breach
+        engine._dd_guard_v1.update(
+            equity_start=Decimal("100000"),
+            equity_current=Decimal("98000"),
+            symbol_losses={"BTCUSDT": Decimal("1500")},  # Above $1000 budget
+        )
+        assert engine._dd_guard_v1.is_drawdown is True
+
+        # Phase 3: INCREASE_RISK blocked
+        decision = engine._dd_guard_v1.allow(OrderIntent.INCREASE_RISK, "BTCUSDT")
+        assert decision.allowed is False
+        assert decision.reason == AllowReason.DD_SYMBOL_BREACH
+
+        # Phase 4: Reset (simulates new session/day)
+        result = engine.reset_dd_guard_v1()
+        assert result["reset"] is True
+        assert result["state_after"] == "NORMAL"
+
+        # Phase 5: INCREASE_RISK allowed again
+        decision = engine._dd_guard_v1.allow(OrderIntent.INCREASE_RISK, "BTCUSDT")
+        assert decision.allowed is True
+        assert decision.reason == AllowReason.NORMAL_STATE
+
+    def test_general_reset_also_resets_dd_guard_v1(self) -> None:
+        """engine.reset() also resets DrawdownGuardV1."""
+        config = DrawdownGuardV1Config(
+            portfolio_dd_limit=Decimal("0.10"),
+        )
+
+        engine = PaperEngine(
+            initial_capital=Decimal("100000"),
+            dd_guard_v1_enabled=True,
+            dd_guard_v1_config=config,
+        )
+
+        assert engine._dd_guard_v1 is not None
+
+        # Trigger DRAWDOWN
+        engine._dd_guard_v1.update(
+            equity_start=Decimal("100000"),
+            equity_current=Decimal("89000"),
+            symbol_losses={},
+        )
+        assert engine._dd_guard_v1.is_drawdown is True
+
+        # Call general reset
+        engine.reset()
+
+        # Verify DD guard is also reset
+        assert engine._dd_guard_v1.is_drawdown is False
+        assert engine._dd_guard_v1.state == GuardState.NORMAL

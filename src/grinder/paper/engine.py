@@ -1234,6 +1234,41 @@ class PaperEngine:
 
         return result
 
+    def reset_dd_guard_v1(self) -> dict[str, Any]:
+        """Reset DrawdownGuardV1 to NORMAL state.
+
+        Use this method at new session/day start to exit DRAWDOWN state.
+        This is the ONLY way to exit DRAWDOWN (no auto-recovery).
+
+        Returns:
+            Dict with:
+                - reset: bool - whether reset was performed
+                - state_before: str - state before reset
+                - state_after: str - state after reset
+                - reason: str - why reset did/didn't happen
+        """
+        result: dict[str, Any] = {
+            "reset": False,
+            "state_before": None,
+            "state_after": None,
+            "reason": "",
+        }
+
+        if not self._dd_guard_v1_enabled or self._dd_guard_v1 is None:
+            result["reason"] = "DD_GUARD_V1_NOT_ENABLED"
+            return result
+
+        result["state_before"] = self._dd_guard_v1.state.value
+
+        # Call reset on the guard
+        self._dd_guard_v1.reset()
+
+        result["state_after"] = self._dd_guard_v1.state.value
+        result["reset"] = True
+        result["reason"] = "RESET_TO_NORMAL"
+
+        return result
+
     def reset(self) -> None:
         """Reset all engine state for fresh run."""
         self._port.reset()
@@ -1246,6 +1281,8 @@ class PaperEngine:
         self._kill_switch.reset()
         if self._drawdown_guard is not None:
             self._drawdown_guard.reset()
+        if self._dd_guard_v1 is not None:
+            self._dd_guard_v1.reset()
         if self._feature_engine is not None:
             self._feature_engine.reset()
         self._topk_v1_result = None
