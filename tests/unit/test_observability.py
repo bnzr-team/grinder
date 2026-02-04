@@ -8,6 +8,11 @@ Tests verify:
 
 from __future__ import annotations
 
+import pytest
+
+# Skip entire module if redis not installed (collection won't fail)
+pytest.importorskip("redis", reason="redis not installed")
+
 from grinder.gating import GateName, GateReason, get_gating_metrics, reset_gating_metrics
 from grinder.gating.metrics import (
     LABEL_GATE,

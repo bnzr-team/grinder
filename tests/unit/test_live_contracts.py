@@ -22,6 +22,9 @@ import json
 
 import pytest
 
+# Skip entire module if redis not installed (collection won't fail)
+pytest.importorskip("redis", reason="redis not installed")
+
 from grinder.gating import reset_gating_metrics
 from grinder.ha.role import HARole, reset_ha_state, set_ha_state
 from grinder.observability import (

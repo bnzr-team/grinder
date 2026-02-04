@@ -405,6 +405,37 @@ class TestIdempotentExchangePort:
         assert order_id1 != order_id2
         assert port.stats.place_executed == 2
 
+    def test_different_ts_same_key_single_execution(self, port: IdempotentExchangePort) -> None:
+        """Different timestamps produce same key - ts is excluded from idempotency key.
+
+        This is critical: same intent submitted at different times MUST be deduplicated.
+        If ts were in the key, retries would create duplicate orders.
+        """
+        # First call at ts=1000
+        order_id1 = port.place_order(
+            symbol="BTCUSDT",
+            side=OrderSide.BUY,
+            price=Decimal("50000"),
+            quantity=Decimal("0.001"),
+            level_id=1,
+            ts=1000,
+        )
+
+        # Second call with DIFFERENT ts (simulating retry or delayed re-submission)
+        order_id2 = port.place_order(
+            symbol="BTCUSDT",
+            side=OrderSide.BUY,
+            price=Decimal("50000"),
+            quantity=Decimal("0.001"),
+            level_id=1,
+            ts=2000,  # Different timestamp!
+        )
+
+        # Must return same order_id (cached) - proves ts is NOT in key
+        assert order_id1 == order_id2
+        assert port.stats.place_executed == 1  # Only executed once
+        assert port.stats.place_cached == 1  # Second was cached
+
     def test_cancel_order_idempotent(self, port: IdempotentExchangePort) -> None:
         """Cancel is idempotent - same result on retry."""
         # First, place an order

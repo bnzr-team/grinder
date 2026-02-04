@@ -119,7 +119,7 @@ class IdempotentExchangePort:
         """
         self._stats.place_calls += 1
 
-        # Compute idempotency key
+        # Compute idempotency key (ts excluded - same intent = same key regardless of time)
         key = compute_idempotency_key(
             self.scope,
             "place",
@@ -128,7 +128,6 @@ class IdempotentExchangePort:
             price=price,
             quantity=quantity,
             level_id=level_id,
-            ts=ts,
         )
 
         fingerprint = compute_request_fingerprint(
@@ -262,6 +261,7 @@ class IdempotentExchangePort:
         """
         self._stats.replace_calls += 1
 
+        # ts excluded from key - same replace intent = same key regardless of time
         key = compute_idempotency_key(
             self.scope,
             "replace",
@@ -270,7 +270,6 @@ class IdempotentExchangePort:
             order_id=order_id,
             price=new_price,
             quantity=new_quantity,
-            ts=ts,
         )
 
         fingerprint = compute_request_fingerprint(
