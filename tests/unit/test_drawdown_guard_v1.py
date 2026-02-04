@@ -793,3 +793,149 @@ class TestPaperEngineWiring:
         output_dict = output.to_dict()
         assert "blocked_by_dd_guard_v1" in output_dict
         assert "dd_guard_v1_decision" in output_dict
+
+
+# --- Test Class: Symbol Breach Wiring (P2-04a) ---
+
+
+class TestSymbolBreachWiring:
+    """Tests for symbol breach wiring verification (P2-04a).
+
+    Verifies:
+    1. Symbol breach triggers DRAWDOWN with DD_SYMBOL_BREACH reason
+    2. Guard is GLOBAL: symbol breach blocks ALL symbols, not just the breached one
+    """
+
+    def test_symbol_breach_blocks_with_dd_symbol_breach_reason(self) -> None:
+        """BTCUSDT breach blocks INCREASE_RISK with reason DD_SYMBOL_BREACH."""
+        config = DrawdownGuardV1Config(
+            portfolio_dd_limit=Decimal("0.50"),  # High limit so portfolio DD doesn't trigger
+            symbol_dd_budgets={
+                "BTCUSDT": Decimal("1000"),  # $1000 budget
+                "ETHUSDT": Decimal("500"),  # $500 budget
+            },
+        )
+        guard = DrawdownGuardV1(config)
+
+        # Update with BTCUSDT loss at exactly $1000 (at budget threshold)
+        snapshot = guard.update(
+            equity_current=Decimal("95000"),  # 5% portfolio DD (well below 50% limit)
+            equity_start=Decimal("100000"),
+            symbol_losses={
+                "BTCUSDT": Decimal("1000"),  # Exactly at budget - triggers breach
+            },
+        )
+
+        # Verify state transitioned to DRAWDOWN
+        assert snapshot.state == GuardState.DRAWDOWN
+        assert snapshot.trigger_reason == AllowReason.DD_SYMBOL_BREACH
+        assert "BTCUSDT" in snapshot.breached_symbols
+
+        # Verify INCREASE_RISK is blocked for BTCUSDT with correct reason
+        decision = guard.allow(OrderIntent.INCREASE_RISK, symbol="BTCUSDT")
+
+        assert decision.allowed is False
+        assert decision.reason == AllowReason.DD_SYMBOL_BREACH  # NOT DD_PORTFOLIO_BREACH
+        assert decision.state == GuardState.DRAWDOWN
+        assert decision.details is not None
+        assert decision.details.get("symbol") == "BTCUSDT"
+        assert decision.details.get("symbol_breached") is True
+
+    def test_symbol_breach_is_global_blocks_all_symbols(self) -> None:
+        """BTCUSDT breach blocks ALL symbols, not just BTCUSDT (global DRAWDOWN).
+
+        Per ADR-033: Guard is GLOBAL. When any symbol breaches its budget,
+        the entire guard transitions to DRAWDOWN state, blocking INCREASE_RISK
+        for ALL symbols (not just the breached symbol).
+        """
+        config = DrawdownGuardV1Config(
+            portfolio_dd_limit=Decimal("0.50"),  # High limit
+            symbol_dd_budgets={
+                "BTCUSDT": Decimal("1000"),
+                "ETHUSDT": Decimal("500"),
+            },
+        )
+        guard = DrawdownGuardV1(config)
+
+        # BTCUSDT breaches its $1000 budget
+        guard.update(
+            equity_current=Decimal("95000"),
+            equity_start=Decimal("100000"),
+            symbol_losses={
+                "BTCUSDT": Decimal("1500"),  # Above budget - breached
+                "ETHUSDT": Decimal("100"),  # Well below budget - NOT breached
+            },
+        )
+
+        # Verify BTCUSDT is blocked (expected - it breached)
+        btc_decision = guard.allow(OrderIntent.INCREASE_RISK, symbol="BTCUSDT")
+        assert btc_decision.allowed is False
+        assert btc_decision.reason == AllowReason.DD_SYMBOL_BREACH
+
+        # Verify ETHUSDT is ALSO blocked (global behavior)
+        # Even though ETHUSDT didn't breach its budget, the guard is global
+        eth_decision = guard.allow(OrderIntent.INCREASE_RISK, symbol="ETHUSDT")
+        assert eth_decision.allowed is False
+        assert eth_decision.reason == AllowReason.DD_SYMBOL_BREACH
+        # ETHUSDT details won't have symbol_breached=True since ETHUSDT itself didn't breach
+        assert eth_decision.details is not None
+        assert eth_decision.details.get("symbol") == "ETHUSDT"
+        # symbol_breached should be absent or False for ETHUSDT
+        assert eth_decision.details.get("symbol_breached") is not True
+
+        # Verify unknown symbol (BNBUSDT) is also blocked
+        bnb_decision = guard.allow(OrderIntent.INCREASE_RISK, symbol="BNBUSDT")
+        assert bnb_decision.allowed is False
+        assert bnb_decision.reason == AllowReason.DD_SYMBOL_BREACH
+
+    def test_reduce_risk_allowed_for_all_symbols_after_breach(self) -> None:
+        """REDUCE_RISK is allowed for all symbols even after symbol breach.
+
+        This ensures positions can be closed/reduced even when in DRAWDOWN.
+        """
+        config = DrawdownGuardV1Config(
+            portfolio_dd_limit=Decimal("0.50"),
+            symbol_dd_budgets={"BTCUSDT": Decimal("1000")},
+        )
+        guard = DrawdownGuardV1(config)
+
+        # Trigger DRAWDOWN via symbol breach
+        guard.update(
+            equity_current=Decimal("95000"),
+            equity_start=Decimal("100000"),
+            symbol_losses={"BTCUSDT": Decimal("1500")},
+        )
+
+        # REDUCE_RISK allowed for breached symbol
+        btc_reduce = guard.allow(OrderIntent.REDUCE_RISK, symbol="BTCUSDT")
+        assert btc_reduce.allowed is True
+        assert btc_reduce.reason == AllowReason.REDUCE_RISK_ALLOWED
+
+        # REDUCE_RISK allowed for non-breached symbol
+        eth_reduce = guard.allow(OrderIntent.REDUCE_RISK, symbol="ETHUSDT")
+        assert eth_reduce.allowed is True
+        assert eth_reduce.reason == AllowReason.REDUCE_RISK_ALLOWED
+
+    def test_cancel_allowed_for_all_symbols_after_breach(self) -> None:
+        """CANCEL is always allowed regardless of DRAWDOWN state."""
+        config = DrawdownGuardV1Config(
+            portfolio_dd_limit=Decimal("0.50"),
+            symbol_dd_budgets={"BTCUSDT": Decimal("1000")},
+        )
+        guard = DrawdownGuardV1(config)
+
+        # Trigger DRAWDOWN via symbol breach
+        guard.update(
+            equity_current=Decimal("95000"),
+            equity_start=Decimal("100000"),
+            symbol_losses={"BTCUSDT": Decimal("1500")},
+        )
+
+        # CANCEL allowed for any symbol
+        btc_cancel = guard.allow(OrderIntent.CANCEL, symbol="BTCUSDT")
+        eth_cancel = guard.allow(OrderIntent.CANCEL, symbol="ETHUSDT")
+
+        assert btc_cancel.allowed is True
+        assert btc_cancel.reason == AllowReason.CANCEL_ALWAYS_ALLOWED
+        assert eth_cancel.allowed is True
+        assert eth_cancel.reason == AllowReason.CANCEL_ALWAYS_ALLOWED
