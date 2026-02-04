@@ -92,6 +92,17 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - **Top-K prefilter:** Two-pass processing — first scan for volatility scores, then filter to top K symbols
   - **Gating gates:** toxicity (spread spike, price impact) + rate limit (orders/minute, cooldown) + risk limits (notional, daily loss)
   - **Fill simulation v1.1 (crossing/touch model):** BUY fills if `mid_price <= limit_price`, SELL fills if `mid_price >= limit_price` (deterministic, see ADR-016)
+  - **Tick-delay fills v0.1 (LC-03):**
+    - Orders stay OPEN for N ticks before fill-eligible (configurable via `fill_after_ticks`)
+    - `fill_after_ticks=0` (default): instant/crossing behavior (backward compatible)
+    - `fill_after_ticks=1+`: fill on tick N after placement (if price crosses)
+    - Order lifecycle: `PLACE → OPEN → (N ticks) → FILLED`
+    - Cancel before fill prevents filling
+    - Deterministic: same inputs → same fills (no randomness)
+    - Added `placed_tick` to `OrderRecord` for tracking
+    - Uses per-symbol `tick_counter` in `ExecutionState`
+    - 18 unit tests in `tests/unit/test_paper_realism.py`
+    - See ADR-034
   - **CycleEngine v1** (`src/grinder/paper/cycle_engine.py`):
     - Converts fills to TP + replenishment intents (§17.12.2)
     - BUY fill → SELL TP at `p_fill * (1 + step_pct)` for same qty

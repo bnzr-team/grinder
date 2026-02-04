@@ -1264,3 +1264,67 @@
   - Auto-recovery with cooldown — rejected; non-deterministic, risk of flapping
   - Single state (just block all in DD) — rejected; need reduce-only for position exit
   - Probabilistic blocking — rejected; breaks determinism
+
+---
+
+## ADR-034: Paper Realism v0.1 — Tick-Delay Fills (LC-03)
+
+- **Status:** Accepted
+- **Context:**
+  - Paper trading previously used instant fills (v0) or immediate crossing fills (v1)
+  - Real exchanges have latency: orders stay OPEN before being matched
+  - Instant fills make backtesting overly optimistic (no adverse selection modeling)
+  - Need deterministic fill model that's more realistic without randomness
+- **Decision:**
+  - Implement **tick-delay fill model** in `PaperEngine`
+  - New parameter: `fill_after_ticks: int = 0` (0 = current behavior, 1+ = delay)
+  - Order lifecycle: `PLACE → OPEN → (N ticks) → FILLED` (if price crosses)
+  - Cancel semantics: Cancel OPEN order before fill-eligible prevents fill
+  - Replace semantics: Replace OPEN order = cancel + place new (both get new tick count)
+- **Fill Rule (tick-count model):**
+  ```
+  Order placed at tick T fills at tick T + N (where N = fill_after_ticks)
+  IF price crossing condition is met:
+    - BUY fills if mid_price <= limit_price
+    - SELL fills if mid_price >= limit_price
+  ```
+- **Order State Tracking:**
+  - Added `placed_tick: int` to `OrderRecord` (tracks tick when placed)
+  - Each symbol has its own `tick_counter` in `ExecutionState`
+  - Orders in `FILLED` state are not re-checked for fills
+  - Orders in `CANCELLED` state are skipped
+- **Implementation:**
+  - `check_pending_fills()` in `fills.py` — checks existing OPEN orders
+  - `_update_orders_to_filled()` in `engine.py` — transitions order state
+  - `_snapshot_counter` in `PaperEngine` — global counter (for debugging)
+- **Determinism:**
+  - Same inputs → same fills (no randomness, no wall-clock)
+  - Fill order is deterministic (sorted by order_id)
+  - Tick count is discrete (integer), not time-based
+- **Backward Compatibility:**
+  - `fill_after_ticks=0` preserves existing behavior (instant/crossing)
+  - Default is 0 to avoid breaking existing fixtures/digests
+  - `placed_tick` defaults to 0 in `OrderRecord.from_dict()` for old data
+- **Configuration Example:**
+  ```python
+  engine = PaperEngine(
+      fill_after_ticks=1,  # Fill on next tick after placement
+      fill_mode="crossing",  # Price must still cross for fill
+  )
+  ```
+- **Consequences:**
+  - More realistic simulation (orders don't fill instantly)
+  - Cancel-before-fill is now possible (order management testing)
+  - Grid reconciliation works correctly with OPEN orders
+  - 18 unit tests in `test_paper_realism.py`
+  - Determinism preserved (replay produces identical results)
+- **Out of Scope (v0.1):**
+  - Partial fills
+  - Slippage / fees
+  - Order book depth (L2) simulation
+  - Probabilistic models (random delays)
+  - Time-based delays (uses tick count, not milliseconds)
+- **Future Extensions:**
+  - v0.2: Price-sensitive delay (further orders = longer delay)
+  - v0.3: Partial fills based on available liquidity
+  - v1.0: L2-based fill simulation

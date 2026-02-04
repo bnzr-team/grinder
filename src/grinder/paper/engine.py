@@ -23,11 +23,12 @@ from typing import Any
 
 from grinder.contracts import Snapshot
 from grinder.controller import AdaptiveController, ControllerMode
-from grinder.execution import ExecutionEngine, ExecutionState, NoOpExchangePort
+from grinder.core import OrderState
+from grinder.execution import ExecutionEngine, ExecutionState, NoOpExchangePort, OrderRecord
 from grinder.features import FeatureEngine, FeatureEngineConfig
 from grinder.gating import GateReason, GatingResult, RateLimiter, RiskGate, ToxicityGate
 from grinder.paper.cycle_engine import CycleEngine
-from grinder.paper.fills import Fill, simulate_fills
+from grinder.paper.fills import Fill, check_pending_fills, simulate_fills
 from grinder.paper.ledger import Ledger
 from grinder.policies.base import GridPlan  # noqa: TC001 - used at runtime
 from grinder.policies.grid.adaptive import AdaptiveGridConfig, AdaptiveGridPolicy
@@ -254,6 +255,8 @@ class PaperEngine:
         kill_switch_enabled: bool = False,
         # Fill simulation mode (ADR-016)
         fill_mode: str = "crossing",
+        # LC-03: Tick-delay fill model
+        fill_after_ticks: int = 0,  # 0 = instant/crossing (current), 1+ = tick delay
         # CycleEngine parameters (ADR-017)
         cycle_enabled: bool = False,
         cycle_step_pct: Decimal = Decimal("0.001"),  # 10 bps default
@@ -302,6 +305,7 @@ class PaperEngine:
             max_drawdown_pct: Maximum drawdown percentage before kill-switch (default 5.0%)
             kill_switch_enabled: Enable drawdown guard and kill-switch (default False for backward compat)
             fill_mode: Fill simulation mode - "crossing" (default, v1.1) or "instant" (v1.0 compat)
+            fill_after_ticks: Ticks before order is fill-eligible (0=instant, 1+=delay) (LC-03)
             cycle_enabled: Enable CycleEngine for TP + replenishment (default False for backward compat)
             cycle_step_pct: Step percentage for TP/replenish placement (default 0.001 = 10 bps)
             feature_engine_enabled: Enable FeatureEngine for L1/volatility features (default False)
@@ -373,6 +377,9 @@ class PaperEngine:
 
         # Fill simulation mode (ADR-016)
         self._fill_mode = fill_mode
+        # LC-03: Tick-delay fill model
+        self._fill_after_ticks = fill_after_ticks
+        self._snapshot_counter = 0  # Global tick counter for fill delay tracking
 
         # CycleEngine for TP + replenishment (ADR-017)
         self._cycle_enabled = cycle_enabled
@@ -441,6 +448,42 @@ class PaperEngine:
         if symbol not in self._states:
             self._states[symbol] = ExecutionState()
         return self._states[symbol]
+
+    def _update_orders_to_filled(self, symbol: str, filled_order_ids: set[str]) -> None:
+        """Update order states to FILLED for filled orders (LC-03).
+
+        Args:
+            symbol: Symbol to update
+            filled_order_ids: Set of order IDs that were filled
+        """
+        if symbol not in self._states:
+            return
+
+        state = self._states[symbol]
+        new_orders = dict(state.open_orders)
+
+        for order_id in filled_order_ids:
+            if order_id in new_orders:
+                old_order = new_orders[order_id]
+                # Create new OrderRecord with FILLED state
+                new_orders[order_id] = OrderRecord(
+                    order_id=old_order.order_id,
+                    symbol=old_order.symbol,
+                    side=old_order.side,
+                    price=old_order.price,
+                    quantity=old_order.quantity,
+                    state=OrderState.FILLED,
+                    level_id=old_order.level_id,
+                    created_ts=old_order.created_ts,
+                    placed_tick=old_order.placed_tick,
+                )
+
+        # Update state with new orders dict
+        self._states[symbol] = ExecutionState(
+            open_orders=new_orders,
+            last_plan_digest=state.last_plan_digest,
+            tick_counter=state.tick_counter,
+        )
 
     def _build_topk_v1_candidates(self) -> list[SelectionCandidate]:
         """Build Top-K v1 selection candidates from cached features and toxicity state.
@@ -562,6 +605,9 @@ class PaperEngine:
         """
         symbol = snapshot.symbol
         ts = snapshot.ts
+
+        # LC-03: Increment snapshot counter (for tick-delay fills)
+        self._snapshot_counter += 1
 
         # Track last price for unrealized PnL
         self._last_prices[symbol] = snapshot.mid_price
@@ -782,13 +828,43 @@ class PaperEngine:
         # Update state
         self._states[symbol] = result.state
 
-        # Step 5: Simulate fills for PLACE actions
-        # v1.1 (crossing): orders fill only if mid_price crosses/touches the limit price
-        # v1.0 (instant): all PLACE orders fill immediately (for backward compat)
+        # Step 5: Simulate fills
+        # LC-03: Two modes based on fill_after_ticks
+        # - fill_after_ticks=0: Original behavior (simulate_fills on PLACE actions)
+        # - fill_after_ticks>0: Tick-delay model (check ALL open orders for fill eligibility)
         action_dicts = [a.to_dict() for a in result.actions]
-        fills = simulate_fills(
-            ts, symbol, action_dicts, mid_price=snapshot.mid_price, fill_mode=self._fill_mode
-        )
+
+        if self._fill_after_ticks == 0:
+            # Original mode: fills based on PLACE actions and crossing model
+            fills = simulate_fills(
+                ts, symbol, action_dicts, mid_price=snapshot.mid_price, fill_mode=self._fill_mode
+            )
+        else:
+            # LC-03 tick-delay mode: check ALL open orders for fill eligibility
+            # Get updated state (includes newly placed orders with placed_tick set)
+            state = self._states[symbol]
+
+            # Collect OPEN orders for this symbol
+            open_orders = [
+                order
+                for order in state.open_orders.values()
+                if order.symbol == symbol and order.state == OrderState.OPEN
+            ]
+
+            # Check which orders are fill-eligible
+            # Use per-symbol tick_counter for consistency with placed_tick
+            fill_result = check_pending_fills(
+                ts=ts,
+                open_orders=open_orders,
+                mid_price=snapshot.mid_price,
+                current_tick=state.tick_counter,
+                fill_after_ticks=self._fill_after_ticks,
+            )
+            fills = fill_result.fills
+
+            # Update order states to FILLED for filled orders
+            if fill_result.filled_order_ids:
+                self._update_orders_to_filled(symbol, fill_result.filled_order_ids)
 
         # Step 6: Apply fills to ledger and get updated PnL
         self._ledger.apply_fills(fills)
@@ -1291,3 +1367,4 @@ class PaperEngine:
         self._orders_placed = 0
         self._orders_blocked = 0
         self._total_fills = 0
+        self._snapshot_counter = 0  # LC-03: Reset tick counter
