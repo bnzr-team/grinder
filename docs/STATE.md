@@ -245,12 +245,26 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - `is_retryable(error, policy)` — classifies errors as retryable/non-retryable
     - `retry_with_policy(op_name, operation, policy, sleep_func, on_retry)` — async retry wrapper with exponential backoff
     - `sleep_func` parameter enables bounded-time testing (no real sleeps)
+  - **Idempotency utilities (H3)** (`src/grinder/connectors/idempotency.py`):
+    - `IdempotencyStatus` — enum: `INFLIGHT`, `DONE`, `FAILED`
+    - `IdempotencyEntry` — dataclass: key, status, op_name, fingerprint, timestamps, result
+    - `IdempotencyStore` — protocol for pluggable storage
+    - `InMemoryIdempotencyStore` — thread-safe in-memory implementation with injectable clock
+    - `compute_idempotency_key(scope, op, **params)` — deterministic key from canonical payload
+    - `IdempotencyConflictError` — fast-fail on INFLIGHT duplicates
+  - **IdempotentExchangePort (H3)** (`src/grinder/execution/idempotent_port.py`):
+    - Wraps `ExchangePort` with idempotency guarantees for place/cancel/replace
+    - Same request with same key returns cached result (DONE)
+    - Concurrent duplicates fail fast with `IdempotencyConflictError` (INFLIGHT)
+    - FAILED entries allow retry (overwritable)
+    - Integrates with H2 retries: key created once, all retries use same key → 1 side-effect
+    - Stats tracking: `place_calls`, `place_cached`, `place_executed`, `place_conflicts`
   - **Timeout utilities** (`src/grinder/connectors/timeouts.py`):
     - `wait_for_with_op(coro, timeout_ms, op)` — wraps `asyncio.wait_for` with `ConnectorTimeoutError`
     - `cancel_tasks_with_timeout(tasks, timeout_ms)` — clean task cancellation
     - `create_named_task(coro, name, tasks_set)` — tracked task creation
   - **Idempotency:** `last_seen_ts` property for duplicate detection
-  - See ADR-012 (design), ADR-024 (H1 hardening), ADR-025 (H2 retries)
+  - See ADR-012 (design), ADR-024 (H1 hardening), ADR-025 (H2 retries), ADR-026 (H3 idempotency)
 - **BinanceWsMockConnector v1** (`src/grinder/connectors/binance_ws_mock.py`):
   - Mock connector that reads from fixture files (events.jsonl) and emits `Snapshot`
   - **Features:**

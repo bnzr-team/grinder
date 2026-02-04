@@ -10,6 +10,7 @@ Exception hierarchy:
   - ConnectorIOError (general I/O errors)
     - ConnectorTransientError (retryable: network, 5xx, 429)
     - ConnectorNonRetryableError (not retryable: 4xx, auth, validation)
+  - IdempotencyConflictError (duplicate request while INFLIGHT, non-retryable)
 """
 
 from __future__ import annotations
@@ -70,3 +71,23 @@ class ConnectorNonRetryableError(ConnectorIOError):
     """
 
     pass
+
+
+class IdempotencyConflictError(ConnectorError):
+    """Duplicate request detected while another is in-flight.
+
+    This error is raised when:
+    - A request with the same idempotency key is already being processed (INFLIGHT)
+    - The caller should NOT retry with this key until the in-flight request completes
+
+    This is a non-retryable error by design (fast-fail pattern in H3 v1).
+
+    Attributes:
+        key: The idempotency key that caused the conflict
+        status: Current status of the conflicting entry (typically INFLIGHT)
+    """
+
+    def __init__(self, key: str, status: str = "INFLIGHT") -> None:
+        self.key = key
+        self.status = status
+        super().__init__(f"Idempotency conflict: key '{key}' is {status}")

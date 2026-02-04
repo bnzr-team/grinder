@@ -15,6 +15,16 @@ from grinder.connectors.errors import (
     ConnectorNonRetryableError,
     ConnectorTimeoutError,
     ConnectorTransientError,
+    IdempotencyConflictError,
+)
+from grinder.connectors.idempotency import (
+    IdempotencyEntry,
+    IdempotencyStats,
+    IdempotencyStatus,
+    IdempotencyStore,
+    InMemoryIdempotencyStore,
+    compute_idempotency_key,
+    compute_request_fingerprint,
 )
 from grinder.connectors.retries import (
     RetryPolicy,
@@ -34,11 +44,19 @@ __all__ = [
     "ConnectorTransientError",
     "DataConnector",
     "ExchangeConnector",
+    "IdempotencyConflictError",
+    "IdempotencyEntry",
+    "IdempotencyStats",
+    "IdempotencyStatus",
+    "IdempotencyStore",
+    "InMemoryIdempotencyStore",
     "MockConnectorStats",
     "RetryConfig",
     "RetryPolicy",
     "RetryStats",
     "TimeoutConfig",
+    "compute_idempotency_key",
+    "compute_request_fingerprint",
     "is_retryable",
     "retry_with_policy",
 ]

@@ -752,3 +752,44 @@
   - Inline retry loops in connector methods — rejected; centralized utility is cleaner and testable
   - Real sleeps in tests — rejected; bounded-time tests are faster and deterministic
   - Retry all exceptions — rejected; fail fast on unknown errors prevents masking bugs
+
+## ADR-026 — Connector Hardening v3: Idempotency (PR-H3)
+- **Date:** 2026-02-04
+- **Status:** accepted
+- **Context:** Following H2 (Retries), H3 adds idempotency guarantees for write operations (place/cancel/amend). Without idempotency, retries can cause duplicate side-effects (double orders, double cancels). Per M3 hardening roadmap, write-path must be safe for retries.
+- **Decision:**
+  - **Idempotency Key Format**: `{scope}:{op}:{sha256_hex[:32]}` — deterministic hash of canonical payload, NOT random UUID
+    - Key components: `symbol`, `side`, `price`, `quantity`, `level_id`, `ts` (for place)
+    - Key components: `order_id` (for cancel/amend)
+    - Canonicalization: JSON with sorted keys, Decimal normalized, None excluded
+  - **IdempotencyStatus enum**: `INFLIGHT`, `DONE`, `FAILED`
+  - **IdempotencyEntry** (`src/grinder/connectors/idempotency.py`): dataclass tracking:
+    - `key`, `status`, `op_name`, `request_fingerprint`
+    - `created_at`, `expires_at`, `result`, `error_code`
+  - **IdempotencyStore protocol**: pluggable interface for storage:
+    - `get(key)` → entry or None (expired entries return None)
+    - `put_if_absent(key, entry, ttl_s)` → True if stored, False if exists
+    - `mark_done(key, result)` → update status and extend TTL
+    - `mark_failed(key, error_code)` → mark for retry
+    - `purge_expired(now)` → clean up old entries
+  - **InMemoryIdempotencyStore**: thread-safe in-memory implementation:
+    - Injectable clock for testing (`_clock` parameter)
+    - FAILED entries can be overwritten (retry allowed)
+    - Default TTLs: 300s for INFLIGHT, 86400s for DONE
+  - **IdempotentExchangePort** (`src/grinder/execution/idempotent_port.py`): wrapper for ExchangePort:
+    - Wraps `place_order`, `cancel_order`, `replace_order` with idempotency checks
+    - Flow: check store → if DONE return cached → if INFLIGHT raise conflict → put_if_absent → execute → mark_done
+    - `fetch_open_orders` passes through (no idempotency for reads)
+    - Stats tracking: `place_calls`, `place_cached`, `place_executed`, `place_conflicts`
+  - **IdempotencyConflictError**: fast-fail on INFLIGHT duplicates (non-retryable)
+  - **Integration with retries**: key created ONCE before retries, all retry attempts use same key → at most 1 side-effect
+- **Consequences:**
+  - Write operations are safe for retries — duplicate requests return cached result
+  - Concurrent duplicate requests get deterministic behavior (fast-fail)
+  - FAILED operations allow retry (entry overwritten)
+  - Tests: 32 tests in `test_idempotency.py` covering key generation, store operations, port behavior, retry integration
+  - Prepares for H4 (circuit breaker) and production Redis store
+- **Alternatives:**
+  - Random UUID keys — rejected; would break idempotency on retry (new key = new operation)
+  - Wait-for-INFLIGHT pattern — rejected; fast-fail is simpler and avoids deadlocks in v1
+  - Retry INFLIGHT conflicts — rejected; conflicts indicate concurrent duplicates, should fail fast
