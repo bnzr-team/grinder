@@ -417,6 +417,31 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - **Unit tests:** `tests/unit/test_dd_allocator.py` (28 tests)
   - **Integration tests:** `tests/unit/test_adaptive_policy.py::TestDdAllocatorIntegration` (3 tests)
   - See ADR-032 for design decisions
+- **DrawdownGuardV1** (`src/grinder/risk/drawdown_guard_v1.py`):
+  - Intent-based DD guard for portfolio and per-symbol risk enforcement (ASM-P2-03)
+  - **GuardState:** `NORMAL` (all intents allowed) | `DRAWDOWN` (reduce-only)
+  - **OrderIntent:** `INCREASE_RISK` | `REDUCE_RISK` | `CANCEL`
+  - **Transition triggers:**
+    - Portfolio DD >= portfolio_dd_limit, OR
+    - Symbol loss >= symbol_dd_budget
+  - **No auto-recovery:** Once in DRAWDOWN, stays until explicit `reset()` (deterministic)
+  - **Allow decision table:**
+    | State | Intent | Allowed | Reason |
+    |-------|--------|---------|--------|
+    | NORMAL | * | Yes | NORMAL_STATE |
+    | DRAWDOWN | INCREASE_RISK | No | DD_PORTFOLIO_BREACH / DD_SYMBOL_BREACH |
+    | DRAWDOWN | REDUCE_RISK | Yes | REDUCE_RISK_ALLOWED |
+    | DRAWDOWN | CANCEL | Yes | CANCEL_ALWAYS_ALLOWED |
+  - **PaperEngine wiring:** `src/grinder/paper/engine.py` Step 3.5 (lines 717-767)
+    - Enabled via `dd_guard_v1_enabled=True` in constructor
+    - Wiring point: after gating check, before execution
+    - Blocks INCREASE_RISK orders when in DRAWDOWN state
+  - **How to verify:**
+    ```bash
+    PYTHONPATH=src pytest tests/unit/test_drawdown_guard_v1.py -v
+    ```
+  - **Unit tests:** `tests/unit/test_drawdown_guard_v1.py` (39 tests: 34 guard + 5 wiring)
+  - See ADR-033 for design decisions
 - **KillSwitch v0** (`src/grinder/risk/kill_switch.py`):
   - Simple emergency halt latch for trading
   - **Idempotent:** triggering twice is a no-op

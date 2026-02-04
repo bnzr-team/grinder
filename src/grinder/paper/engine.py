@@ -33,7 +33,14 @@ from grinder.policies.base import GridPlan  # noqa: TC001 - used at runtime
 from grinder.policies.grid.adaptive import AdaptiveGridConfig, AdaptiveGridPolicy
 from grinder.policies.grid.static import StaticGridPolicy
 from grinder.prefilter import TopKSelector, hard_filter
-from grinder.risk import DrawdownGuard, KillSwitch, KillSwitchReason
+from grinder.risk import (
+    DrawdownGuard,
+    DrawdownGuardV1,
+    DrawdownGuardV1Config,
+    KillSwitch,
+    KillSwitchReason,
+    OrderIntent,
+)
 from grinder.selection import SelectionCandidate, SelectionResult, TopKConfigV1, select_topk_v1
 
 # Output schema version for contract stability
@@ -72,6 +79,10 @@ class PaperOutput:
     # Note: NOT included in digest computation for backward compatibility.
     not_in_topk: bool = False
     topk_v1_rank: int | None = None
+    # v1 additions: DrawdownGuardV1 intent blocking (ADR-033)
+    # Note: NOT included in digest computation for backward compatibility.
+    blocked_by_dd_guard_v1: bool = False
+    dd_guard_v1_decision: dict[str, Any] | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to JSON-serializable dict."""
@@ -92,6 +103,8 @@ class PaperOutput:
             "features": self.features,
             "not_in_topk": self.not_in_topk,
             "topk_v1_rank": self.topk_v1_rank,
+            "blocked_by_dd_guard_v1": self.blocked_by_dd_guard_v1,
+            "dd_guard_v1_decision": self.dd_guard_v1_decision,
         }
 
     def to_digest_dict(self) -> dict[str, Any]:
@@ -256,6 +269,9 @@ class PaperEngine:
         # Top-K v1 selection parameters (ADR-023)
         topk_v1_enabled: bool = False,
         topk_v1_config: TopKConfigV1 | None = None,
+        # DrawdownGuardV1 parameters (ADR-033)
+        dd_guard_v1_enabled: bool = False,
+        dd_guard_v1_config: DrawdownGuardV1Config | None = None,
     ) -> None:
         """Initialize paper trading engine.
 
@@ -297,6 +313,8 @@ class PaperEngine:
             adaptive_config: Configuration for AdaptiveGridPolicy (uses defaults if None)
             topk_v1_enabled: Enable Top-K v1 selection with feature-based scoring (default False)
             topk_v1_config: Configuration for Top-K v1 selection (uses defaults if None)
+            dd_guard_v1_enabled: Enable DrawdownGuardV1 for intent-based blocking (default False)
+            dd_guard_v1_config: Configuration for DrawdownGuardV1 (uses defaults if None)
         """
         # Policy and execution
         self._policy = StaticGridPolicy(
@@ -395,6 +413,14 @@ class PaperEngine:
         self._topk_v1_config = topk_v1_config or TopKConfigV1()
         # Cache for latest Top-K v1 selection result
         self._topk_v1_result: SelectionResult | None = None
+
+        # DrawdownGuardV1 for intent-based blocking (ADR-033)
+        self._dd_guard_v1_enabled = dd_guard_v1_enabled
+        self._dd_guard_v1: DrawdownGuardV1 | None = None
+        if dd_guard_v1_enabled:
+            self._dd_guard_v1 = DrawdownGuardV1(
+                config=dd_guard_v1_config or DrawdownGuardV1Config()
+            )
 
         # Per-symbol execution state
         self._states: dict[str, ExecutionState] = {}
@@ -686,6 +712,58 @@ class PaperEngine:
                 pnl_snapshot=pnl_snap.to_dict(),
                 features=features_dict,
             )
+
+        # Step 3.5: DrawdownGuardV1 intent-based blocking (ADR-033)
+        # Check BEFORE execution if INCREASE_RISK orders would be blocked
+        dd_guard_v1_decision_dict: dict[str, Any] | None = None
+        if self._dd_guard_v1_enabled and self._dd_guard_v1 is not None:
+            # Compute current equity = initial_capital + total_realized + total_unrealized
+            total_realized = self._ledger.get_total_realized_pnl()
+            total_unrealized = Decimal("0")
+            for sym, last_price in self._last_prices.items():
+                total_unrealized += self._ledger.get_unrealized_pnl(sym, last_price)
+            current_equity = self._initial_capital + total_realized + total_unrealized
+
+            # Compute symbol losses (negative total PnL → positive loss value)
+            symbol_losses: dict[str, Decimal] = {}
+            for sym in self._last_prices:
+                pos = self._ledger.get_position(sym)
+                unrealized = self._ledger.get_unrealized_pnl(sym, self._last_prices[sym])
+                total_pnl = pos.realized_pnl + unrealized
+                if total_pnl < Decimal("0"):
+                    symbol_losses[sym] = -total_pnl  # Convert to positive loss
+
+            # Update guard state with current equity and losses
+            self._dd_guard_v1.update(
+                equity_start=self._initial_capital,
+                equity_current=current_equity,
+                symbol_losses=symbol_losses,
+            )
+
+            # Classify intent: if plan places new orders → INCREASE_RISK
+            # (v1 simplification: any levels > 0 means new orders)
+            has_entry_orders = plan.levels_up > 0 or plan.levels_down > 0
+            if has_entry_orders:
+                dd_decision = self._dd_guard_v1.allow(OrderIntent.INCREASE_RISK, symbol)
+                dd_guard_v1_decision_dict = dd_decision.to_dict()
+
+                if not dd_decision.allowed:
+                    self._orders_blocked += 1
+                    return PaperOutput(
+                        ts=ts,
+                        symbol=symbol,
+                        prefilter_result=filter_result.to_dict(),
+                        gating_result=gating_result.to_dict(),
+                        plan=self._plan_to_dict(plan),
+                        actions=[],
+                        events=[],
+                        blocked_by_gating=False,
+                        fills=[],
+                        pnl_snapshot=pnl_snap.to_dict(),
+                        features=features_dict,
+                        blocked_by_dd_guard_v1=True,
+                        dd_guard_v1_decision=dd_guard_v1_decision_dict,
+                    )
 
         # Step 4: Execution
         state = self._get_state(symbol)
