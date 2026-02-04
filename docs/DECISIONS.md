@@ -1328,3 +1328,73 @@
   - v0.2: Price-sensitive delay (further orders = longer delay)
   - v0.3: Partial fills based on available liquidity
   - v1.0: L2-based fill simulation
+
+## ADR-035: BinanceExchangePort v0.1 — Live Write-Path (LC-04)
+- **Date:** 2026-02-04
+- **Status:** Accepted
+- **Context:**
+  - Paper trading uses NoOpExchangePort (no real exchange calls)
+  - Need real Binance Spot API integration for live trading
+  - Must be impossible to accidentally trade real money (safety by default)
+  - Must integrate with existing H2/H3/H4/H5 hardening (retries, idempotency, circuit breaker, metrics)
+  - DoD v2 requires: testnet only in v0.1, symbol whitelist, injectable HTTP client for testing
+- **Decision:**
+  - **BinanceExchangePort** implements `ExchangePort` protocol (`src/grinder/execution/binance_port.py`)
+  - **SafeMode enforcement:**
+    - `SafeMode.READ_ONLY` (default): blocks all write operations → 0 risk
+    - `SafeMode.PAPER`: blocks write operations (use PaperExecutionAdapter instead)
+    - `SafeMode.LIVE_TRADE`: explicit opt-in required for real API calls
+    - Mode validation happens BEFORE any HTTP call
+  - **Mainnet forbidden in v0.1:**
+    - Config rejects any URL containing `api.binance.com`
+    - Default URL: `https://testnet.binance.vision` (safe by design)
+    - Raises `ConnectorNonRetryableError` if mainnet URL detected
+  - **Injectable HTTP client:**
+    - `HttpClient` protocol for HTTP operations
+    - `NoopHttpClient` for dry-run testing (0 real HTTP calls)
+    - Allows proving dry-run mode makes no network I/O
+  - **Symbol whitelist:**
+    - `symbol_whitelist` config parameter
+    - Blocks trades for symbols not in list (empty = all allowed)
+    - Raises `ConnectorNonRetryableError` if symbol blocked
+  - **Error mapping:**
+    - 5xx → `ConnectorTransientError` (retryable)
+    - 429 → `ConnectorTransientError` (rate limit, retryable)
+    - 418 → `ConnectorNonRetryableError` (IP ban, not retryable)
+    - 4xx → `ConnectorNonRetryableError` (client error, not retryable)
+    - Binance -1000 series → `ConnectorTransientError` (WAF, overload)
+    - Binance -1100/-2000 series → `ConnectorNonRetryableError` (validation)
+  - **H3 idempotency via IdempotentExchangePort wrapper:**
+    - Wrap `BinanceExchangePort` with `IdempotentExchangePort` for production use
+    - Replace = cancel + place with shared idempotency key
+    - Safe under retries: same request key → 1 side-effect
+  - **H4 circuit breaker via IdempotentExchangePort:**
+    - Optional `breaker` parameter in wrapper
+    - Fast-fail when upstream degraded (OPEN state)
+- **Implementation:**
+  - `BinanceExchangePort.place_order()`: POST /api/v3/order
+  - `BinanceExchangePort.cancel_order()`: DELETE /api/v3/order
+  - `BinanceExchangePort.replace_order()`: cancel + place (with contextlib.suppress)
+  - `BinanceExchangePort.fetch_open_orders()`: GET /api/v3/openOrders
+  - Order ID format: `grinder_{symbol}_{level_id}_{ts}_{counter}`
+  - HMAC-SHA256 signing for authenticated endpoints
+- **Testing:**
+  - 28 unit tests in `test_binance_port.py`
+  - Dry-run tests prove `NoopHttpClient` makes 0 HTTP calls
+  - SafeMode tests prove READ_ONLY/PAPER block writes
+  - Mainnet tests prove api.binance.com is rejected
+  - Whitelist tests prove unlisted symbols are blocked
+  - Error mapping tests prove correct classification
+  - Idempotency integration tests prove caching works
+  - Circuit breaker integration tests prove fast-fail works
+- **Consequences:**
+  - Live trading possible with explicit `SafeMode.LIVE_TRADE` opt-in
+  - Cannot accidentally trade on mainnet (forbidden in v0.1)
+  - Injectable HTTP client enables deterministic testing
+  - Integrates cleanly with existing H2/H3/H4/H5 stack
+- **Out of Scope (v0.1):**
+  - WebSocket streaming (uses HTTP REST only)
+  - Mainnet support (testnet only)
+  - Futures/margin trading (spot only)
+  - Real AiohttpClient implementation (only protocol defined)
+  - Rate limiting (handled by H4 circuit breaker)
