@@ -403,15 +403,16 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
 
 ## Smart Grid Spec Version
 
-| Spec | Location | Status |
-|------|----------|--------|
-| v1.0 | `docs/smart_grid/SPEC_V1_0.md` | ✅ Implemented (ASM-P1-01..06) |
-| v1.1 | `docs/smart_grid/SPEC_V1_1.md` | ✅ Implemented (FeatureEngine) |
-| v1.2 | `docs/smart_grid/SPEC_V1_2.md` | ✅ Implemented (AdaptiveGridPolicy) |
-| v1.3 | `docs/smart_grid/SPEC_V1_3.md` | ✅ Implemented (Top-K v1) |
-| v2.0 | `docs/smart_grid/SPEC_V2_0.md` | 🔜 Planned (L2, partial fills, DD allocator) |
-| v3.0 | `docs/smart_grid/SPEC_V3_0.md` | 🔜 Planned (multi-venue, full production) |
+| Spec | Location | Status | Proof Anchor |
+|------|----------|--------|--------------|
+| v1.0 | `docs/smart_grid/SPEC_V1_0.md` | ✅ Implemented | `sample_day`, `sample_day_allowed` fixtures; ADR-019..021 |
+| v1.1 | `docs/smart_grid/SPEC_V1_1.md` | ✅ Implemented | FeatureEngine in `sample_day_adaptive`; ADR-019 |
+| v1.2 | `docs/smart_grid/SPEC_V1_2.md` | ✅ Implemented | `sample_day_adaptive` digest `1b8af993a8435ee6`; ADR-022 |
+| v1.3 | `docs/smart_grid/SPEC_V1_3.md` | ✅ Implemented | `sample_day_topk_v1` digest `63d981b60a8e9b3a`; ADR-023 |
+| v2.0 | `docs/smart_grid/SPEC_V2_0.md` | 🔜 Planned | — |
+| v3.0 | `docs/smart_grid/SPEC_V3_0.md` | 🔜 Planned | — |
 
+**Verification:** `python -m scripts.verify_determinism_suite` (8/8 fixtures PASS)
 **Current target:** `docs/smart_grid/SPEC_V1_3.md`
 **Roadmap:** `docs/smart_grid/ROADMAP.md`
 
