@@ -383,6 +383,50 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - **Unit tests:** `tests/unit/test_paper_execution.py` (21 tests)
   - **Integration tests:** `tests/integration/test_paper_write_path.py` (17 tests)
   - See ADR-030 for design decisions
+- **BinanceExchangePort v0.1** (`src/grinder/execution/binance_port.py`):
+  - Live exchange port implementing ExchangePort protocol for Binance Spot Testnet (LC-04)
+  - **Safety by design:**
+    - `SafeMode.READ_ONLY` (default): blocks ALL write operations → 0 risk
+    - `SafeMode.LIVE_TRADE` required for real API calls (explicit opt-in)
+    - Mainnet URLs (`api.binance.com`) forbidden in v0.1 (raises `ConnectorNonRetryableError`)
+    - Default URL: `https://testnet.binance.vision` (testnet only)
+  - **Injectable HTTP client:**
+    - `HttpClient` protocol for HTTP operations
+    - `NoopHttpClient` for mock transport testing (records calls but no real HTTP)
+    - `dry_run=True` config: returns synthetic results WITHOUT calling http_client (0 calls)
+    - Enables deterministic testing without external dependencies
+  - **Symbol whitelist:**
+    - `symbol_whitelist` config parameter
+    - Blocks trades for unlisted symbols (empty = all allowed)
+  - **Error mapping:**
+    - 5xx → `ConnectorTransientError` (retryable)
+    - 429 → `ConnectorTransientError` (rate limit)
+    - 418 → `ConnectorNonRetryableError` (IP ban)
+    - 4xx → `ConnectorNonRetryableError` (client error)
+  - **H2/H3/H4 integration:**
+    - Wrap with `IdempotentExchangePort` for idempotency + circuit breaker
+    - Replace = cancel + place with shared idempotency key (safe under retries)
+  - **Operations:**
+    - `place_order()`: POST /api/v3/order
+    - `cancel_order()`: DELETE /api/v3/order
+    - `replace_order()`: cancel + place
+    - `fetch_open_orders()`: GET /api/v3/openOrders
+  - **How to verify:**
+    ```bash
+    PYTHONPATH=src pytest tests/unit/test_binance_port.py -v
+    ```
+  - **Unit tests:** `tests/unit/test_binance_port.py` (28 tests)
+    - Dry-run tests prove NoopHttpClient makes 0 HTTP calls
+    - SafeMode tests prove READ_ONLY blocks writes
+    - Mainnet tests prove api.binance.com is rejected
+    - Error mapping tests prove correct classification
+    - Idempotency integration tests prove caching works
+  - **Limitations (v0.1):**
+    - Testnet only (mainnet forbidden)
+    - HTTP REST only (no WebSocket streaming)
+    - Spot only (no futures/margin)
+    - Real AiohttpClient not implemented (only protocol)
+  - See ADR-035 for design decisions
 - **DrawdownGuard v0** (`src/grinder/risk/drawdown.py`):
   - Tracks equity high-water mark (HWM)
   - Computes drawdown: `(HWM - equity) / HWM`
