@@ -29,6 +29,17 @@ class OrderRecord:
     """Internal order tracking record.
 
     This represents an order tracked by the execution engine.
+
+    Attributes:
+        order_id: Unique order identifier
+        symbol: Trading symbol
+        side: BUY or SELL
+        price: Limit price
+        quantity: Order quantity
+        state: Current order state (OPEN, FILLED, CANCELLED, etc.)
+        level_id: Grid level index
+        created_ts: Creation timestamp
+        placed_tick: Snapshot counter when order was placed (for tick-delay fills)
     """
 
     order_id: str
@@ -39,6 +50,7 @@ class OrderRecord:
     state: OrderState
     level_id: int  # Grid level index
     created_ts: int
+    placed_tick: int = 0  # Snapshot counter when placed (LC-03)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to JSON-serializable dict."""
@@ -51,6 +63,7 @@ class OrderRecord:
             "state": self.state.value,
             "level_id": self.level_id,
             "created_ts": self.created_ts,
+            "placed_tick": self.placed_tick,
         }
 
     @classmethod
@@ -65,6 +78,7 @@ class OrderRecord:
             state=OrderState(d["state"]),
             level_id=d["level_id"],
             created_ts=d["created_ts"],
+            placed_tick=d.get("placed_tick", 0),  # Backward compat
         )
 
 
