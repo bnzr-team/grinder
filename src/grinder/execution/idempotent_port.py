@@ -214,8 +214,8 @@ class IdempotentExchangePort:
 
             # Record failure with circuit breaker (if trip_on matches)
             if self.breaker is not None:
-                trip_on = self.trip_on or self.breaker._config.trip_on
-                if trip_on(e):
+                should_trip = self.trip_on or self.breaker.should_trip
+                if should_trip(e):
                     self.breaker.record_failure("place", str(e))
 
             raise
@@ -289,8 +289,8 @@ class IdempotentExchangePort:
 
             # Record failure with circuit breaker (if trip_on matches)
             if self.breaker is not None:
-                trip_on = self.trip_on or self.breaker._config.trip_on
-                if trip_on(e):
+                should_trip = self.trip_on or self.breaker.should_trip
+                if should_trip(e):
                     self.breaker.record_failure("cancel", str(e))
 
             raise
@@ -379,8 +379,8 @@ class IdempotentExchangePort:
 
             # Record failure with circuit breaker (if trip_on matches)
             if self.breaker is not None:
-                trip_on = self.trip_on or self.breaker._config.trip_on
-                if trip_on(e):
+                should_trip = self.trip_on or self.breaker.should_trip
+                if should_trip(e):
                     self.breaker.record_failure("replace", str(e))
 
             raise

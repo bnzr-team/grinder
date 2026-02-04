@@ -476,7 +476,7 @@ class TestIntegrationPattern:
             try:
                 mock_operation(should_fail=True)
             except ConnectorTransientError as e:
-                if breaker._config.trip_on(e):
+                if breaker.should_trip(e):
                     breaker.record_failure("place", str(e))
 
         assert breaker.state("place") == CircuitState.OPEN
@@ -526,7 +526,7 @@ class TestIntegrationPattern:
             except CircuitOpenError:
                 errors.append("circuit_open")
             except ConnectorTransientError as e:
-                if breaker._config.trip_on(e):
+                if breaker.should_trip(e):
                     breaker.record_failure("place", str(e))
                 errors.append(str(e))
 

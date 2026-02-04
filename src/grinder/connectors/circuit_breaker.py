@@ -303,6 +303,13 @@ class CircuitBreaker:
                 state_transitions=self._stats.state_transitions,
             )
 
+    def should_trip(self, error: Exception) -> bool:
+        """Check if error should trip the circuit breaker.
+
+        Public API for accessing the trip_on logic without exposing _config.
+        """
+        return self._config.trip_on(error)
+
     def reset(self, op_name: str | None = None) -> None:
         """Reset circuit breaker state.
 
