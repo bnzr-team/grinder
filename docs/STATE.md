@@ -236,15 +236,21 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - `ConnectorError` — base exception for all connector errors
     - `ConnectorTimeoutError(op, timeout_ms)` — timeout during connect/read/write/close
     - `ConnectorClosedError(op)` — operation attempted on closed connector
-    - `ConnectorIOError` — base for I/O errors (scaffolding for H2)
-    - `ConnectorTransientError` — retryable errors (scaffolding for H2)
-    - `ConnectorNonRetryableError` — non-retryable errors (scaffolding for H2/H4)
+    - `ConnectorIOError` — base for I/O errors
+    - `ConnectorTransientError` — retryable errors (network, 5xx, 429)
+    - `ConnectorNonRetryableError` — non-retryable errors (4xx, auth, validation)
+  - **Retry utilities (H2)** (`src/grinder/connectors/retries.py`):
+    - `RetryPolicy` — frozen dataclass: `max_attempts`, `base_delay_ms`, `max_delay_ms`, `backoff_multiplier`, `retry_on_timeout`
+    - `RetryStats` — tracks `attempts`, `retries`, `total_delay_ms`, `last_error`, `errors`
+    - `is_retryable(error, policy)` — classifies errors as retryable/non-retryable
+    - `retry_with_policy(op_name, operation, policy, sleep_func, on_retry)` — async retry wrapper with exponential backoff
+    - `sleep_func` parameter enables bounded-time testing (no real sleeps)
   - **Timeout utilities** (`src/grinder/connectors/timeouts.py`):
     - `wait_for_with_op(coro, timeout_ms, op)` — wraps `asyncio.wait_for` with `ConnectorTimeoutError`
     - `cancel_tasks_with_timeout(tasks, timeout_ms)` — clean task cancellation
     - `create_named_task(coro, name, tasks_set)` — tracked task creation
   - **Idempotency:** `last_seen_ts` property for duplicate detection
-  - See ADR-012 (design), ADR-024 (hardening)
+  - See ADR-012 (design), ADR-024 (H1 hardening), ADR-025 (H2 retries)
 - **BinanceWsMockConnector v1** (`src/grinder/connectors/binance_ws_mock.py`):
   - Mock connector that reads from fixture files (events.jsonl) and emits `Snapshot`
   - **Features:**
@@ -273,10 +279,15 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
         print(f"Got {snapshot.symbol} @ {snapshot.mid_price}")
     await connector.close()
     ```
-  - **Unit tests:** `tests/unit/test_data_connector.py` (47 tests)
+  - **Transient failure simulation (H2):**
+    - `TransientFailureConfig(connect_failures, read_failures, failure_message)` for testing retry logic
+    - `connect_failures`: N connect attempts fail with `ConnectorTransientError` before success
+    - `read_failures`: N read operations fail before success
+    - Stats track `transient_failures_injected` count
+  - **Unit tests:** `tests/unit/test_data_connector.py` (47 tests), `tests/unit/test_retries.py` (35 tests)
   - **Integration tests:** `tests/integration/test_connector_integration.py` (8 tests)
-  - **Limitations:** no live WebSocket, retry logic is interface-only (not used in mock)
-  - See ADR-024 for H1 hardening decisions
+  - **Limitations:** no live WebSocket
+  - See ADR-024 (H1 hardening), ADR-025 (H2 retries)
 - **DrawdownGuard v0** (`src/grinder/risk/drawdown.py`):
   - Tracks equity high-water mark (HWM)
   - Computes drawdown: `(HWM - equity) / HWM`

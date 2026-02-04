@@ -29,6 +29,7 @@ from grinder.connectors.data_connector import (
 from grinder.connectors.errors import (
     ConnectorClosedError,
     ConnectorTimeoutError,
+    ConnectorTransientError,
 )
 from grinder.connectors.timeouts import (
     cancel_tasks_with_timeout,
@@ -52,7 +53,25 @@ class MockConnectorStats:
     timeouts: int = 0
     tasks_cancelled: int = 0
     tasks_force_killed: int = 0
+    transient_failures_injected: int = 0
     errors: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class TransientFailureConfig:
+    """Configuration for simulating transient failures in mock connector.
+
+    Used for testing retry logic without real network issues.
+
+    Attributes:
+        connect_failures: Number of connect() calls to fail before success
+        read_failures: Number of read operations to fail before success
+        failure_message: Message for simulated failures
+    """
+
+    connect_failures: int = 0
+    read_failures: int = 0
+    failure_message: str = "Simulated transient failure"
 
 
 class BinanceWsMockConnector(DataConnector):
@@ -87,6 +106,7 @@ class BinanceWsMockConnector(DataConnector):
         timeout_config: TimeoutConfig | None = None,
         retry_config: RetryConfig | None = None,
         symbols: list[str] | None = None,
+        transient_failure_config: TransientFailureConfig | None = None,
     ) -> None:
         """Initialize mock connector.
 
@@ -96,12 +116,14 @@ class BinanceWsMockConnector(DataConnector):
             timeout_config: Timeout settings (not used in mock, but for interface)
             retry_config: Retry settings (not used in mock, but for interface)
             symbols: Filter to specific symbols (None = all symbols)
+            transient_failure_config: Config for simulating transient failures (H2 testing)
         """
         self._fixture_path = fixture_path
         self._read_delay_ms = read_delay_ms
         self._timeout_config = timeout_config or TimeoutConfig()
         self._retry_config = retry_config or RetryConfig()
         self._symbols = set(symbols) if symbols else None
+        self._transient_failure_config = transient_failure_config or TransientFailureConfig()
 
         # Internal state
         self._state = ConnectorState.DISCONNECTED
@@ -109,6 +131,10 @@ class BinanceWsMockConnector(DataConnector):
         self._events: list[dict[str, Any]] = []
         self._cursor: int = 0
         self._stats = MockConnectorStats()
+
+        # Failure injection counters (for H2 retry testing)
+        self._connect_failure_count = 0
+        self._read_failure_count = 0
 
         # Task tracking for clean shutdown (no zombies)
         self._tasks: set[asyncio.Task[Any]] = set()
@@ -166,6 +192,12 @@ class BinanceWsMockConnector(DataConnector):
         """Internal connect implementation."""
         # Simulate minimal async yield
         await asyncio.sleep(0.001)
+
+        # Simulate transient failures for testing retry logic (H2)
+        if self._connect_failure_count < self._transient_failure_config.connect_failures:
+            self._connect_failure_count += 1
+            self._stats.transient_failures_injected += 1
+            raise ConnectorTransientError(self._transient_failure_config.failure_message)
 
         self._events = self._load_fixture()
         self._cursor = 0
@@ -237,6 +269,12 @@ class BinanceWsMockConnector(DataConnector):
 
             # Parse and yield snapshot
             try:
+                # Simulate transient read failures for testing retry logic (H2)
+                if self._read_failure_count < self._transient_failure_config.read_failures:
+                    self._read_failure_count += 1
+                    self._stats.transient_failures_injected += 1
+                    raise ConnectorTransientError(self._transient_failure_config.failure_message)
+
                 snapshot = self._parse_snapshot(event)
                 self._last_seen_ts = ts
                 self._stats.snapshots_delivered += 1

@@ -714,3 +714,41 @@
   - Per-call timeout parameters — rejected; TimeoutConfig as connector attribute is cleaner and consistent
   - Raw `asyncio.TimeoutError` — rejected; typed errors enable better error handling upstream
   - Fire-and-forget task cancellation — rejected; must await to ensure clean shutdown
+
+## ADR-025 — Connector Hardening v2: Retry Utilities (PR-H2)
+- **Date:** 2026-02-04
+- **Status:** accepted
+- **Context:** Following H1 (Timeouts + Error Hierarchy), H2 adds retry-with-backoff utilities for transient connector failures. Per M3 hardening roadmap, retry logic must be centralized, testable, and support deterministic testing (no real sleeps in unit tests).
+- **Decision:**
+  - **RetryPolicy** (`src/grinder/connectors/retries.py`): frozen dataclass configuring retry behavior:
+    - `max_attempts` (default 3): total attempts (1 = no retries)
+    - `base_delay_ms` (default 100): initial delay between retries
+    - `max_delay_ms` (default 5000): maximum delay cap for backoff
+    - `backoff_multiplier` (default 2.0): exponential backoff factor
+    - `retry_on_timeout` (default True): whether to retry `ConnectorTimeoutError`
+    - `compute_delay_ms(attempt)`: computes delay for given attempt with exponential backoff and cap
+  - **RetryStats**: tracks `attempts`, `retries`, `total_delay_ms`, `last_error`, `errors` list
+  - **is_retryable(error, policy)**: error classification function:
+    - `ConnectorTransientError` → always retryable
+    - `ConnectorTimeoutError` → retryable if `policy.retry_on_timeout`
+    - `ConnectorNonRetryableError`, `ConnectorClosedError` → never retryable
+    - Unknown exceptions → fail fast (not retried)
+  - **retry_with_policy()**: async utility wrapping operations with retry logic:
+    - `sleep_func` parameter for injecting fake sleep in tests (bounded-time testing)
+    - `on_retry` callback for observability/logging
+    - Returns `tuple[T, RetryStats]` for telemetry
+  - **TransientFailureConfig**: mock connector configuration for simulating failures:
+    - `connect_failures`: N connect attempts fail before success
+    - `read_failures`: N read operations fail before success
+    - `failure_message`: custom message for simulated errors
+  - **BinanceWsMockConnector updated**: accepts `transient_failure_config` parameter, injects failures in `_do_connect()` and `iter_snapshots()`, tracks via `stats.transient_failures_injected`
+- **Consequences:**
+  - Retry logic is centralized and reusable for any connector
+  - Tests are bounded-time (no real sleeps) via `sleep_func` injection
+  - Mock connector can simulate transient failures for testing retry behavior
+  - Tests: 35 new tests in `test_retries.py` covering policy validation, error classification, retry behavior, and mock integration
+  - Prepares for H3 (idempotency) and H4 (circuit breaker)
+- **Alternatives:**
+  - Inline retry loops in connector methods — rejected; centralized utility is cleaner and testable
+  - Real sleeps in tests — rejected; bounded-time tests are faster and deterministic
+  - Retry all exceptions — rejected; fail fast on unknown errors prevents masking bugs
