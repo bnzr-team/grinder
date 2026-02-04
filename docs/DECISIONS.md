@@ -453,7 +453,7 @@
   - **Conversion utility:** `notional_to_qty(notional, price, precision)` in `src/grinder/policies/base.py`
     - Formula: `qty = notional / price`, rounded down to precision
     - Use this when configuring size_schedule from notional budget
-  - **Reference:** docs/17_ADAPTIVE_SMART_GRID_V1.md §17.12.4 (canonical)
+  - **Reference:** docs/smart_grid/SPEC_V1_0.md §17.12.4 (canonical)
 - **Consequences:**
   - All code interpreting `size_schedule` MUST treat values as base asset quantity
   - To configure from notional (USD) budget, explicitly convert: `notional_to_qty(500, 50000) = 0.01`

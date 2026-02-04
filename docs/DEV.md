@@ -27,14 +27,25 @@ On systems with externally-managed Python (Ubuntu 23.04+, Debian 12+), `pip inst
 error: externally-managed-environment
 ```
 
-**Solution:** Use `PYTHONPATH=src` prefix for all commands instead of installing:
+**Solution 1 (recommended):** Create a virtual environment:
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e ".[dev]"
 PYTHONPATH=src python3 -m pytest -q
+```
+
+**Solution 2 (partial):** Use `PYTHONPATH=src` without full installation:
+
+```bash
+PYTHONPATH=src python3 -m pytest tests/unit/test_core.py -q
 PYTHONPATH=src python3 -m scripts.run_backtest
 ```
 
-This works without any installation and is how CI runs tests.
+**Note:** Solution 2 skips HA tests (require `redis` package). For full test suite including HA tests, use Solution 1 with venv.
+
+CI runs with all dependencies installed (see `.github/workflows/ci.yml`).
 
 ## Proof Bundle Commands
 

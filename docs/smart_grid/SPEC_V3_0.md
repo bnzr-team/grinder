@@ -1,15 +1,12 @@
-# 17. Adaptive Smart Grid v1
-**Regime-driven • Auto-sizing • L1/L2-aware • Deterministic replay/paper • Top-K 3–5**
-
-> **⚠️ DEPRECATED:** This file is superseded by versioned specs in `docs/smart_grid/`.
-> See `docs/smart_grid/README.md` for the version matrix and current spec.
-> This file remains for backward compatibility with existing links.
+# Adaptive Smart Grid v3.0
+**RL governance and production gate**
 
 ### Status
-- **This document defines the target behavior for v1.**
-- Components are marked as **Implemented / Planned** and must match `docs/STATE.md`.
+- This document is a **versioned specification**. It must remain consistent with `docs/STATE.md`.
+- Any contract/behavior changes require an ADR entry in `docs/DECISIONS.md` and determinism proofs.
 
 ---
+
 
 ## 17.1 Motivation
 
@@ -560,3 +557,35 @@ A feature is “implemented” only if:
    - enforce caps; if violated → adjust or throttle/pause
    - output GridPlan with reason codes
 6) execution reconciles desired orders, CycleEngine handles fill→TP cycles
+
+
+---
+
+## v3.0 Addendum: RL (Research to Production Gate)
+
+This version is only allowed once the environment is realistic enough to prevent simulator overfitting.
+
+### Preconditions (must be satisfied)
+- Deterministic partial fills + slippage + L2 walk-the-book are implemented and validated.
+- Fee/funding accounting validated.
+- A diverse fixture suite covers:
+  - range, trend, shock, thin book, toxic conditions.
+- A “sim2real” evaluation protocol exists (offline).
+
+### RL scope (allowed use-cases)
+- Parameter control (not price prediction):
+  - step multiplier,
+  - adds on/off,
+  - skew strength,
+  - TP distance policy.
+- Risk-aware reward:
+  - penalize DD utilization, liquidation proximity, impact, excessive inventory.
+
+### Governance
+- Offline training only.
+- Deployment = frozen policy artifact with deterministic inference.
+- Must pass the same determinism suite gates as ML.
+
+### Required fixtures / tests
+- `rl_policy_inference_determinism`
+- `rl_offline_eval_report` (artifact + summary in acceptance packet)

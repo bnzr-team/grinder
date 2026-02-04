@@ -1,15 +1,12 @@
-# 17. Adaptive Smart Grid v1
-**Regime-driven • Auto-sizing • L1/L2-aware • Deterministic replay/paper • Top-K 3–5**
-
-> **⚠️ DEPRECATED:** This file is superseded by versioned specs in `docs/smart_grid/`.
-> See `docs/smart_grid/README.md` for the version matrix and current spec.
-> This file remains for backward compatibility with existing links.
+# Adaptive Smart Grid v1.1
+**Execution realism + economics**
 
 ### Status
-- **This document defines the target behavior for v1.**
-- Components are marked as **Implemented / Planned** and must match `docs/STATE.md`.
+- This document is a **versioned specification**. It must remain consistent with `docs/STATE.md`.
+- Any contract/behavior changes require an ADR entry in `docs/DECISIONS.md` and determinism proofs.
 
 ---
+
 
 ## 17.1 Motivation
 
@@ -560,3 +557,33 @@ A feature is “implemented” only if:
    - enforce caps; if violated → adjust or throttle/pause
    - output GridPlan with reason codes
 6) execution reconciles desired orders, CycleEngine handles fill→TP cycles
+
+
+---
+
+## v1.1 Addendum: Execution Realism & Economics
+
+This version extends v1 by making backtests/paper closer to live conditions while preserving determinism.
+
+### Changes vs v1
+1. **Fees & funding are first-class in PnL accounting**
+   - Maker/taker fee schedules are configurable and applied per fill.
+   - Funding payments are modeled deterministically from fixture-provided funding rates (or disabled if unavailable).
+
+2. **Deterministic partial fills (bounded)**
+   - Orders may fill partially based on a deterministic participation limit:
+     - `max_fill_notional_per_bar` or `max_fill_ratio_of_bar_volume`
+   - No queue modeling yet; this is an approximation to avoid “always fully filled”.
+
+3. **Latency knobs (deterministic)**
+   - A fixed execution delay (in bars or milliseconds) can be configured in replay/paper.
+   - Any “delay” must be deterministic and fixture-driven.
+
+4. **New metrics**
+   - `fill_rate`, `avg_time_to_fill`, `slippage_bps_estimate`
+   - `fees_total`, `funding_total`, `gross_pnl`, `net_pnl`
+
+### Required fixtures / tests
+- `slow_fills_day_l1`: demonstrates partial fills and time-to-fill metrics.
+- `fees_funding_day_l1`: validates net-vs-gross accounting.
+- Determinism suite must include these fixtures and lock digests.
