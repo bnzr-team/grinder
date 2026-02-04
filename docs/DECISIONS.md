@@ -1004,3 +1004,70 @@
   - Shared adapter for PAPER and LIVE_TRADE — rejected; different requirements (mock vs real API)
   - Random order IDs — rejected; breaks determinism for replay
   - Async paper operations — rejected; unnecessary complexity for in-memory simulation
+
+
+## ADR-031 — Auto-Sizing v1: Risk-Budget-Based Position Sizing (ASM-P2-01)
+- **Date:** 2026-02-04
+- **Status:** accepted
+- **Context:** Grid policies used uniform `size_per_level` without risk awareness. Position sizes were manually configured and didn't adapt to account equity, drawdown limits, or adverse market scenarios. This made it hard to ensure portfolio-level risk stayed within bounds.
+- **Decision:**
+  - **AutoSizer Module** (`src/grinder/sizing/auto_sizer.py`):
+    - Pure function computing size_schedule from risk parameters
+    - Inputs: `equity`, `dd_budget`, `adverse_move`, `grid_shape`, `price`
+    - Output: `SizeSchedule` with `qty_per_level[]` and risk metrics
+  - **Core Formula:**
+    ```
+    max_loss_usd = equity * dd_budget
+    total_qty_allowed = max_loss_usd / (price * adverse_move)
+    qty_per_level = total_qty_allowed / n_levels  (for uniform mode)
+    ```
+    - Worst-case assumption: All levels fill on one side, price moves by `adverse_move`
+    - Always rounds DOWN to stay within risk budget
+  - **Sizing Modes:**
+    - `UNIFORM`: Equal quantity at each level (default)
+    - `PYRAMID`: Larger quantities at outer levels
+    - `INVERSE_PYRAMID`: Smaller quantities at outer levels
+  - **Integration with AdaptiveGridPolicy:**
+    - `auto_sizing_enabled: bool` flag in config (default False for backward compat)
+    - When enabled, `_compute_size_schedule()` uses AutoSizer instead of legacy uniform sizing
+    - Falls back to legacy if equity/dd_budget/adverse_move are missing
+  - **Determinism:**
+    - Pure function: same inputs → same outputs
+    - Integer bps for risk parameters
+    - Decimal arithmetic with explicit rounding
+- **Risk Bound Guarantee:**
+  ```
+  worst_case_loss = sum(qty_i * price) * adverse_move
+  constraint: worst_case_loss <= equity * dd_budget
+  ```
+  - Due to ROUND_DOWN, actual utilization is always <= 100%
+  - `risk_utilization` metric tracks efficiency (should be ~90-99%)
+- **Configuration:**
+  ```python
+  AdaptiveGridConfig(
+      auto_sizing_enabled=True,
+      equity=Decimal("10000"),          # Account equity
+      dd_budget=Decimal("0.20"),        # 20% max drawdown
+      adverse_move=Decimal("0.25"),     # 25% worst-case price move
+      auto_sizer_config=AutoSizerConfig(
+          sizing_mode=SizingMode.UNIFORM,
+          min_qty=Decimal("0.0001"),    # Exchange minimum
+          qty_precision=8,
+      ),
+  )
+  ```
+- **Consequences:**
+  - Size schedules automatically adapt to account equity and risk parameters
+  - Risk bound is enforced: worst-case loss stays within dd_budget
+  - Backward compatible: legacy uniform sizing when auto_sizing_enabled=False
+  - Unit tests: 36 tests in `test_auto_sizer.py`
+  - Integration tests: 5 tests in `test_adaptive_policy.py::TestAutoSizingIntegration`
+- **Out of Scope (v1):**
+  - Multi-symbol DD allocation (deferred to ASM-P2-02)
+  - Dynamic equity tracking (equity is static config, not live P&L)
+  - Position-aware sizing (doesn't account for existing inventory)
+  - L2 depth-aware sizing
+- **Alternatives:**
+  - Kelly criterion sizing — rejected; requires probability estimates we don't have
+  - VaR-based sizing — rejected; needs distribution assumptions
+  - Fixed notional sizing — rejected; doesn't scale with account size

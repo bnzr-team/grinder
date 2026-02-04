@@ -380,6 +380,22 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - **Equity definition:** `equity = initial_capital + total_realized_pnl + total_unrealized_pnl`
   - **HWM initialization:** First equity sample (starts at `initial_capital`)
   - See ADR-013 for design decisions
+- **AutoSizer v1** (`src/grinder/sizing/auto_sizer.py`):
+  - Risk-budget-based position sizing for grid policies (ASM-P2-01)
+  - **Core formula:** `qty_per_level = (equity * dd_budget) / (n_levels * price * adverse_move)`
+  - **Risk guarantee:** worst_case_loss <= equity * dd_budget
+  - **Sizing modes:** UNIFORM (default), PYRAMID, INVERSE_PYRAMID
+  - **Inputs:** equity, dd_budget (e.g., 0.20), adverse_move (e.g., 0.25), grid_shape, price
+  - **Output:** SizeSchedule with qty_per_level[], risk_utilization, worst_case_loss
+  - **Integration:** AdaptiveGridPolicy (opt-in via `auto_sizing_enabled=True`)
+  - **Backward compat:** When disabled, uses legacy uniform `size_per_level`
+  - **How to verify:**
+    ```bash
+    PYTHONPATH=src pytest tests/unit/test_auto_sizer.py tests/unit/test_adaptive_policy.py::TestAutoSizingIntegration -v
+    ```
+  - **Unit tests:** `tests/unit/test_auto_sizer.py` (36 tests)
+  - **Integration tests:** `tests/unit/test_adaptive_policy.py::TestAutoSizingIntegration` (5 tests)
+  - See ADR-031 for design decisions
 - **KillSwitch v0** (`src/grinder/risk/kill_switch.py`):
   - Simple emergency halt latch for trading
   - **Idempotent:** triggering twice is a no-op
@@ -536,7 +552,7 @@ Comprehensive adaptive grid system design:
     - **Formulas:** step=max(5, 0.3*NATR*regime_mult), width=clamp(2.0*NATR*sqrt(H/TF), 20, 500), levels=clamp(ceil(width/step), 2, 20)
     - **Regime multipliers:** RANGE=1.0, VOL_SHOCK=1.5, THIN_BOOK=2.0, TREND asymmetric (1.3× on against-trend side)
     - **Units:** All thresholds/multipliers as integer bps (×100 scale) for determinism
-    - **NOT included:** auto-sizing (legacy size_per_level), DD allocator, L2 features, Top-K integration
+    - **NOT included:** DD allocator, L2 features (auto-sizing now available via ASM-P2-01)
     - **Fixture:** `sample_day_adaptive` — paper digest `1b8af993a8435ee6`
   - ✅ **Top-K v1 (ASM-P1-06):** Feature-based symbol selection (see ADR-023)
     - **Opt-in:** `topk_v1_enabled=False` default (backward compat with existing digests)
