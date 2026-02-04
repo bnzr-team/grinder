@@ -12,11 +12,13 @@ Tests cover:
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Any
 
 import pytest
 
 from grinder.contracts import Snapshot
 from grinder.paper import PaperEngine
+from grinder.paper.fills import Fill
 from grinder.risk import (
     AllowDecision,
     AllowReason,
@@ -939,3 +941,273 @@ class TestSymbolBreachWiring:
         assert btc_cancel.reason == AllowReason.CANCEL_ALWAYS_ALLOWED
         assert eth_cancel.allowed is True
         assert eth_cancel.reason == AllowReason.CANCEL_ALWAYS_ALLOWED
+
+
+# --- Test Class: Reduce-Only Path Proof (P2-04b) ---
+
+
+class TestReduceOnlyPath:
+    """Tests for reduce-only path verification (P2-04b).
+
+    Proves that:
+    1. In DRAWDOWN, REDUCE_RISK actually executes and reduces exposure
+    2. INCREASE_RISK remains blocked (regression)
+    3. CANCEL remains allowed (regression)
+    """
+
+    def test_reduce_risk_executes_in_drawdown_and_reduces_exposure(self) -> None:
+        """flatten_position closes position in DRAWDOWN via REDUCE_RISK path.
+
+        Scenario:
+        1. Create an open position (via fills)
+        2. Trigger DRAWDOWN
+        3. Call flatten_position
+        4. Verify position is closed and exposure reduced to zero
+        """
+
+        config = DrawdownGuardV1Config(
+            portfolio_dd_limit=Decimal("0.10"),  # 10% limit
+            symbol_dd_budgets={"BTCUSDT": Decimal("500")},
+        )
+
+        # Create engine with DD guard enabled
+        engine = PaperEngine(
+            initial_capital=Decimal("100000"),
+            dd_guard_v1_enabled=True,
+            dd_guard_v1_config=config,
+        )
+
+        # Step 1: Create a LONG position by applying a BUY fill directly
+        buy_fill = Fill(
+            ts=1000,
+            symbol="BTCUSDT",
+            side="BUY",
+            price=Decimal("50000"),
+            quantity=Decimal("0.1"),  # 0.1 BTC @ 50000 = $5000 notional
+            order_id="test_buy_1",
+        )
+        engine._ledger.apply_fill(buy_fill)
+        engine._last_prices["BTCUSDT"] = Decimal("50000")
+
+        # Verify position exists
+        pos_before = engine._ledger.get_position("BTCUSDT")
+        assert pos_before.quantity == Decimal("0.1")
+        assert pos_before.avg_entry_price == Decimal("50000")
+
+        # Step 2: Trigger DRAWDOWN by updating guard with losses
+        # Price drops to 45000, so we have unrealized loss of 0.1 * (50000-45000) = $500
+        engine._last_prices["BTCUSDT"] = Decimal("45000")
+        assert engine._dd_guard_v1 is not None  # Guard is enabled
+        engine._dd_guard_v1.update(
+            equity_start=Decimal("100000"),
+            equity_current=Decimal("99500"),  # Lost $500
+            symbol_losses={"BTCUSDT": Decimal("500")},  # At budget threshold
+        )
+
+        # Verify guard is in DRAWDOWN
+        assert engine._dd_guard_v1.is_drawdown is True
+
+        # Step 3: Call flatten_position (REDUCE_RISK path)
+        result = engine.flatten_position(
+            symbol="BTCUSDT",
+            current_price=Decimal("45000"),
+            ts=2000,
+        )
+
+        # Step 4: Verify flatten executed successfully
+        assert result["executed"] is True
+        assert result["reason"] == "FLATTEN_EXECUTED"
+
+        # Verify position is now zero
+        pos_after = engine._ledger.get_position("BTCUSDT")
+        assert pos_after.quantity == Decimal("0")
+
+        # Verify fill was generated correctly
+        assert result["fill"] is not None
+        assert result["fill"]["side"] == "SELL"  # SELL to close long
+        assert result["fill"]["quantity"] == "0.1"
+
+        # Verify DD guard decision was checked and allowed
+        assert result["dd_guard_v1_decision"] is not None
+        assert result["dd_guard_v1_decision"]["allowed"] is True
+        assert result["dd_guard_v1_decision"]["reason"] == "REDUCE_RISK_ALLOWED"
+
+    def test_flatten_short_position_in_drawdown(self) -> None:
+        """flatten_position closes SHORT position correctly (buys to close).
+
+        Verifies reduce-only works for both long and short positions.
+        """
+
+        config = DrawdownGuardV1Config(
+            portfolio_dd_limit=Decimal("0.10"),
+            symbol_dd_budgets={},
+        )
+
+        engine = PaperEngine(
+            initial_capital=Decimal("100000"),
+            dd_guard_v1_enabled=True,
+            dd_guard_v1_config=config,
+        )
+
+        # Create a SHORT position
+        sell_fill = Fill(
+            ts=1000,
+            symbol="BTCUSDT",
+            side="SELL",
+            price=Decimal("50000"),
+            quantity=Decimal("0.1"),
+            order_id="test_sell_1",
+        )
+        engine._ledger.apply_fill(sell_fill)
+        engine._last_prices["BTCUSDT"] = Decimal("50000")
+
+        # Verify short position
+        pos_before = engine._ledger.get_position("BTCUSDT")
+        assert pos_before.quantity == Decimal("-0.1")  # Negative = short
+
+        # Trigger DRAWDOWN via portfolio DD
+        assert engine._dd_guard_v1 is not None  # Guard is enabled
+        engine._dd_guard_v1.update(
+            equity_start=Decimal("100000"),
+            equity_current=Decimal("89000"),  # 11% DD, exceeds 10% limit
+            symbol_losses={},
+        )
+        assert engine._dd_guard_v1.is_drawdown is True
+
+        # Flatten position
+        result = engine.flatten_position(
+            symbol="BTCUSDT",
+            current_price=Decimal("52000"),  # Price went up (loss on short)
+            ts=2000,
+        )
+
+        # Verify flatten executed
+        assert result["executed"] is True
+        assert result["fill"]["side"] == "BUY"  # BUY to close short
+        assert result["fill"]["quantity"] == "0.1"
+
+        # Position should be zero
+        pos_after = engine._ledger.get_position("BTCUSDT")
+        assert pos_after.quantity == Decimal("0")
+
+    def test_flatten_no_position_returns_no_execution(self) -> None:
+        """flatten_position with no position returns NO_POSITION reason."""
+        config = DrawdownGuardV1Config(
+            portfolio_dd_limit=Decimal("0.10"),
+        )
+
+        engine = PaperEngine(
+            initial_capital=Decimal("100000"),
+            dd_guard_v1_enabled=True,
+            dd_guard_v1_config=config,
+        )
+
+        # Try to flatten without position
+        result = engine.flatten_position(
+            symbol="BTCUSDT",
+            current_price=Decimal("50000"),
+            ts=1000,
+        )
+
+        assert result["executed"] is False
+        assert result["reason"] == "NO_POSITION"
+        assert result["fill"] is None
+
+    def test_increase_risk_still_blocked_in_drawdown_regression(self) -> None:
+        """INCREASE_RISK remains blocked in DRAWDOWN (regression test).
+
+        Ensures P2-04a guarantees are preserved.
+        """
+        config = DrawdownGuardV1Config(
+            portfolio_dd_limit=Decimal("0.10"),
+        )
+        guard = DrawdownGuardV1(config)
+
+        # Trigger DRAWDOWN
+        guard.update(
+            equity_start=Decimal("100000"),
+            equity_current=Decimal("89000"),  # 11% DD
+            symbol_losses={},
+        )
+
+        assert guard.is_drawdown is True
+
+        # INCREASE_RISK must be blocked
+        decision = guard.allow(OrderIntent.INCREASE_RISK, symbol="BTCUSDT")
+        assert decision.allowed is False
+        assert decision.reason == AllowReason.DD_PORTFOLIO_BREACH
+
+    def test_cancel_still_allowed_in_drawdown_regression(self) -> None:
+        """CANCEL remains allowed in DRAWDOWN (regression test)."""
+        config = DrawdownGuardV1Config(
+            portfolio_dd_limit=Decimal("0.10"),
+        )
+        guard = DrawdownGuardV1(config)
+
+        # Trigger DRAWDOWN
+        guard.update(
+            equity_start=Decimal("100000"),
+            equity_current=Decimal("89000"),  # 11% DD
+            symbol_losses={},
+        )
+
+        assert guard.is_drawdown is True
+
+        # CANCEL must be allowed
+        decision = guard.allow(OrderIntent.CANCEL, symbol="BTCUSDT")
+        assert decision.allowed is True
+        assert decision.reason == AllowReason.CANCEL_ALWAYS_ALLOWED
+
+    def test_reduce_only_is_deterministic(self) -> None:
+        """flatten_position produces deterministic results.
+
+        Same inputs → same outputs (critical for replay).
+        """
+
+        def create_and_flatten() -> dict[str, Any]:
+            config = DrawdownGuardV1Config(
+                portfolio_dd_limit=Decimal("0.10"),
+            )
+            engine = PaperEngine(
+                initial_capital=Decimal("100000"),
+                dd_guard_v1_enabled=True,
+                dd_guard_v1_config=config,
+            )
+
+            # Create position
+            fill = Fill(
+                ts=1000,
+                symbol="BTCUSDT",
+                side="BUY",
+                price=Decimal("50000"),
+                quantity=Decimal("0.1"),
+                order_id="test_buy_1",
+            )
+            engine._ledger.apply_fill(fill)
+            engine._last_prices["BTCUSDT"] = Decimal("50000")
+
+            # Trigger DRAWDOWN
+            assert engine._dd_guard_v1 is not None  # Guard is enabled
+            engine._dd_guard_v1.update(
+                equity_start=Decimal("100000"),
+                equity_current=Decimal("89000"),
+                symbol_losses={},
+            )
+
+            # Flatten
+            return engine.flatten_position(
+                symbol="BTCUSDT",
+                current_price=Decimal("45000"),
+                ts=2000,
+            )
+
+        # Run twice
+        result1 = create_and_flatten()
+        result2 = create_and_flatten()
+
+        # Results must be identical
+        assert result1["executed"] == result2["executed"]
+        assert result1["reason"] == result2["reason"]
+        assert result1["fill"] == result2["fill"]
+        assert result1["position_before"] == result2["position_before"]
+        assert result1["position_after"] == result2["position_after"]

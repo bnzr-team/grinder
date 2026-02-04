@@ -27,7 +27,7 @@ from grinder.execution import ExecutionEngine, ExecutionState, NoOpExchangePort
 from grinder.features import FeatureEngine, FeatureEngineConfig
 from grinder.gating import GateReason, GatingResult, RateLimiter, RiskGate, ToxicityGate
 from grinder.paper.cycle_engine import CycleEngine
-from grinder.paper.fills import simulate_fills
+from grinder.paper.fills import Fill, simulate_fills
 from grinder.paper.ledger import Ledger
 from grinder.policies.base import GridPlan  # noqa: TC001 - used at runtime
 from grinder.policies.grid.adaptive import AdaptiveGridConfig, AdaptiveGridPolicy
@@ -1146,6 +1146,93 @@ class PaperEngine:
         """Compute deterministic digest of outputs."""
         content = json.dumps(outputs, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(content.encode()).hexdigest()[:16]
+
+    def flatten_position(
+        self,
+        symbol: str,
+        current_price: Decimal,
+        ts: int,
+    ) -> dict[str, Any]:
+        """Flatten (close) position for a symbol via reduce-only path.
+
+        This method implements the REDUCE_RISK path (P2-04b):
+        1. Checks if there's an open position for the symbol
+        2. Checks if REDUCE_RISK is allowed via DrawdownGuardV1
+        3. If allowed, generates a fill to close the entire position
+        4. Applies the fill to the ledger
+
+        Args:
+            symbol: Trading symbol to flatten
+            current_price: Current market price for the fill
+            ts: Timestamp for the fill
+
+        Returns:
+            Dict with:
+                - executed: bool - whether flatten was executed
+                - reason: str - why flatten did/didn't execute
+                - position_before: dict | None - position state before flatten
+                - position_after: dict | None - position state after flatten
+                - fill: dict | None - the fill that closed the position
+                - dd_guard_v1_decision: dict | None - guard decision if checked
+        """
+        result: dict[str, Any] = {
+            "executed": False,
+            "reason": "",
+            "position_before": None,
+            "position_after": None,
+            "fill": None,
+            "dd_guard_v1_decision": None,
+        }
+
+        # Check if position exists
+        pos = self._ledger.get_position(symbol)
+        if pos.quantity == Decimal("0"):
+            result["reason"] = "NO_POSITION"
+            return result
+
+        result["position_before"] = pos.to_dict()
+
+        # Check DrawdownGuardV1 if enabled
+        if self._dd_guard_v1_enabled and self._dd_guard_v1 is not None:
+            dd_decision = self._dd_guard_v1.allow(OrderIntent.REDUCE_RISK, symbol)
+            result["dd_guard_v1_decision"] = dd_decision.to_dict()
+
+            if not dd_decision.allowed:
+                # This shouldn't happen - REDUCE_RISK is always allowed
+                # But include for completeness
+                result["reason"] = "REDUCE_RISK_BLOCKED"
+                return result
+
+        # Generate fill to close position
+        # If long (qty > 0), we SELL to close
+        # If short (qty < 0), we BUY to close
+        side = "SELL" if pos.quantity > Decimal("0") else "BUY"
+        close_qty = abs(pos.quantity)
+
+        fill = Fill(
+            ts=ts,
+            symbol=symbol,
+            side=side,
+            price=current_price,
+            quantity=close_qty,
+            order_id=f"flatten_{ts}_{symbol}_{side}_{current_price}",
+        )
+
+        # Apply fill to ledger
+        self._ledger.apply_fill(fill)
+        self._total_fills += 1
+
+        # Update last price
+        self._last_prices[symbol] = current_price
+
+        # Get position after flatten
+        pos_after = self._ledger.get_position(symbol)
+        result["position_after"] = pos_after.to_dict()
+        result["fill"] = fill.to_dict()
+        result["executed"] = True
+        result["reason"] = "FLATTEN_EXECUTED"
+
+        return result
 
     def reset(self) -> None:
         """Reset all engine state for fresh run."""

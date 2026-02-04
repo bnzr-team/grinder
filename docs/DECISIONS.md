@@ -1189,6 +1189,14 @@
     - In DRAWDOWN, INCREASE_RISK is blocked for ALL symbols, not just the breached one
     - Rationale: Portfolio risk is correlated; if one symbol is losing, reducing exposure everywhere is prudent
     - Example: BTCUSDT breaches $1000 budget → ETHUSDT INCREASE_RISK also blocked with reason `DD_SYMBOL_BREACH`
+  - **Reduce-Only Semantics (P2-04b):**
+    - In DRAWDOWN, `REDUCE_RISK` intent is always allowed
+    - Reduce-only action: `PaperEngine.flatten_position(symbol, price, ts)`
+    - Closes entire position at given price (no partial reduce in v0)
+    - If LONG → generates SELL fill; if SHORT → generates BUY fill
+    - Deterministic: same inputs → same fill output
+    - Guards checked: `guard.allow(REDUCE_RISK, symbol)` → always allowed in any state
+    - Use case: emergency position exit when DD limit breached
   - **Reason Codes (stable, low-cardinality):**
     - `NORMAL_STATE`: All intents allowed in normal operation
     - `REDUCE_RISK_ALLOWED`: Reduce-only allowed in DRAWDOWN
