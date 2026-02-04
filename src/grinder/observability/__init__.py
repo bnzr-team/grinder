@@ -10,6 +10,7 @@ Provides:
 """
 
 from grinder.observability.live_contract import (
+    FORBIDDEN_METRIC_LABELS,
     REQUIRED_HEALTHZ_KEYS,
     REQUIRED_METRICS_PATTERNS,
     REQUIRED_READYZ_KEYS,
@@ -30,6 +31,7 @@ from grinder.observability.metrics_builder import (
 )
 
 __all__ = [
+    "FORBIDDEN_METRIC_LABELS",
     "REQUIRED_HEALTHZ_KEYS",
     "REQUIRED_METRICS_PATTERNS",
     "REQUIRED_READYZ_KEYS",
