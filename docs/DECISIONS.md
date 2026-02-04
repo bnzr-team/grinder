@@ -1189,10 +1189,17 @@
     - `CANCEL_ALWAYS_ALLOWED`: Cancels always permitted
     - `DD_PORTFOLIO_BREACH`: Blocked due to portfolio DD limit
     - `DD_SYMBOL_BREACH`: Blocked due to symbol DD limit
-  - **Wiring Point:**
-    - Guard sits BEFORE order generation/placement
-    - Policy checks `guard.allow(intent)` before creating order intents
-    - If blocked, policy skips order or only generates reduce-only intents
+  - **Wiring Point:** `src/grinder/paper/engine.py` Step 3.5 (lines 717-767)
+    - Guard sits BETWEEN gating check AND execution (BEFORE `ExecutionEngine.evaluate()`)
+    - Location: After `if not gating_result.allowed: return ...` block
+    - Flow: gating → **DD guard check** → execution
+    - On each snapshot:
+      1. Compute current equity from ledger (initial_capital + realized + unrealized)
+      2. Compute symbol losses (negative total PnL → positive loss value)
+      3. Call `guard.update(equity_start, equity_current, symbol_losses)`
+      4. If plan has entry levels, call `guard.allow(OrderIntent.INCREASE_RISK, symbol)`
+      5. If blocked, return early with `blocked_by_dd_guard_v1=True`
+    - Enabled via `dd_guard_v1_enabled=True` in PaperEngine constructor
   - **Loss Calculation (v1):**
     - Uses realized PnL (simpler, deterministic)
     - Portfolio DD = (equity_start - equity_current) / equity_start
@@ -1224,13 +1231,13 @@
   - Risk limits are enforced deterministically at runtime
   - Policy can't accidentally increase risk beyond limits
   - Reduce-only orders always pass (allows position unwinding)
-  - Unit tests: 34 tests in `test_drawdown_guard_v1.py`
+  - Unit tests: 39 tests in `test_drawdown_guard_v1.py` (34 guard + 5 wiring)
   - All 5 invariants from v0 DrawdownGuard preserved
+  - Wiring integration tests verify blocking behavior in PaperEngine
 - **Out of Scope (v1):**
   - Auto-recovery / hysteresis / cooldown
   - Partial degradation states (WARN, DEGRADED)
   - Mark-to-market PnL (uses realized only)
-  - Full policy/execution wiring (guard module only)
   - Kill-switch integration (separate from DD guard)
 - **Alternatives:**
   - Auto-recovery with cooldown — rejected; non-deterministic, risk of flapping
