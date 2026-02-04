@@ -35,6 +35,7 @@ class TestRateLimiterCooldown:
         result2 = limiter.check(ts=1050)  # 50ms later (< 100ms cooldown)
         assert result2.allowed is False
         assert result2.reason == GateReason.COOLDOWN_ACTIVE
+        assert result2.details is not None
         assert result2.details["remaining_ms"] == 50
 
     def test_cooldown_allows_after_period(self) -> None:
@@ -68,6 +69,7 @@ class TestRateLimiterSlidingWindow:
         result = limiter.check(ts=1030)
         assert result.allowed is False
         assert result.reason == GateReason.RATE_LIMIT_EXCEEDED
+        assert result.details is not None
         assert result.details["current_count"] == 3
         assert result.details["max_per_minute"] == 3
 
@@ -86,6 +88,7 @@ class TestRateLimiterSlidingWindow:
         # At t=60001, first order expired, one slot available
         result = limiter.check(ts=60_001)
         assert result.allowed is True
+        assert result.details is not None
         assert result.details["current_count"] == 1  # Only ts=10 remains
 
 
@@ -117,6 +120,7 @@ class TestRateLimiterFakeClock:
         # Only t=2000 order in window
         result = limiter.check(ts=62_000)
         assert result.allowed is True
+        assert result.details is not None
         assert result.details["current_count"] == 1
 
     def test_rapid_fire_with_zero_cooldown(self) -> None:
