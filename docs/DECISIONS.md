@@ -759,8 +759,10 @@
 - **Context:** Following H2 (Retries), H3 adds idempotency guarantees for write operations (place/cancel/amend). Without idempotency, retries can cause duplicate side-effects (double orders, double cancels). Per M3 hardening roadmap, write-path must be safe for retries.
 - **Decision:**
   - **Idempotency Key Format**: `{scope}:{op}:{sha256_hex[:32]}` — deterministic hash of canonical payload, NOT random UUID
-    - Key components: `symbol`, `side`, `price`, `quantity`, `level_id`, `ts` (for place)
-    - Key components: `order_id` (for cancel/amend)
+    - Key components for place: `symbol`, `side`, `price`, `quantity`, `level_id`
+    - Key components for cancel: `order_id`
+    - Key components for replace: `order_id`, `price`, `quantity`
+    - **EXCLUDED from key**: `ts` (timestamp), nonces, random values — same intent at different times MUST produce same key
     - Canonicalization: JSON with sorted keys, Decimal normalized, None excluded
   - **IdempotencyStatus enum**: `INFLIGHT`, `DONE`, `FAILED`
   - **IdempotencyEntry** (`src/grinder/connectors/idempotency.py`): dataclass tracking:
@@ -793,3 +795,51 @@
   - Random UUID keys — rejected; would break idempotency on retry (new key = new operation)
   - Wait-for-INFLIGHT pattern — rejected; fast-fail is simpler and avoids deadlocks in v1
   - Retry INFLIGHT conflicts — rejected; conflicts indicate concurrent duplicates, should fail fast
+
+## ADR-027 — Connector Hardening v4: Circuit Breaker (PR-H4)
+- **Date:** 2026-02-04
+- **Status:** accepted
+- **Context:** Following H2 (Retries) and H3 (Idempotency), H4 adds circuit breaker pattern to prevent cascading failures. Without circuit breaker, retries can hammer a degraded upstream indefinitely ("thundering herd"). Per M3 hardening roadmap, write-path must have fail-fast protection.
+- **Decision:**
+  - **Circuit States**: `CLOSED`, `OPEN`, `HALF_OPEN`
+    - CLOSED: normal operation, failures counted toward threshold
+    - OPEN: fast-fail all requests, cooldown timer running
+    - HALF_OPEN: allow limited probes, success → CLOSED, failure → OPEN
+  - **Per-operation tracking**: each operation (place/cancel/replace) has independent circuit state
+    - Rationale: one operation failing (e.g., place) shouldn't block unrelated operations (e.g., cancel)
+  - **CircuitBreakerConfig** (`src/grinder/connectors/circuit_breaker.py`):
+    - `failure_threshold`: consecutive failures to trip OPEN (default: 5)
+    - `open_interval_s`: seconds to stay OPEN before HALF_OPEN (default: 30)
+    - `half_open_probe_count`: max probes allowed in HALF_OPEN (default: 1)
+    - `success_threshold`: consecutive successes to close (default: 1)
+    - `trip_on`: callable to determine if error counts as breaker-worthy
+  - **trip_on semantics**:
+    - `default_trip_on` counts: `ConnectorTransientError`, `ConnectorTimeoutError`
+    - Does NOT count: `ConnectorNonRetryableError`, `IdempotencyConflictError`, `CircuitOpenError`
+    - Rationale: only upstream failures should trip breaker, not client-side errors
+  - **CircuitBreaker methods**:
+    - `allow(op_name) -> bool`: check if operation allowed
+    - `before_call(op_name)`: raises `CircuitOpenError` if not allowed
+    - `record_success(op_name)`: count success, may close circuit
+    - `record_failure(op_name, reason)`: count failure, may open circuit
+    - `state(op_name) -> CircuitState`: get current state
+  - **CircuitOpenError**: non-retryable error raised when circuit is OPEN
+  - **Injectable clock**: `clock` parameter for deterministic testing
+  - **Planned integration order** for write-path (H4-02):
+    1. `breaker.before_call(op)` — fast-fail if OPEN
+    2. Idempotency check (DONE → return, INFLIGHT → conflict)
+    3. `retry_with_policy(op, ...)` — only if breaker allows
+    4. `breaker.record_success(op)` or `breaker.record_failure(op, reason)` based on outcome
+  - Rationale: breaker sits BEFORE retries to prevent retry storms against degraded upstream
+  - **H4-01 scope**: CircuitBreaker module implemented as library; NOT wired into execution pipeline
+  - **H4-02 scope**: Wire CircuitBreaker into IdempotentExchangePort or live connector paths
+- **Consequences:**
+  - Degraded upstream triggers fast-fail, not retry storms
+  - Per-operation isolation prevents one bad endpoint from blocking all operations
+  - HALF_OPEN probes allow automatic recovery detection
+  - Tests: 20+ tests in `test_circuit_breaker.py` covering state transitions, fast-fail, per-op isolation
+  - Prepares for H5 (observability metrics for circuit state)
+- **Alternatives:**
+  - Global circuit (not per-op) — rejected; too coarse, one bad endpoint shouldn't block all
+  - No HALF_OPEN, manual reset only — rejected; auto-recovery is essential for hands-off operation
+  - Retry OPEN calls with backoff — rejected; defeats purpose of circuit breaker, use HALF_OPEN probes instead
