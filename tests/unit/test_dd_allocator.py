@@ -535,6 +535,19 @@ class TestInputValidation:
         with pytest.raises(AllocationError, match="weight must be >= 0"):
             SymbolCandidate(symbol="BTCUSDT", tier=RiskTier.MED, weight=Decimal("-1"))
 
+    def test_all_zero_weights_raises_error(self, default_allocator: DdAllocator) -> None:
+        """All zero weights should raise AllocationError (total_weight == 0)."""
+        candidates = [
+            SymbolCandidate(symbol="BTCUSDT", tier=RiskTier.HIGH, weight=Decimal("0")),
+            SymbolCandidate(symbol="ETHUSDT", tier=RiskTier.MED, weight=Decimal("0")),
+        ]
+        with pytest.raises(AllocationError, match="Total weight must be > 0"):
+            default_allocator.allocate(
+                equity=Decimal("100000"),
+                portfolio_dd_budget=Decimal("0.20"),
+                candidates=candidates,
+            )
+
 
 # --- Test Class: Configuration ---
 

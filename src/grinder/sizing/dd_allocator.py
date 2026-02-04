@@ -130,9 +130,7 @@ class DdAllocatorConfig:
         min_budget_usd: Minimum budget per symbol (below = 0)
     """
 
-    tier_factors: dict[RiskTier, Decimal] = field(
-        default_factory=lambda: DEFAULT_TIER_FACTORS.copy()
-    )
+    tier_factors: dict[RiskTier, Decimal] = field(default_factory=DEFAULT_TIER_FACTORS.copy)
     budget_precision: int = 2  # USD cents
     min_budget_usd: Decimal = field(default_factory=lambda: Decimal("1.0"))
 
