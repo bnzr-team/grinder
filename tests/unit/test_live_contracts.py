@@ -25,9 +25,11 @@ import pytest
 # Skip entire module if redis not installed (collection won't fail)
 pytest.importorskip("redis", reason="redis not installed")
 
+from grinder.connectors.metrics import reset_connector_metrics
 from grinder.gating import reset_gating_metrics
 from grinder.ha.role import HARole, reset_ha_state, set_ha_state
 from grinder.observability import (
+    FORBIDDEN_METRIC_LABELS,
     REQUIRED_HEALTHZ_KEYS,
     REQUIRED_METRICS_PATTERNS,
     REQUIRED_READYZ_KEYS,
@@ -48,6 +50,7 @@ def reset_state() -> None:
     reset_gating_metrics()
     reset_metrics_builder()
     reset_ha_state()
+    reset_connector_metrics()
 
 
 class TestHealthzContract:
@@ -289,3 +292,105 @@ class TestStartTimeManagement:
         t1 = get_start_time()
         assert t1 != 12345.0
         assert t1 > 0
+
+
+class TestMetricsLabelCardinality:
+    """Tests for metric label cardinality constraints (H5-02).
+
+    Ensures that high-cardinality labels (symbol, order_id, key, etc.)
+    do NOT appear in /metrics output to prevent Prometheus cardinality explosion.
+    See ADR-028 for design decisions.
+    """
+
+    def test_no_high_cardinality_labels(self) -> None:
+        """Test that metrics body contains no forbidden high-cardinality labels.
+
+        This is a critical contract test: if high-cardinality labels leak into
+        metrics, Prometheus will suffer memory issues and scrape timeouts.
+        """
+        body = build_metrics_body()
+
+        for forbidden_label in FORBIDDEN_METRIC_LABELS:
+            assert forbidden_label not in body, (
+                f"High-cardinality label '{forbidden_label}' found in metrics output. "
+                f"This violates ADR-028. Only low-cardinality labels (op, reason, state) are allowed."
+            )
+
+    def test_forbidden_labels_list_complete(self) -> None:
+        """Test that FORBIDDEN_METRIC_LABELS contains expected entries."""
+        assert "symbol=" in FORBIDDEN_METRIC_LABELS
+        assert "order_id=" in FORBIDDEN_METRIC_LABELS
+        assert "key=" in FORBIDDEN_METRIC_LABELS
+        assert "client_id=" in FORBIDDEN_METRIC_LABELS
+
+
+class TestConnectorMetricsContract:
+    """Tests for connector metrics contract (H5-02 tightening).
+
+    Validates that H2/H3/H4 metrics emit series with correct label schemas.
+    """
+
+    def test_connector_retries_has_op_and_reason_labels(self) -> None:
+        """Test that grinder_connector_retries_total has op and reason labels."""
+        body = build_metrics_body()
+
+        # Check series is emitted with op label
+        assert "grinder_connector_retries_total{op=" in body
+
+        # Check reason label is present (appears in same series line)
+        lines = [ln for ln in body.split("\n") if "grinder_connector_retries_total{" in ln]
+        assert len(lines) >= 1, "No series found for grinder_connector_retries_total"
+        assert all('reason="' in ln for ln in lines), "reason label missing from retries metric"
+
+    def test_idempotency_metrics_have_op_label(self) -> None:
+        """Test that idempotency metrics have op label."""
+        body = build_metrics_body()
+
+        # All three idempotency metrics should have op label
+        assert "grinder_idempotency_hits_total{op=" in body
+        assert "grinder_idempotency_conflicts_total{op=" in body
+        assert "grinder_idempotency_misses_total{op=" in body
+
+    def test_circuit_state_has_op_and_state_labels(self) -> None:
+        """Test that grinder_circuit_state has op and state labels."""
+        body = build_metrics_body()
+
+        # Check series is emitted with op label
+        assert "grinder_circuit_state{op=" in body
+
+        # Check state label is present (appears in same series line)
+        lines = [ln for ln in body.split("\n") if "grinder_circuit_state{" in ln]
+        assert len(lines) >= 1, "No series found for grinder_circuit_state"
+        assert all('state="' in ln for ln in lines), "state label missing from circuit_state metric"
+
+    def test_circuit_rejected_has_op_label(self) -> None:
+        """Test that grinder_circuit_rejected_total has op label."""
+        body = build_metrics_body()
+        assert "grinder_circuit_rejected_total{op=" in body
+
+    def test_circuit_trips_has_op_and_reason_labels(self) -> None:
+        """Test that grinder_circuit_trips_total has op and reason labels."""
+        body = build_metrics_body()
+
+        # Check series is emitted with op label
+        assert "grinder_circuit_trips_total{op=" in body
+
+        # Check reason label is present
+        lines = [ln for ln in body.split("\n") if "grinder_circuit_trips_total{" in ln]
+        assert len(lines) >= 1, "No series found for grinder_circuit_trips_total"
+        assert all('reason="' in ln for ln in lines), (
+            "reason label missing from circuit_trips metric"
+        )
+
+    def test_connector_metrics_series_patterns_in_contract(self) -> None:
+        """Test that REQUIRED_METRICS_PATTERNS includes series-level patterns."""
+        patterns = REQUIRED_METRICS_PATTERNS
+
+        # H5-02: series-level patterns should be in the contract
+        assert any("grinder_connector_retries_total{op=" in p for p in patterns)
+        assert any("grinder_idempotency_hits_total{op=" in p for p in patterns)
+        assert any("grinder_idempotency_conflicts_total{op=" in p for p in patterns)
+        assert any("grinder_idempotency_misses_total{op=" in p for p in patterns)
+        assert any("grinder_circuit_state{op=" in p for p in patterns)
+        assert any("grinder_circuit_rejected_total{op=" in p for p in patterns)
+        assert any("grinder_circuit_trips_total{op=" in p for p in patterns)

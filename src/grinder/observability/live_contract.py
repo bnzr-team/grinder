@@ -163,4 +163,25 @@ REQUIRED_METRICS_PATTERNS = [
     "# TYPE grinder_circuit_rejected_total",
     "# HELP grinder_circuit_trips_total",
     "# TYPE grinder_circuit_trips_total",
+    # Series-level patterns (H5-02): validate metrics emit series with correct label schema
+    # These patterns verify the metric is emitted as a series (not just HELP/TYPE)
+    # and uses the expected label keys (op, reason, state). Values are NOT checked.
+    "grinder_connector_retries_total{op=",
+    "grinder_idempotency_hits_total{op=",
+    "grinder_idempotency_conflicts_total{op=",
+    "grinder_idempotency_misses_total{op=",
+    "grinder_circuit_state{op=",
+    "grinder_circuit_rejected_total{op=",
+    "grinder_circuit_trips_total{op=",
+]
+
+# Forbidden high-cardinality labels (H5-02 contract tightening)
+# These labels MUST NOT appear in /metrics output to prevent cardinality explosion.
+# See ADR-028 for design decisions.
+FORBIDDEN_METRIC_LABELS = [
+    "symbol=",
+    "order_id=",
+    "key=",
+    "client_id=",
+    "idempotency_key=",
 ]
