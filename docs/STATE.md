@@ -245,12 +245,37 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - `is_retryable(error, policy)` — classifies errors as retryable/non-retryable
     - `retry_with_policy(op_name, operation, policy, sleep_func, on_retry)` — async retry wrapper with exponential backoff
     - `sleep_func` parameter enables bounded-time testing (no real sleeps)
+  - **Idempotency utilities (H3)** (`src/grinder/connectors/idempotency.py`):
+    - `IdempotencyStatus` — enum: `INFLIGHT`, `DONE`, `FAILED`
+    - `IdempotencyEntry` — dataclass: key, status, op_name, fingerprint, timestamps, result
+    - `IdempotencyStore` — protocol for pluggable storage
+    - `InMemoryIdempotencyStore` — thread-safe in-memory implementation with injectable clock
+    - `compute_idempotency_key(scope, op, **params)` — deterministic key from canonical payload (ts excluded from key)
+    - `IdempotencyConflictError` — fast-fail on INFLIGHT duplicates
+  - **IdempotentExchangePort (H3)** (`src/grinder/execution/idempotent_port.py`):
+    - Wraps `ExchangePort` with idempotency guarantees for place/cancel/replace
+    - Same request with same key returns cached result (DONE)
+    - Concurrent duplicates fail fast with `IdempotencyConflictError` (INFLIGHT)
+    - FAILED entries allow retry (overwritable)
+    - Integrates with H2 retries: key created once, all retries use same key → 1 side-effect
+    - Stats tracking: `place_calls`, `place_cached`, `place_executed`, `place_conflicts`
+  - **Circuit Breaker (H4)** (`src/grinder/connectors/circuit_breaker.py`):
+    - `CircuitState` — enum: `CLOSED`, `OPEN`, `HALF_OPEN`
+    - `CircuitBreakerConfig` — failure_threshold, open_interval_s, half_open_probe_count, success_threshold, trip_on
+    - `CircuitBreaker` — per-operation circuit breaker with injectable clock
+    - `before_call(op)` / `allow(op)` — fast-fail when OPEN, limited probes in HALF_OPEN
+    - `record_success(op)` / `record_failure(op, reason)` — state transitions
+    - `CircuitOpenError` — non-retryable error raised when circuit is OPEN
+    - `default_trip_on` — trips on `ConnectorTransientError`, `ConnectorTimeoutError`
+    - Per-op isolation: place can be OPEN while cancel stays CLOSED
+    - **Status: Wired into IdempotentExchangePort** (H4-02)
+    - Integration order: breaker.before_call → idempotency → execute → record_success/failure
   - **Timeout utilities** (`src/grinder/connectors/timeouts.py`):
     - `wait_for_with_op(coro, timeout_ms, op)` — wraps `asyncio.wait_for` with `ConnectorTimeoutError`
     - `cancel_tasks_with_timeout(tasks, timeout_ms)` — clean task cancellation
     - `create_named_task(coro, name, tasks_set)` — tracked task creation
   - **Idempotency:** `last_seen_ts` property for duplicate detection
-  - See ADR-012 (design), ADR-024 (H1 hardening), ADR-025 (H2 retries)
+  - See ADR-012 (design), ADR-024 (H1 hardening), ADR-025 (H2 retries), ADR-026 (H3 idempotency), ADR-027 (H4 circuit breaker)
 - **BinanceWsMockConnector v1** (`src/grinder/connectors/binance_ws_mock.py`):
   - Mock connector that reads from fixture files (events.jsonl) and emits `Snapshot`
   - **Features:**

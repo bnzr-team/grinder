@@ -10,6 +10,9 @@ from __future__ import annotations
 
 import pytest
 
+# Skip entire module if redis not installed (collection won't fail)
+pytest.importorskip("redis", reason="redis not installed")
+
 from grinder.ha.leader import LeaderElectorConfig
 from grinder.ha.role import HARole, HAState, get_ha_state, reset_ha_state, set_ha_state
 from grinder.observability import build_readyz_body

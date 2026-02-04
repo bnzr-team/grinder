@@ -752,3 +752,94 @@
   - Inline retry loops in connector methods — rejected; centralized utility is cleaner and testable
   - Real sleeps in tests — rejected; bounded-time tests are faster and deterministic
   - Retry all exceptions — rejected; fail fast on unknown errors prevents masking bugs
+
+## ADR-026 — Connector Hardening v3: Idempotency (PR-H3)
+- **Date:** 2026-02-04
+- **Status:** accepted
+- **Context:** Following H2 (Retries), H3 adds idempotency guarantees for write operations (place/cancel/amend). Without idempotency, retries can cause duplicate side-effects (double orders, double cancels). Per M3 hardening roadmap, write-path must be safe for retries.
+- **Decision:**
+  - **Idempotency Key Format**: `{scope}:{op}:{sha256_hex[:32]}` — deterministic hash of canonical payload, NOT random UUID
+    - Key components for place: `symbol`, `side`, `price`, `quantity`, `level_id`
+    - Key components for cancel: `order_id`
+    - Key components for replace: `order_id`, `price`, `quantity`
+    - **EXCLUDED from key**: `ts` (timestamp), nonces, random values — same intent at different times MUST produce same key
+    - Canonicalization: JSON with sorted keys, Decimal normalized, None excluded
+  - **IdempotencyStatus enum**: `INFLIGHT`, `DONE`, `FAILED`
+  - **IdempotencyEntry** (`src/grinder/connectors/idempotency.py`): dataclass tracking:
+    - `key`, `status`, `op_name`, `request_fingerprint`
+    - `created_at`, `expires_at`, `result`, `error_code`
+  - **IdempotencyStore protocol**: pluggable interface for storage:
+    - `get(key)` → entry or None (expired entries return None)
+    - `put_if_absent(key, entry, ttl_s)` → True if stored, False if exists
+    - `mark_done(key, result)` → update status and extend TTL
+    - `mark_failed(key, error_code)` → mark for retry
+    - `purge_expired(now)` → clean up old entries
+  - **InMemoryIdempotencyStore**: thread-safe in-memory implementation:
+    - Injectable clock for testing (`_clock` parameter)
+    - FAILED entries can be overwritten (retry allowed)
+    - Default TTLs: 300s for INFLIGHT, 86400s for DONE
+  - **IdempotentExchangePort** (`src/grinder/execution/idempotent_port.py`): wrapper for ExchangePort:
+    - Wraps `place_order`, `cancel_order`, `replace_order` with idempotency checks
+    - Flow: check store → if DONE return cached → if INFLIGHT raise conflict → put_if_absent → execute → mark_done
+    - `fetch_open_orders` passes through (no idempotency for reads)
+    - Stats tracking: `place_calls`, `place_cached`, `place_executed`, `place_conflicts`
+  - **IdempotencyConflictError**: fast-fail on INFLIGHT duplicates (non-retryable)
+  - **Integration with retries**: key created ONCE before retries, all retry attempts use same key → at most 1 side-effect
+- **Consequences:**
+  - Write operations are safe for retries — duplicate requests return cached result
+  - Concurrent duplicate requests get deterministic behavior (fast-fail)
+  - FAILED operations allow retry (entry overwritten)
+  - Tests: 32 tests in `test_idempotency.py` covering key generation, store operations, port behavior, retry integration
+  - Prepares for H4 (circuit breaker) and production Redis store
+- **Alternatives:**
+  - Random UUID keys — rejected; would break idempotency on retry (new key = new operation)
+  - Wait-for-INFLIGHT pattern — rejected; fast-fail is simpler and avoids deadlocks in v1
+  - Retry INFLIGHT conflicts — rejected; conflicts indicate concurrent duplicates, should fail fast
+
+## ADR-027 — Connector Hardening v4: Circuit Breaker (PR-H4)
+- **Date:** 2026-02-04
+- **Status:** accepted
+- **Context:** Following H2 (Retries) and H3 (Idempotency), H4 adds circuit breaker pattern to prevent cascading failures. Without circuit breaker, retries can hammer a degraded upstream indefinitely ("thundering herd"). Per M3 hardening roadmap, write-path must have fail-fast protection.
+- **Decision:**
+  - **Circuit States**: `CLOSED`, `OPEN`, `HALF_OPEN`
+    - CLOSED: normal operation, failures counted toward threshold
+    - OPEN: fast-fail all requests, cooldown timer running
+    - HALF_OPEN: allow limited probes, success → CLOSED, failure → OPEN
+  - **Per-operation tracking**: each operation (place/cancel/replace) has independent circuit state
+    - Rationale: one operation failing (e.g., place) shouldn't block unrelated operations (e.g., cancel)
+  - **CircuitBreakerConfig** (`src/grinder/connectors/circuit_breaker.py`):
+    - `failure_threshold`: consecutive failures to trip OPEN (default: 5)
+    - `open_interval_s`: seconds to stay OPEN before HALF_OPEN (default: 30)
+    - `half_open_probe_count`: max probes allowed in HALF_OPEN (default: 1)
+    - `success_threshold`: consecutive successes to close (default: 1)
+    - `trip_on`: callable to determine if error counts as breaker-worthy
+  - **trip_on semantics**:
+    - `default_trip_on` counts: `ConnectorTransientError`, `ConnectorTimeoutError`
+    - Does NOT count: `ConnectorNonRetryableError`, `IdempotencyConflictError`, `CircuitOpenError`
+    - Rationale: only upstream failures should trip breaker, not client-side errors
+  - **CircuitBreaker methods**:
+    - `allow(op_name) -> bool`: check if operation allowed
+    - `before_call(op_name)`: raises `CircuitOpenError` if not allowed
+    - `record_success(op_name)`: count success, may close circuit
+    - `record_failure(op_name, reason)`: count failure, may open circuit
+    - `state(op_name) -> CircuitState`: get current state
+  - **CircuitOpenError**: non-retryable error raised when circuit is OPEN
+  - **Injectable clock**: `clock` parameter for deterministic testing
+  - **Integration order** for write-path (implemented in IdempotentExchangePort):
+    1. `breaker.before_call(op)` — fast-fail if OPEN
+    2. Idempotency check (DONE → return, INFLIGHT → conflict)
+    3. Execute operation
+    4. `breaker.record_success(op)` or `breaker.record_failure(op, reason)` based on outcome
+  - Rationale: breaker sits BEFORE idempotency to prevent any interaction with degraded upstream
+  - **H4-01**: CircuitBreaker module implemented as library
+  - **H4-02**: Wired into IdempotentExchangePort with optional breaker/trip_on parameters
+- **Consequences:**
+  - Degraded upstream triggers fast-fail, not retry storms
+  - Per-operation isolation prevents one bad endpoint from blocking all operations
+  - HALF_OPEN probes allow automatic recovery detection
+  - Tests: 20+ tests in `test_circuit_breaker.py` covering state transitions, fast-fail, per-op isolation
+  - Prepares for H5 (observability metrics for circuit state)
+- **Alternatives:**
+  - Global circuit (not per-op) — rejected; too coarse, one bad endpoint shouldn't block all
+  - No HALF_OPEN, manual reset only — rejected; auto-recovery is essential for hands-off operation
+  - Retry OPEN calls with backoff — rejected; defeats purpose of circuit breaker, use HALF_OPEN probes instead

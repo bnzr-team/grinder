@@ -10,6 +10,8 @@ Exception hierarchy:
   - ConnectorIOError (general I/O errors)
     - ConnectorTransientError (retryable: network, 5xx, 429)
     - ConnectorNonRetryableError (not retryable: 4xx, auth, validation)
+  - IdempotencyConflictError (duplicate request while INFLIGHT, non-retryable)
+  - CircuitOpenError (circuit breaker is OPEN, non-retryable fast-fail)
 """
 
 from __future__ import annotations
@@ -70,3 +72,44 @@ class ConnectorNonRetryableError(ConnectorIOError):
     """
 
     pass
+
+
+class IdempotencyConflictError(ConnectorError):
+    """Duplicate request detected while another is in-flight.
+
+    This error is raised when:
+    - A request with the same idempotency key is already being processed (INFLIGHT)
+    - The caller should NOT retry with this key until the in-flight request completes
+
+    This is a non-retryable error by design (fast-fail pattern in H3 v1).
+
+    Attributes:
+        key: The idempotency key that caused the conflict
+        status: Current status of the conflicting entry (typically INFLIGHT)
+    """
+
+    def __init__(self, key: str, status: str = "INFLIGHT") -> None:
+        self.key = key
+        self.status = status
+        super().__init__(f"Idempotency conflict: key '{key}' is {status}")
+
+
+class CircuitOpenError(ConnectorError):
+    """Circuit breaker is OPEN, operation rejected.
+
+    This error is raised when:
+    - The circuit breaker for an operation is in OPEN state
+    - Or in HALF_OPEN state with probe limit reached
+
+    This is a non-retryable error by design (fast-fail pattern in H4 v1).
+    The caller should NOT retry until the circuit transitions to HALF_OPEN/CLOSED.
+
+    Attributes:
+        op_name: Operation that was rejected (place, cancel, replace, etc.)
+        circuit_state: Current state of the circuit (OPEN or HALF_OPEN)
+    """
+
+    def __init__(self, op_name: str, circuit_state: str = "OPEN") -> None:
+        self.op_name = op_name
+        self.circuit_state = circuit_state
+        super().__init__(f"Circuit breaker OPEN for '{op_name}' (state: {circuit_state})")

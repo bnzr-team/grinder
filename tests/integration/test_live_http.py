@@ -27,6 +27,9 @@ from urllib.request import Request, urlopen
 
 import pytest
 
+# Skip entire module if redis not installed (collection won't fail)
+pytest.importorskip("redis", reason="redis not installed")
+
 from grinder.observability import REQUIRED_HEALTHZ_KEYS, REQUIRED_METRICS_PATTERNS
 
 if TYPE_CHECKING:
