@@ -683,3 +683,34 @@
   - `math.log10` for liquidity — rejected; float not bit-identical across platforms/libc
   - Single-pass selection — rejected; need FeatureEngine warmup first
   - Real-time re-selection — deferred; current approach selects once after warmup
+
+## ADR-024 — Connector Hardening v1: Timeouts + Error Hierarchy + Clean Shutdown (PR-H1)
+- **Date:** 2026-02-04
+- **Status:** accepted
+- **Context:** DataConnector and BinanceWsMockConnector need production-grade hardening before live deployment. Per M3 roadmap, this includes explicit timeouts, typed error hierarchy, and clean shutdown semantics to prevent zombie tasks.
+- **Decision:**
+  - **TimeoutConfig extended:** Added `write_timeout_ms` (5000ms default) and `close_timeout_ms` (5000ms default) alongside existing `connect_timeout_ms` and `read_timeout_ms`
+  - **Error hierarchy:** Created `src/grinder/connectors/errors.py` with:
+    - `ConnectorError` — base exception for all connector errors
+    - `ConnectorTimeoutError(op, timeout_ms)` — timeout during connect/read/write/close
+    - `ConnectorClosedError(op)` — operation attempted on closed connector
+    - `ConnectorIOError` — base for I/O errors
+    - `ConnectorTransientError` — retryable errors (scaffolding for H2)
+    - `ConnectorNonRetryableError` — non-retryable errors (scaffolding for H2/H4)
+  - **Timeout utilities:** Created `src/grinder/connectors/timeouts.py` with:
+    - `wait_for_with_op(coro, timeout_ms, op)` — wraps `asyncio.wait_for` with `ConnectorTimeoutError`
+    - `cancel_tasks_with_timeout(tasks, timeout_ms)` — clean task cancellation with timeout
+    - `create_named_task(coro, name, tasks_set)` — tracked task creation with auto-removal on completion
+  - **Task tracking:** BinanceWsMockConnector tracks background tasks in `self._tasks` set with named prefix for clean shutdown
+  - **Clean shutdown:** `close()` cancels all tracked tasks via `cancel_tasks_with_timeout()`, waits for completion within `close_timeout_ms`, clears events and cursor
+  - **Stats tracking:** `MockConnectorStats` extended with `tasks_cancelled` and `tasks_force_killed` counters
+- **Consequences:**
+  - All timeout-related errors raise `ConnectorTimeoutError` (not `asyncio.TimeoutError`)
+  - Closed connector operations raise `ConnectorClosedError` (not generic `RuntimeError`)
+  - No zombie tasks after `close()` — all tasks cancelled and awaited
+  - Tests: 47 tests in `test_data_connector.py` (was 28), including `TestConnectorTimeouts`, `TestConnectorCleanShutdown`, `TestConnectorErrorHierarchy`
+  - Error hierarchy prepares for H2 (retries) and H4 (circuit breaker)
+- **Alternatives:**
+  - Per-call timeout parameters — rejected; TimeoutConfig as connector attribute is cleaner and consistent
+  - Raw `asyncio.TimeoutError` — rejected; typed errors enable better error handling upstream
+  - Fire-and-forget task cancellation — rejected; must await to ensure clean shutdown
