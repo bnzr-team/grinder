@@ -1197,6 +1197,13 @@
     - Deterministic: same inputs → same fill output
     - Guards checked: `guard.allow(REDUCE_RISK, symbol)` → always allowed in any state
     - Use case: emergency position exit when DD limit breached
+  - **Reset Hook (P2-04c):**
+    - `PaperEngine.reset_dd_guard_v1()` — returns guard to NORMAL state
+    - Use case: new session/day start
+    - Transition: DRAWDOWN → NORMAL (or NORMAL → NORMAL, safe no-op)
+    - After reset: `INCREASE_RISK` is allowed again
+    - Also called by `PaperEngine.reset()` (general reset)
+    - Returns: `{reset: bool, state_before: str, state_after: str, reason: str}`
   - **Reason Codes (stable, low-cardinality):**
     - `NORMAL_STATE`: All intents allowed in normal operation
     - `REDUCE_RISK_ALLOWED`: Reduce-only allowed in DRAWDOWN

@@ -441,11 +441,15 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - Checks `guard.allow(REDUCE_RISK, symbol)` before executing
     - Deterministic: same inputs → same fill output
     - Allows emergency exit when DRAWDOWN is triggered
+  - **Reset hook (P2-04c):**
+    - `PaperEngine.reset_dd_guard_v1()` — returns guard to NORMAL state
+    - Use case: new session/day start
+    - Also called by `PaperEngine.reset()` (general reset)
   - **How to verify:**
     ```bash
     PYTHONPATH=src pytest tests/unit/test_drawdown_guard_v1.py -v
     ```
-  - **Unit tests:** `tests/unit/test_drawdown_guard_v1.py` (49 tests: 43 guard/wiring + 6 reduce-only)
+  - **Unit tests:** `tests/unit/test_drawdown_guard_v1.py` (55 tests: 43 guard/wiring + 6 reduce-only + 6 reset)
   - See ADR-033 for design decisions
 - **KillSwitch v0** (`src/grinder/risk/kill_switch.py`):
   - Simple emergency halt latch for trading
