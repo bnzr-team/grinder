@@ -436,11 +436,16 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - Enabled via `dd_guard_v1_enabled=True` in constructor
     - Wiring point: after gating check, before execution
     - Blocks INCREASE_RISK orders when in DRAWDOWN state
+  - **Reduce-only path (P2-04b):**
+    - `PaperEngine.flatten_position(symbol, price, ts)` — closes entire position
+    - Checks `guard.allow(REDUCE_RISK, symbol)` before executing
+    - Deterministic: same inputs → same fill output
+    - Allows emergency exit when DRAWDOWN is triggered
   - **How to verify:**
     ```bash
     PYTHONPATH=src pytest tests/unit/test_drawdown_guard_v1.py -v
     ```
-  - **Unit tests:** `tests/unit/test_drawdown_guard_v1.py` (39 tests: 34 guard + 5 wiring)
+  - **Unit tests:** `tests/unit/test_drawdown_guard_v1.py` (49 tests: 43 guard/wiring + 6 reduce-only)
   - See ADR-033 for design decisions
 - **KillSwitch v0** (`src/grinder/risk/kill_switch.py`):
   - Simple emergency halt latch for trading
