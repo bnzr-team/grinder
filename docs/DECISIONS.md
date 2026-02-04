@@ -1183,6 +1183,12 @@
     - Once in DRAWDOWN, stays there until explicit `reset()` call
     - Prevents flapping and ensures deterministic replay behavior
     - Reset intended for new session/day start only
+  - **Global DRAWDOWN State (P2-04a):**
+    - Guard state is GLOBAL, not per-symbol
+    - When ANY symbol breaches its DD budget → entire guard transitions to DRAWDOWN
+    - In DRAWDOWN, INCREASE_RISK is blocked for ALL symbols, not just the breached one
+    - Rationale: Portfolio risk is correlated; if one symbol is losing, reducing exposure everywhere is prudent
+    - Example: BTCUSDT breaches $1000 budget → ETHUSDT INCREASE_RISK also blocked with reason `DD_SYMBOL_BREACH`
   - **Reason Codes (stable, low-cardinality):**
     - `NORMAL_STATE`: All intents allowed in normal operation
     - `REDUCE_RISK_ALLOWED`: Reduce-only allowed in DRAWDOWN
