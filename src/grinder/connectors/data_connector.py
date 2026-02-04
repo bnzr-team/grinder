@@ -64,15 +64,21 @@ class RetryConfig:
 
 @dataclass(frozen=True)
 class TimeoutConfig:
-    """Timeout configuration.
+    """Timeout configuration for connector operations.
+
+    All timeouts are in milliseconds. 0 = no timeout (not recommended for production).
 
     Attributes:
         connect_timeout_ms: Timeout for initial connection
-        read_timeout_ms: Timeout for reading next snapshot (0 = no timeout)
+        read_timeout_ms: Timeout for reading next snapshot
+        write_timeout_ms: Timeout for write operations (orders, etc.)
+        close_timeout_ms: Timeout for graceful shutdown
     """
 
-    connect_timeout_ms: int = 10000
-    read_timeout_ms: int = 5000
+    connect_timeout_ms: int = 5000
+    read_timeout_ms: int = 10000
+    write_timeout_ms: int = 5000
+    close_timeout_ms: int = 5000
 
 
 class DataConnector(ABC):
@@ -117,7 +123,7 @@ class DataConnector(ABC):
 
         Raises:
             ConnectionError: If connection fails after retries
-            asyncio.TimeoutError: If connection times out
+            ConnectorTimeoutError: If connection times out
         """
         ...
 
@@ -125,7 +131,11 @@ class DataConnector(ABC):
     async def close(self) -> None:
         """Close connection and release resources.
 
-        Safe to call multiple times. Idempotent.
+        Cancels all background tasks and waits for completion within
+        close_timeout_ms. Safe to call multiple times. Idempotent.
+
+        Raises:
+            ConnectorTimeoutError: If close times out (tasks didn't complete)
         """
         ...
 
@@ -140,7 +150,8 @@ class DataConnector(ABC):
 
         Raises:
             ConnectionError: If not connected
-            asyncio.TimeoutError: If read times out (if timeout configured)
+            ConnectorTimeoutError: If read times out (if timeout configured)
+            ConnectorClosedError: If connector is closed during iteration
         """
         ...
 

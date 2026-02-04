@@ -223,14 +223,29 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - **Marker:** `@pytest.mark.integration` (run with `-m integration` to filter)
   - **Dependencies:** Uses `REQUIRED_HEALTHZ_KEYS` and `REQUIRED_METRICS_PATTERNS` from `live_contract.py`
   - **Included in CI:** runs as part of standard `pytest` invocation
-- **DataConnector v0** (`src/grinder/connectors/data_connector.py`):
+- **DataConnector v1** (`src/grinder/connectors/data_connector.py`):
   - Abstract base class (ABC) defining narrow contract: `connect()`, `close()`, `iter_snapshots()`, `reconnect()`
   - **ConnectorState:** DISCONNECTED → CONNECTING → CONNECTED → RECONNECTING → CLOSED
   - **RetryConfig:** Exponential backoff with cap (`base_delay_ms`, `backoff_multiplier`, `max_delay_ms`)
-  - **TimeoutConfig:** Connection and read timeouts (`connect_timeout_ms`, `read_timeout_ms`)
+  - **TimeoutConfig (extended):**
+    - `connect_timeout_ms` (5000ms default): timeout for initial connection
+    - `read_timeout_ms` (10000ms default): timeout for reading next snapshot
+    - `write_timeout_ms` (5000ms default): timeout for write operations
+    - `close_timeout_ms` (5000ms default): timeout for graceful shutdown
+  - **Error hierarchy** (`src/grinder/connectors/errors.py`):
+    - `ConnectorError` — base exception for all connector errors
+    - `ConnectorTimeoutError(op, timeout_ms)` — timeout during connect/read/write/close
+    - `ConnectorClosedError(op)` — operation attempted on closed connector
+    - `ConnectorIOError` — base for I/O errors (scaffolding for H2)
+    - `ConnectorTransientError` — retryable errors (scaffolding for H2)
+    - `ConnectorNonRetryableError` — non-retryable errors (scaffolding for H2/H4)
+  - **Timeout utilities** (`src/grinder/connectors/timeouts.py`):
+    - `wait_for_with_op(coro, timeout_ms, op)` — wraps `asyncio.wait_for` with `ConnectorTimeoutError`
+    - `cancel_tasks_with_timeout(tasks, timeout_ms)` — clean task cancellation
+    - `create_named_task(coro, name, tasks_set)` — tracked task creation
   - **Idempotency:** `last_seen_ts` property for duplicate detection
-  - See ADR-012 for design decisions
-- **BinanceWsMockConnector v0** (`src/grinder/connectors/binance_ws_mock.py`):
+  - See ADR-012 (design), ADR-024 (hardening)
+- **BinanceWsMockConnector v1** (`src/grinder/connectors/binance_ws_mock.py`):
   - Mock connector that reads from fixture files (events.jsonl) and emits `Snapshot`
   - **Features:**
     - Fixture loading from `events.jsonl` or `events.json`
@@ -239,6 +254,17 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - Idempotency via timestamp tracking (skips duplicate/old timestamps)
     - Reconnect with position preservation (`last_seen_ts`)
     - Statistics tracking (`MockConnectorStats`)
+  - **Timeout enforcement (H1):**
+    - Connect timeout via `wait_for_with_op()` — raises `ConnectorTimeoutError` on timeout
+    - Read timeout during iteration — raises `ConnectorTimeoutError` if read_delay exceeds timeout
+    - Stats track `timeouts` count and `errors` list
+  - **Clean shutdown (H1):**
+    - Task tracking via `self._tasks` set with named prefix
+    - `close()` cancels all tasks via `cancel_tasks_with_timeout()`
+    - Waits for completion within `close_timeout_ms`
+    - Clears events, cursor; sets state to CLOSED
+    - Stats track `tasks_cancelled` and `tasks_force_killed`
+    - **No zombie guarantee:** all tasks awaited or force-killed
   - **Usage:**
     ```python
     connector = BinanceWsMockConnector(Path("tests/fixtures/sample_day"))
@@ -247,9 +273,10 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
         print(f"Got {snapshot.symbol} @ {snapshot.mid_price}")
     await connector.close()
     ```
-  - **Unit tests:** `tests/unit/test_data_connector.py` (28 tests)
+  - **Unit tests:** `tests/unit/test_data_connector.py` (47 tests)
   - **Integration tests:** `tests/integration/test_connector_integration.py` (8 tests)
   - **Limitations:** no live WebSocket, retry logic is interface-only (not used in mock)
+  - See ADR-024 for H1 hardening decisions
 - **DrawdownGuard v0** (`src/grinder/risk/drawdown.py`):
   - Tracks equity high-water mark (HWM)
   - Computes drawdown: `(HWM - equity) / HWM`
