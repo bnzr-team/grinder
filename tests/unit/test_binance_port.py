@@ -1,7 +1,8 @@
 """Unit tests for BinanceExchangePort.
 
 Tests cover:
-- Dry-run mode: NoopHttpClient makes 0 real HTTP calls
+- True dry-run mode: dry_run=True → 0 http_client.request() calls
+- Mock transport mode: NoopHttpClient records calls for verification
 - SafeMode enforcement: READ_ONLY blocks writes, LIVE_TRADE required
 - Mainnet forbidden: api.binance.com rejected in v0.1
 - Symbol whitelist: Only allowed symbols can trade
@@ -10,7 +11,7 @@ Tests cover:
 - Integration with IdempotentExchangePort (H3 idempotency)
 - Integration with CircuitBreaker (H4 fast-fail)
 
-See ADR-036 for design decisions.
+See ADR-035 for design decisions.
 """
 
 from __future__ import annotations
@@ -36,6 +37,7 @@ from grinder.execution import (
     NoopHttpClient,
     map_binance_error,
 )
+from grinder.risk import KillSwitch, KillSwitchReason
 
 # --- Fixtures ---
 
@@ -80,11 +82,110 @@ def paper_config() -> BinanceExchangePortConfig:
     )
 
 
-# --- Dry-Run Tests (CRITICAL: Proves 0 HTTP calls) ---
+@pytest.fixture
+def dry_run_config() -> BinanceExchangePortConfig:
+    """Create config with dry_run=True (0 http_client calls)."""
+    return BinanceExchangePortConfig(
+        mode=SafeMode.LIVE_TRADE,
+        base_url=BINANCE_SPOT_TESTNET_URL,
+        api_key="test_key",
+        api_secret="test_secret",
+        symbol_whitelist=["BTCUSDT", "ETHUSDT"],
+        dry_run=True,  # ← 0 http_client.request() calls
+    )
 
 
-class TestDryRunMode:
-    """Tests proving NoopHttpClient makes 0 real HTTP calls."""
+# --- True Dry-Run Tests (CRITICAL: Proves 0 http_client calls) ---
+
+
+class TestTrueDryRunMode:
+    """Tests proving dry_run=True makes EXACTLY 0 http_client.request() calls.
+
+    This is distinct from NoopHttpClient (mock transport) which still receives calls.
+    True dry-run short-circuits BEFORE calling http_client.
+    """
+
+    def test_place_order_dry_run_zero_http_calls(
+        self, noop_client: NoopHttpClient, dry_run_config: BinanceExchangePortConfig
+    ) -> None:
+        """place_order with dry_run=True makes 0 http_client calls."""
+        port = BinanceExchangePort(http_client=noop_client, config=dry_run_config)
+
+        order_id = port.place_order(
+            symbol="BTCUSDT",
+            side=OrderSide.BUY,
+            price=Decimal("50000"),
+            quantity=Decimal("0.01"),
+            level_id=1,
+            ts=1000000,
+        )
+
+        # Returns synthetic order_id
+        assert order_id is not None
+        assert "grinder_BTCUSDT_1_1000000" in order_id
+
+        # CRITICAL: 0 http_client calls
+        assert len(noop_client.calls) == 0
+
+    def test_cancel_order_dry_run_zero_http_calls(
+        self, noop_client: NoopHttpClient, dry_run_config: BinanceExchangePortConfig
+    ) -> None:
+        """cancel_order with dry_run=True makes 0 http_client calls."""
+        port = BinanceExchangePort(http_client=noop_client, config=dry_run_config)
+
+        order_id = "grinder_BTCUSDT_1_1000000_1"
+        result = port.cancel_order(order_id)
+
+        # Returns True (synthetic success)
+        assert result is True
+
+        # CRITICAL: 0 http_client calls
+        assert len(noop_client.calls) == 0
+
+    def test_replace_order_dry_run_zero_http_calls(
+        self, noop_client: NoopHttpClient, dry_run_config: BinanceExchangePortConfig
+    ) -> None:
+        """replace_order with dry_run=True makes 0 http_client calls."""
+        port = BinanceExchangePort(http_client=noop_client, config=dry_run_config)
+
+        order_id = "grinder_BTCUSDT_1_1000000_1"
+        new_order_id = port.replace_order(
+            order_id=order_id,
+            new_price=Decimal("51000"),
+            new_quantity=Decimal("0.02"),
+            ts=2000000,
+        )
+
+        # Returns synthetic order_id
+        assert new_order_id is not None
+        assert "grinder_BTCUSDT_1_2000000" in new_order_id
+
+        # CRITICAL: 0 http_client calls (cancel + place both dry-run)
+        assert len(noop_client.calls) == 0
+
+    def test_fetch_open_orders_dry_run_zero_http_calls(
+        self, noop_client: NoopHttpClient, dry_run_config: BinanceExchangePortConfig
+    ) -> None:
+        """fetch_open_orders with dry_run=True makes 0 http_client calls."""
+        port = BinanceExchangePort(http_client=noop_client, config=dry_run_config)
+
+        orders = port.fetch_open_orders("BTCUSDT")
+
+        # Returns empty list (synthetic)
+        assert orders == []
+
+        # CRITICAL: 0 http_client calls
+        assert len(noop_client.calls) == 0
+
+
+# --- Mock Transport Tests (NoopHttpClient records calls) ---
+
+
+class TestMockTransportMode:
+    """Tests for NoopHttpClient mock transport (still calls http_client.request).
+
+    This verifies that WITHOUT dry_run, operations DO call http_client.
+    """
 
     def test_noop_client_records_calls(self, noop_client: NoopHttpClient) -> None:
         """NoopHttpClient records calls without making real HTTP."""
@@ -99,10 +200,10 @@ class TestDryRunMode:
         assert noop_client.calls[0]["method"] == "POST"
         assert noop_client.calls[0]["url"] == "https://testnet.binance.vision/api/v3/order"
 
-    def test_place_order_dry_run_zero_http_calls(
+    def test_place_order_calls_http_client(
         self, noop_client: NoopHttpClient, live_trade_config: BinanceExchangePortConfig
     ) -> None:
-        """place_order with NoopHttpClient makes 0 real HTTP calls."""
+        """place_order without dry_run DOES call http_client (1 call)."""
         port = BinanceExchangePort(http_client=noop_client, config=live_trade_config)
 
         order_id = port.place_order(
@@ -114,24 +215,18 @@ class TestDryRunMode:
             ts=1000000,
         )
 
-        # Order placed successfully (mock response)
         assert order_id is not None
-
         # NoopHttpClient recorded exactly 1 call
         assert len(noop_client.calls) == 1
         assert noop_client.calls[0]["method"] == "POST"
         assert "/order" in noop_client.calls[0]["url"]
 
-        # CRITICAL: No actual network I/O occurred
-        # (NoopHttpClient is a pure in-memory mock)
-
-    def test_cancel_order_dry_run_zero_http_calls(
+    def test_cancel_order_calls_http_client(
         self, noop_client: NoopHttpClient, live_trade_config: BinanceExchangePortConfig
     ) -> None:
-        """cancel_order with NoopHttpClient makes 0 real HTTP calls."""
+        """cancel_order without dry_run DOES call http_client (1 call)."""
         port = BinanceExchangePort(http_client=noop_client, config=live_trade_config)
 
-        # Use our order ID format: grinder_{symbol}_{level_id}_{ts}_{counter}
         order_id = "grinder_BTCUSDT_1_1000000_1"
         result = port.cancel_order(order_id)
 
@@ -139,10 +234,10 @@ class TestDryRunMode:
         assert len(noop_client.calls) == 1
         assert noop_client.calls[0]["method"] == "DELETE"
 
-    def test_replace_order_dry_run_zero_http_calls(
+    def test_replace_order_calls_http_client(
         self, noop_client: NoopHttpClient, live_trade_config: BinanceExchangePortConfig
     ) -> None:
-        """replace_order with NoopHttpClient makes exactly 2 calls (cancel + place)."""
+        """replace_order without dry_run DOES call http_client (2 calls)."""
         port = BinanceExchangePort(http_client=noop_client, config=live_trade_config)
 
         order_id = "grinder_BTCUSDT_1_1000000_1"
@@ -159,10 +254,10 @@ class TestDryRunMode:
         assert noop_client.calls[0]["method"] == "DELETE"  # Cancel
         assert noop_client.calls[1]["method"] == "POST"  # Place
 
-    def test_fetch_open_orders_dry_run(
+    def test_fetch_open_orders_calls_http_client(
         self, noop_client: NoopHttpClient, live_trade_config: BinanceExchangePortConfig
     ) -> None:
-        """fetch_open_orders with NoopHttpClient makes 0 real HTTP calls."""
+        """fetch_open_orders without dry_run DOES call http_client (1 call)."""
         port = BinanceExchangePort(http_client=noop_client, config=live_trade_config)
 
         orders = port.fetch_open_orders("BTCUSDT")
@@ -566,3 +661,89 @@ class TestReset:
 
         port.reset()
         assert port._order_counter == 0
+
+
+# --- Kill-Switch Integration Tests ---
+
+
+class TestKillSwitchIntegration:
+    """Tests for kill-switch blocking writes.
+
+    IMPORTANT: Kill-switch is NOT built into BinanceExchangePort.
+    It's checked at a higher level (e.g., PaperEngine, orchestrator).
+    These tests demonstrate the INTEGRATION PATTERN.
+    """
+
+    def test_kill_switch_blocks_writes_before_port(
+        self, noop_client: NoopHttpClient, live_trade_config: BinanceExchangePortConfig
+    ) -> None:
+        """Demonstrates kill-switch blocking pattern at orchestrator level.
+
+        Pattern:
+        1. Check kill_switch.is_triggered BEFORE calling port
+        2. If triggered, skip the call entirely (0 HTTP calls)
+        """
+        port = BinanceExchangePort(http_client=noop_client, config=live_trade_config)
+        kill_switch = KillSwitch()
+
+        # Trip the kill-switch
+        kill_switch.trip(KillSwitchReason.DRAWDOWN_LIMIT, ts=1000)
+        assert kill_switch.is_triggered is True
+
+        # Orchestrator pattern: check kill-switch BEFORE calling port
+        orders_placed = 0
+        if not kill_switch.is_triggered:
+            port.place_order(
+                symbol="BTCUSDT",
+                side=OrderSide.BUY,
+                price=Decimal("50000"),
+                quantity=Decimal("0.01"),
+                level_id=1,
+                ts=1000000,
+            )
+            orders_placed += 1
+
+        # Kill-switch blocked the call
+        assert orders_placed == 0
+
+        # CRITICAL: 0 HTTP calls made (blocked before reaching port)
+        assert len(noop_client.calls) == 0
+
+    def test_kill_switch_allows_writes_when_not_triggered(
+        self, noop_client: NoopHttpClient, live_trade_config: BinanceExchangePortConfig
+    ) -> None:
+        """When kill-switch is NOT triggered, writes proceed normally."""
+        port = BinanceExchangePort(http_client=noop_client, config=live_trade_config)
+        kill_switch = KillSwitch()
+
+        # Kill-switch NOT triggered
+        assert kill_switch.is_triggered is False
+
+        # Orchestrator pattern: check kill-switch
+        if not kill_switch.is_triggered:
+            port.place_order(
+                symbol="BTCUSDT",
+                side=OrderSide.BUY,
+                price=Decimal("50000"),
+                quantity=Decimal("0.01"),
+                level_id=1,
+                ts=1000000,
+            )
+
+        # Write succeeded
+        assert len(noop_client.calls) == 1
+
+    def test_kill_switch_idempotent_trip(self) -> None:
+        """Kill-switch trip is idempotent (second trip is no-op)."""
+        kill_switch = KillSwitch()
+
+        # First trip
+        state1 = kill_switch.trip(KillSwitchReason.DRAWDOWN_LIMIT, ts=1000)
+        assert state1.triggered is True
+        assert state1.triggered_at_ts == 1000
+
+        # Second trip (same reason) is no-op
+        state2 = kill_switch.trip(KillSwitchReason.MANUAL, ts=2000)
+        assert state2.triggered is True
+        assert state2.triggered_at_ts == 1000  # Still first timestamp
+        assert state2.reason == KillSwitchReason.DRAWDOWN_LIMIT  # Still first reason

@@ -392,7 +392,8 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - Default URL: `https://testnet.binance.vision` (testnet only)
   - **Injectable HTTP client:**
     - `HttpClient` protocol for HTTP operations
-    - `NoopHttpClient` for dry-run testing (0 real HTTP calls, proves no network I/O)
+    - `NoopHttpClient` for mock transport testing (records calls but no real HTTP)
+    - `dry_run=True` config: returns synthetic results WITHOUT calling http_client (0 calls)
     - Enables deterministic testing without external dependencies
   - **Symbol whitelist:**
     - `symbol_whitelist` config parameter

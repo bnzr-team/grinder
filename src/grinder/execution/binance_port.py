@@ -3,27 +3,40 @@
 Implements ExchangePort protocol for real order operations via Binance Spot API.
 
 Key design decisions (see ADR-035):
-- SafeMode.LIVE_TRADE required for any HTTP call (impossible by default)
+- SafeMode.LIVE_TRADE required for any write operation (impossible by default)
 - Mainnet URLs forbidden in v0.1 (testnet only)
-- Injectable HttpClient for testing (dry-run = 0 HTTP calls)
+- dry_run=True returns synthetic results WITHOUT calling http_client (0 HTTP calls)
+- Injectable HttpClient for integration testing (NoopHttpClient still receives calls)
 - Symbol whitelist enforcement
 - Error mapping: Binance errors → Connector*Error types
 - Integrates with H2/H3/H4 via IdempotentExchangePort wrapper
 
-Usage:
-    # Production (with real HTTP)
+Testing modes:
+
+1. True dry-run (0 HTTP calls):
+    config = BinanceExchangePortConfig(
+        mode=SafeMode.LIVE_TRADE,
+        dry_run=True,  # ← 0 http_client calls, returns synthetic results
+    )
+    port = BinanceExchangePort(http_client=any_client, config=config)
+    # place_order returns synthetic order_id, cancel_order returns True
+    # fetch_open_orders returns [], replace_order returns synthetic order_id
+
+2. Mock transport (with call recording):
+    client = NoopHttpClient()
+    config = BinanceExchangePortConfig(mode=SafeMode.LIVE_TRADE, dry_run=False)
+    port = BinanceExchangePort(http_client=client, config=config)
+    # Operations call http_client.request() but NoopHttpClient records + mocks
+
+3. Real HTTP (production):
     client = AiohttpClient(api_key, api_secret)
-    port = BinanceExchangePort(
-        http_client=client,
-        mode=SafeMode.LIVE_TRADE,  # Explicit opt-in required
+    config = BinanceExchangePortConfig(
+        mode=SafeMode.LIVE_TRADE,
+        api_key=os.environ["BINANCE_API_KEY"],
+        api_secret=os.environ["BINANCE_API_SECRET"],
         symbol_whitelist=["BTCUSDT", "ETHUSDT"],
     )
-    order_id = port.place_order(...)
-
-    # Testing (dry-run, 0 HTTP calls)
-    client = NoopHttpClient()
-    port = BinanceExchangePort(http_client=client, mode=SafeMode.PAPER)
-    # All operations return mock data, 0 HTTP calls made
+    port = BinanceExchangePort(http_client=client, config=config)
 
 See: ADR-035 for design decisions
 """
@@ -216,6 +229,9 @@ class BinanceExchangePortConfig:
         symbol_whitelist: Allowed symbols (empty = all allowed)
         recv_window_ms: Binance recvWindow parameter (default: 5000)
         timeout_ms: Request timeout (default: 5000)
+        dry_run: If True, return synthetic results WITHOUT calling http_client.
+                 This is distinct from NoopHttpClient (which still receives calls).
+                 dry_run=True guarantees 0 http_client.request() calls.
     """
 
     mode: SafeMode = SafeMode.READ_ONLY
@@ -225,6 +241,7 @@ class BinanceExchangePortConfig:
     symbol_whitelist: list[str] = field(default_factory=list)
     recv_window_ms: int = 5000
     timeout_ms: int = 5000
+    dry_run: bool = False
 
     def __post_init__(self) -> None:
         """Validate configuration."""
@@ -353,6 +370,10 @@ class BinanceExchangePort:
         self._order_counter += 1
         client_order_id = f"grinder_{symbol}_{level_id}_{ts}_{self._order_counter}"
 
+        # DRY-RUN: Return synthetic order_id WITHOUT calling http_client
+        if self.config.dry_run:
+            return client_order_id
+
         params = {
             "symbol": symbol,
             "side": side.value.upper(),
@@ -410,6 +431,10 @@ class BinanceExchangePort:
             )
 
         self._validate_symbol(symbol)
+
+        # DRY-RUN: Return True (success) WITHOUT calling http_client
+        if self.config.dry_run:
+            return True
 
         params = {
             "symbol": symbol,
@@ -504,6 +529,10 @@ class BinanceExchangePort:
         """
         # Validate symbol even for reads (consistent behavior)
         self._validate_symbol(symbol)
+
+        # DRY-RUN: Return empty list WITHOUT calling http_client
+        if self.config.dry_run:
+            return []
 
         params = {"symbol": symbol}
         params = self._sign_request(params)

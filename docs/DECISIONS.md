@@ -1392,6 +1392,29 @@
   - Cannot accidentally trade on mainnet (forbidden in v0.1)
   - Injectable HTTP client enables deterministic testing
   - Integrates cleanly with existing H2/H3/H4/H5 stack
+- **SafeMode vs KillSwitch (Clarification):**
+  - **SafeMode** is a static, per-run configuration that controls whether the port CAN make HTTP calls
+    - Set at construction time, doesn't change during a run
+    - `READ_ONLY` → 0 writes allowed (safe by default)
+    - `LIVE_TRADE` → writes allowed (explicit opt-in)
+  - **KillSwitch** is a dynamic, runtime latch that blocks trading when triggered (ADR-013)
+    - Checked at orchestrator level (PaperEngine), NOT built into BinanceExchangePort
+    - Can trip mid-run (e.g., drawdown exceeded)
+    - Once triggered, stays triggered until explicit reset
+  - **Difference from RISK_SPEC.md "arming":**
+    - RISK_SPEC.md describes KillSwitch with `armed` flag (must arm before trigger works)
+    - Current implementation is simpler: `trip()` always works, `is_triggered` is the guard
+    - SafeMode does NOT replace arming - they're orthogonal:
+      - SafeMode = "can the port make API calls at all?"
+      - KillSwitch = "should we block trading right now?"
+  - **Integration pattern:**
+    - Orchestrator checks `kill_switch.is_triggered` BEFORE calling `port.place_order()`
+    - If triggered, skip the call (0 HTTP calls, no SafeMode check needed)
+    - If not triggered, SafeMode validation happens inside the port
+- **dry_run mode:**
+  - `BinanceExchangePortConfig.dry_run=True` returns synthetic results WITHOUT calling http_client
+  - Distinct from NoopHttpClient (which still receives calls for recording)
+  - `dry_run=True` guarantees 0 `http_client.request()` calls
 - **Out of Scope (v0.1):**
   - WebSocket streaming (uses HTTP REST only)
   - Mainnet support (testnet only)
