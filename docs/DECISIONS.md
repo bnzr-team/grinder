@@ -825,14 +825,14 @@
     - `state(op_name) -> CircuitState`: get current state
   - **CircuitOpenError**: non-retryable error raised when circuit is OPEN
   - **Injectable clock**: `clock` parameter for deterministic testing
-  - **Planned integration order** for write-path (H4-02):
+  - **Integration order** for write-path (implemented in IdempotentExchangePort):
     1. `breaker.before_call(op)` — fast-fail if OPEN
     2. Idempotency check (DONE → return, INFLIGHT → conflict)
-    3. `retry_with_policy(op, ...)` — only if breaker allows
+    3. Execute operation
     4. `breaker.record_success(op)` or `breaker.record_failure(op, reason)` based on outcome
-  - Rationale: breaker sits BEFORE retries to prevent retry storms against degraded upstream
-  - **H4-01 scope**: CircuitBreaker module implemented as library; NOT wired into execution pipeline
-  - **H4-02 scope**: Wire CircuitBreaker into IdempotentExchangePort or live connector paths
+  - Rationale: breaker sits BEFORE idempotency to prevent any interaction with degraded upstream
+  - **H4-01**: CircuitBreaker module implemented as library
+  - **H4-02**: Wired into IdempotentExchangePort with optional breaker/trip_on parameters
 - **Consequences:**
   - Degraded upstream triggers fast-fail, not retry storms
   - Per-operation isolation prevents one bad endpoint from blocking all operations

@@ -268,8 +268,8 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - `CircuitOpenError` — non-retryable error raised when circuit is OPEN
     - `default_trip_on` — trips on `ConnectorTransientError`, `ConnectorTimeoutError`
     - Per-op isolation: place can be OPEN while cancel stays CLOSED
-    - **Status: Library only — NOT wired into execution pipeline yet**
-    - Planned integration order: breaker → idempotency → retries → record_success/failure
+    - **Status: Wired into IdempotentExchangePort** (H4-02)
+    - Integration order: breaker.before_call → idempotency → execute → record_success/failure
   - **Timeout utilities** (`src/grinder/connectors/timeouts.py`):
     - `wait_for_with_op(coro, timeout_ms, op)` — wraps `asyncio.wait_for` with `ConnectorTimeoutError`
     - `cancel_tasks_with_timeout(tasks, timeout_ms)` — clean task cancellation

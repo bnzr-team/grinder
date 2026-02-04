@@ -1,18 +1,26 @@
-"""Idempotent wrapper for ExchangePort.
+"""Idempotent wrapper for ExchangePort with circuit breaker support.
 
 Provides idempotency guarantees for write operations by wrapping
-an ExchangePort with an IdempotencyStore.
+an ExchangePort with an IdempotencyStore and optional CircuitBreaker.
 
 Key behaviors:
 - Same request with same key returns cached result (DONE)
 - Concurrent duplicate fails fast with IdempotencyConflictError (INFLIGHT)
 - Expired keys allow re-execution
 - Side-effects only happen once per unique key
+- Circuit breaker fast-fails when upstream is degraded (H4)
+
+Integration order (when breaker enabled):
+1. breaker.before_call(op) — fast-fail if OPEN
+2. Idempotency check (DONE → return, INFLIGHT → conflict)
+3. Execute operation
+4. breaker.record_success(op) or record_failure(op, reason)
 
 Usage:
     store = InMemoryIdempotencyStore()
     inner_port = NoOpExchangePort()
-    port = IdempotentExchangePort(inner_port, store)
+    breaker = CircuitBreaker(config)
+    port = IdempotentExchangePort(inner_port, store, breaker=breaker)
 
     # First call executes
     order_id = port.place_order(symbol="BTC", ...)
@@ -21,7 +29,7 @@ Usage:
     order_id_2 = port.place_order(symbol="BTC", ...)
     assert order_id == order_id_2
 
-See: ADR-026 for design decisions
+See: ADR-026 (idempotency), ADR-027 (circuit breaker)
 """
 
 from __future__ import annotations
@@ -39,8 +47,10 @@ from grinder.connectors.idempotency import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from decimal import Decimal
 
+    from grinder.connectors.circuit_breaker import CircuitBreaker
     from grinder.connectors.idempotency import IdempotencyStore
     from grinder.core import OrderSide
     from grinder.execution.port import ExchangePort
@@ -76,7 +86,7 @@ class IdempotentPortStats:
 
 @dataclass
 class IdempotentExchangePort:
-    """Wrapper that adds idempotency to ExchangePort operations.
+    """Wrapper that adds idempotency and circuit breaker to ExchangePort operations.
 
     Thread-safe via IdempotencyStore locking.
 
@@ -86,6 +96,8 @@ class IdempotentExchangePort:
         scope: Scope prefix for idempotency keys (default: "exec")
         inflight_ttl_s: TTL for INFLIGHT entries (default: 300s)
         done_ttl_s: TTL for DONE entries (default: 86400s)
+        breaker: Optional CircuitBreaker for fast-fail on degraded upstream
+        trip_on: Optional callable to determine if error should trip breaker
     """
 
     inner: ExchangePort
@@ -93,6 +105,8 @@ class IdempotentExchangePort:
     scope: str = "exec"
     inflight_ttl_s: float = 300.0
     done_ttl_s: float = 86400.0
+    breaker: CircuitBreaker | None = None
+    trip_on: Callable[[Exception], bool] | None = None
     _stats: IdempotentPortStats = field(default_factory=IdempotentPortStats)
 
     @property
@@ -109,15 +123,20 @@ class IdempotentExchangePort:
         level_id: int,
         ts: int,
     ) -> str:
-        """Place an order with idempotency guarantee.
+        """Place an order with idempotency and circuit breaker guarantees.
 
         If an order with the same parameters was already placed,
         returns the cached order_id instead of placing a new order.
 
         Raises:
+            CircuitOpenError: If circuit breaker is OPEN (fast-fail)
             IdempotencyConflictError: If same request is already INFLIGHT
         """
         self._stats.place_calls += 1
+
+        # Step 1: Circuit breaker check (BEFORE idempotency)
+        if self.breaker is not None:
+            self.breaker.before_call("place")
 
         # Compute idempotency key (ts excluded - same intent = same key regardless of time)
         key = compute_idempotency_key(
@@ -139,11 +158,11 @@ class IdempotentExchangePort:
             ts=ts,
         )
 
-        # Check for existing entry
+        # Step 2: Idempotency check
         existing = self.store.get(key)
         if existing is not None:
             if existing.status == IdempotencyStatus.DONE:
-                # Return cached result
+                # Return cached result (don't record_success, it's a cache hit)
                 self._stats.place_cached += 1
                 return str(existing.result)
             if existing.status == IdempotencyStatus.INFLIGHT:
@@ -171,7 +190,7 @@ class IdempotentExchangePort:
             self._stats.place_conflicts += 1
             raise IdempotencyConflictError(key, "INFLIGHT")
 
-        # Execute the actual operation
+        # Step 3: Execute the actual operation
         try:
             order_id = self.inner.place_order(
                 symbol=symbol,
@@ -183,21 +202,38 @@ class IdempotentExchangePort:
             )
             self.store.mark_done(key, order_id)
             self._stats.place_executed += 1
+
+            # Step 4: Record success with circuit breaker
+            if self.breaker is not None:
+                self.breaker.record_success("place")
+
             return order_id
         except Exception as e:
             # Mark as failed so retries can try again
             self.store.mark_failed(key, type(e).__name__)
+
+            # Record failure with circuit breaker (if trip_on matches)
+            if self.breaker is not None:
+                trip_on = self.trip_on or self.breaker._config.trip_on
+                if trip_on(e):
+                    self.breaker.record_failure("place", str(e))
+
             raise
 
     def cancel_order(self, order_id: str) -> bool:
-        """Cancel an order with idempotency guarantee.
+        """Cancel an order with idempotency and circuit breaker guarantees.
 
         If the same cancel was already processed, returns cached result.
 
         Raises:
+            CircuitOpenError: If circuit breaker is OPEN (fast-fail)
             IdempotencyConflictError: If same request is already INFLIGHT
         """
         self._stats.cancel_calls += 1
+
+        # Step 1: Circuit breaker check (BEFORE idempotency)
+        if self.breaker is not None:
+            self.breaker.before_call("cancel")
 
         # For cancel, the order_id IS the idempotency key component
         key = compute_idempotency_key(
@@ -210,7 +246,7 @@ class IdempotentExchangePort:
 
         fingerprint = compute_request_fingerprint(order_id=order_id)
 
-        # Check for existing entry
+        # Step 2: Idempotency check
         existing = self.store.get(key)
         if existing is not None:
             if existing.status == IdempotencyStatus.DONE:
@@ -237,14 +273,26 @@ class IdempotentExchangePort:
                 return bool(existing.result)
             raise IdempotencyConflictError(key, "INFLIGHT")
 
-        # Execute the actual operation
+        # Step 3: Execute the actual operation
         try:
             result = self.inner.cancel_order(order_id)
             self.store.mark_done(key, result)
             self._stats.cancel_executed += 1
+
+            # Step 4: Record success with circuit breaker
+            if self.breaker is not None:
+                self.breaker.record_success("cancel")
+
             return result
         except Exception as e:
             self.store.mark_failed(key, type(e).__name__)
+
+            # Record failure with circuit breaker (if trip_on matches)
+            if self.breaker is not None:
+                trip_on = self.trip_on or self.breaker._config.trip_on
+                if trip_on(e):
+                    self.breaker.record_failure("cancel", str(e))
+
             raise
 
     def replace_order(
@@ -254,12 +302,17 @@ class IdempotentExchangePort:
         new_quantity: Decimal,
         ts: int,
     ) -> str:
-        """Replace an order with idempotency guarantee.
+        """Replace an order with idempotency and circuit breaker guarantees.
 
         Raises:
+            CircuitOpenError: If circuit breaker is OPEN (fast-fail)
             IdempotencyConflictError: If same request is already INFLIGHT
         """
         self._stats.replace_calls += 1
+
+        # Step 1: Circuit breaker check (BEFORE idempotency)
+        if self.breaker is not None:
+            self.breaker.before_call("replace")
 
         # ts excluded from key - same replace intent = same key regardless of time
         key = compute_idempotency_key(
@@ -279,7 +332,7 @@ class IdempotentExchangePort:
             ts=ts,
         )
 
-        # Check for existing entry
+        # Step 2: Idempotency check
         existing = self.store.get(key)
         if existing is not None:
             if existing.status == IdempotencyStatus.DONE:
@@ -305,7 +358,7 @@ class IdempotentExchangePort:
                 return str(existing.result)
             raise IdempotencyConflictError(key, "INFLIGHT")
 
-        # Execute the actual operation
+        # Step 3: Execute the actual operation
         try:
             new_order_id = self.inner.replace_order(
                 order_id=order_id,
@@ -315,9 +368,21 @@ class IdempotentExchangePort:
             )
             self.store.mark_done(key, new_order_id)
             self._stats.replace_executed += 1
+
+            # Step 4: Record success with circuit breaker
+            if self.breaker is not None:
+                self.breaker.record_success("replace")
+
             return new_order_id
         except Exception as e:
             self.store.mark_failed(key, type(e).__name__)
+
+            # Record failure with circuit breaker (if trip_on matches)
+            if self.breaker is not None:
+                trip_on = self.trip_on or self.breaker._config.trip_on
+                if trip_on(e):
+                    self.breaker.record_failure("replace", str(e))
+
             raise
 
     def fetch_open_orders(self, symbol: str) -> list[OrderRecord]:

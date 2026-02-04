@@ -823,3 +823,288 @@ class TestTTLExpiration:
         purged = store.purge_expired(clock.time())
         assert purged == 5
         assert store.stats.total_entries == 0
+
+
+# --- Circuit Breaker Integration Tests (H4-02) ---
+
+
+class TestIdempotentPortWithCircuitBreaker:
+    """Tests for IdempotentExchangePort with circuit breaker wiring."""
+
+    @dataclass
+    class FakeClock:
+        """Fake clock for testing."""
+
+        _time: float = 0.0
+
+        def time(self) -> float:
+            return self._time
+
+        def advance(self, seconds: float) -> None:
+            self._time += seconds
+
+    @pytest.fixture
+    def clock(self) -> FakeClock:
+        return self.FakeClock()
+
+    @pytest.fixture
+    def store(self, clock: FakeClock) -> InMemoryIdempotencyStore:
+        return InMemoryIdempotencyStore(_clock=clock)
+
+    @pytest.fixture
+    def inner_port(self) -> NoOpExchangePort:
+        return NoOpExchangePort()
+
+    def test_breaker_open_prevents_underlying_call(
+        self, clock: FakeClock, store: InMemoryIdempotencyStore
+    ) -> None:
+        """When circuit breaker is OPEN, underlying operation is NOT called."""
+        from grinder.connectors import (  # noqa: PLC0415
+            CircuitBreaker,
+            CircuitBreakerConfig,
+            CircuitOpenError,
+        )
+
+        # Track calls to underlying port
+        call_count = 0
+
+        class TrackingPort:
+            def place_order(
+                self,
+                symbol: str,  # noqa: ARG002
+                side: OrderSide,  # noqa: ARG002
+                price: Decimal,  # noqa: ARG002
+                quantity: Decimal,  # noqa: ARG002
+                level_id: int,  # noqa: ARG002
+                ts: int,  # noqa: ARG002
+            ) -> str:
+                nonlocal call_count
+                call_count += 1
+                return f"order-{call_count}"
+
+            def cancel_order(self, order_id: str) -> bool:  # noqa: ARG002
+                return True
+
+            def replace_order(
+                self,
+                order_id: str,  # noqa: ARG002
+                new_price: Decimal,  # noqa: ARG002
+                new_quantity: Decimal,  # noqa: ARG002
+                ts: int,  # noqa: ARG002
+            ) -> str:
+                return "replaced"
+
+            def fetch_open_orders(self, symbol: str) -> list[Any]:  # noqa: ARG002
+                return []
+
+        config = CircuitBreakerConfig(failure_threshold=2, open_interval_s=30.0)
+        breaker = CircuitBreaker(config=config, clock=clock)
+
+        port = IdempotentExchangePort(inner=TrackingPort(), store=store, breaker=breaker)
+
+        # Trip the breaker by recording failures
+        breaker.record_failure("place", "error1")
+        breaker.record_failure("place", "error2")
+
+        # Breaker is now OPEN
+        with pytest.raises(CircuitOpenError) as exc_info:
+            port.place_order(
+                symbol="BTCUSDT",
+                side=OrderSide.BUY,
+                price=Decimal("50000"),
+                quantity=Decimal("0.001"),
+                level_id=1,
+                ts=1000,
+            )
+
+        assert exc_info.value.op_name == "place"
+        assert call_count == 0  # Underlying operation was NOT called
+
+    def test_failures_trip_breaker(self, clock: FakeClock, store: InMemoryIdempotencyStore) -> None:
+        """Transient errors trip the circuit breaker."""
+        from grinder.connectors import (  # noqa: PLC0415
+            CircuitBreaker,
+            CircuitBreakerConfig,
+            CircuitState,
+            ConnectorTransientError,
+            default_trip_on,
+        )
+
+        class FailingPort:
+            def place_order(
+                self,
+                symbol: str,  # noqa: ARG002
+                side: OrderSide,  # noqa: ARG002
+                price: Decimal,  # noqa: ARG002
+                quantity: Decimal,  # noqa: ARG002
+                level_id: int,  # noqa: ARG002
+                ts: int,  # noqa: ARG002
+            ) -> str:
+                raise ConnectorTransientError("network error")
+
+            def cancel_order(self, order_id: str) -> bool:  # noqa: ARG002
+                return True
+
+            def replace_order(
+                self,
+                order_id: str,  # noqa: ARG002
+                new_price: Decimal,  # noqa: ARG002
+                new_quantity: Decimal,  # noqa: ARG002
+                ts: int,  # noqa: ARG002
+            ) -> str:
+                return "replaced"
+
+            def fetch_open_orders(self, symbol: str) -> list[Any]:  # noqa: ARG002
+                return []
+
+        config = CircuitBreakerConfig(
+            failure_threshold=2, open_interval_s=30.0, trip_on=default_trip_on
+        )
+        breaker = CircuitBreaker(config=config, clock=clock)
+
+        port = IdempotentExchangePort(inner=FailingPort(), store=store, breaker=breaker)
+
+        # Two failures should trip the breaker
+        for i in range(2):
+            with pytest.raises(ConnectorTransientError):
+                port.place_order(
+                    symbol="BTCUSDT",
+                    side=OrderSide.BUY,
+                    price=Decimal("50000"),
+                    quantity=Decimal("0.001"),
+                    level_id=i,  # Different level_id to avoid idempotency
+                    ts=1000,
+                )
+
+        # Breaker should now be OPEN
+        assert breaker.state("place") == CircuitState.OPEN
+
+    def test_success_records_with_breaker(
+        self, clock: FakeClock, store: InMemoryIdempotencyStore, inner_port: NoOpExchangePort
+    ) -> None:
+        """Successful operations are recorded with circuit breaker."""
+        from grinder.connectors import CircuitBreaker, CircuitBreakerConfig  # noqa: PLC0415
+
+        config = CircuitBreakerConfig(failure_threshold=2, open_interval_s=30.0)
+        breaker = CircuitBreaker(config=config, clock=clock)
+
+        port = IdempotentExchangePort(inner=inner_port, store=store, breaker=breaker)
+
+        # Place an order successfully
+        port.place_order(
+            symbol="BTCUSDT",
+            side=OrderSide.BUY,
+            price=Decimal("50000"),
+            quantity=Decimal("0.001"),
+            level_id=1,
+            ts=1000,
+        )
+
+        # Check breaker stats
+        assert breaker.stats.successful_calls == 1
+
+    def test_half_open_probe_success_closes_breaker(
+        self, clock: FakeClock, store: InMemoryIdempotencyStore, inner_port: NoOpExchangePort
+    ) -> None:
+        """Successful probe in HALF_OPEN closes the breaker."""
+        from grinder.connectors import (  # noqa: PLC0415
+            CircuitBreaker,
+            CircuitBreakerConfig,
+            CircuitState,
+        )
+
+        config = CircuitBreakerConfig(
+            failure_threshold=2, open_interval_s=30.0, half_open_probe_count=1
+        )
+        breaker = CircuitBreaker(config=config, clock=clock)
+
+        port = IdempotentExchangePort(inner=inner_port, store=store, breaker=breaker)
+
+        # Trip the breaker
+        breaker.record_failure("place", "error1")
+        breaker.record_failure("place", "error2")
+        assert breaker.state("place") == CircuitState.OPEN
+
+        # Wait for HALF_OPEN
+        clock.advance(30.1)
+        assert breaker.state("place") == CircuitState.HALF_OPEN
+
+        # Successful probe should close the breaker
+        port.place_order(
+            symbol="BTCUSDT",
+            side=OrderSide.BUY,
+            price=Decimal("50000"),
+            quantity=Decimal("0.001"),
+            level_id=1,
+            ts=1000,
+        )
+
+        assert breaker.state("place") == CircuitState.CLOSED
+
+    def test_no_breaker_works_normally(
+        self, store: InMemoryIdempotencyStore, inner_port: NoOpExchangePort
+    ) -> None:
+        """Port works normally when no breaker is configured."""
+        port = IdempotentExchangePort(inner=inner_port, store=store, breaker=None)
+
+        order_id = port.place_order(
+            symbol="BTCUSDT",
+            side=OrderSide.BUY,
+            price=Decimal("50000"),
+            quantity=Decimal("0.001"),
+            level_id=1,
+            ts=1000,
+        )
+
+        assert order_id is not None
+        assert port.stats.place_executed == 1
+
+    def test_per_operation_breaker_isolation(
+        self, clock: FakeClock, store: InMemoryIdempotencyStore, inner_port: NoOpExchangePort
+    ) -> None:
+        """Each operation type has independent circuit breaker state."""
+        from grinder.connectors import (  # noqa: PLC0415
+            CircuitBreaker,
+            CircuitBreakerConfig,
+            CircuitOpenError,
+            CircuitState,
+        )
+
+        config = CircuitBreakerConfig(failure_threshold=2, open_interval_s=30.0)
+        breaker = CircuitBreaker(config=config, clock=clock)
+
+        port = IdempotentExchangePort(inner=inner_port, store=store, breaker=breaker)
+
+        # Trip the 'place' breaker
+        breaker.record_failure("place", "error1")
+        breaker.record_failure("place", "error2")
+
+        # 'place' is OPEN, but 'cancel' is still CLOSED
+        assert breaker.state("place") == CircuitState.OPEN
+        assert breaker.state("cancel") == CircuitState.CLOSED
+
+        # place_order should fail
+        with pytest.raises(CircuitOpenError):
+            port.place_order(
+                symbol="BTCUSDT",
+                side=OrderSide.BUY,
+                price=Decimal("50000"),
+                quantity=Decimal("0.001"),
+                level_id=1,
+                ts=1000,
+            )
+
+        # But cancel_order should work (first, place an order without breaker)
+        port_no_breaker = IdempotentExchangePort(inner=inner_port, store=store)
+        order_id = port_no_breaker.place_order(
+            symbol="BTCUSDT",
+            side=OrderSide.BUY,
+            price=Decimal("50000"),
+            quantity=Decimal("0.001"),
+            level_id=99,  # Different level
+            ts=1000,
+        )
+
+        # Cancel with breaker-enabled port should work
+        result = port.cancel_order(order_id)
+        assert result is True
