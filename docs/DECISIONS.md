@@ -910,7 +910,7 @@
   - **Safe defaults:**
     - Default mode is `READ_ONLY` — must explicitly opt into trading
     - Default URL is Binance testnet (`wss://testnet.binance.vision/ws`) — must explicitly configure mainnet
-    - Method `assert_mode(required_mode)` — raises `PermissionError` if current mode is insufficient
+    - Method `assert_mode(required_mode)` — raises `ConnectorNonRetryableError` if current mode is insufficient
   - **LiveConnectorV0** extends `DataConnector` ABC:
     - `connect()`: establish WebSocket connection with H2 retries and H4 circuit breaker
     - `close()`: clean shutdown with task cancellation
@@ -948,3 +948,126 @@
   - No SafeMode, rely on URL config only — rejected; too easy to accidentally trade on mainnet
   - Separate read/write connectors — rejected; unnecessary complexity for v0
   - Real WebSocket in v0 — rejected; contract-first approach, real integration in v1
+
+## ADR-030 — Paper Write-Path v0: Simulated Trading (M3-LC-02)
+- **Date:** 2026-02-04
+- **Status:** accepted
+- **Context:** Paper trading mode (`SafeMode.PAPER`) was defined in ADR-029 but had no write operations implemented. Need to add `place_order`, `cancel_order`, `replace_order` to `LiveConnectorV0` while maintaining safety guarantees (no network calls, deterministic behavior).
+- **Decision:**
+  - **PaperExecutionAdapter** (`src/grinder/connectors/paper_execution.py`):
+    - In-memory order storage (no persistence)
+    - Deterministic order ID generation: `{prefix}_{seq:08d}` (e.g., `PAPER_00000001`)
+    - Injectable `clock` for deterministic timestamps
+    - No network calls — pure simulation
+  - **V0 Order Semantics (instant fill):**
+    - `place_order`: Creates order → immediately FILLED (no market simulation)
+    - `cancel_order`: If OPEN/PENDING → CANCELLED; if FILLED → `PaperOrderError`; if CANCELLED → idempotent return
+    - `replace_order`: Cancel old order + place new order (cancel+new pattern), returns NEW order_id
+  - **SafeMode Enforcement:**
+    - `READ_ONLY`: All write operations raise `ConnectorNonRetryableError` (non-retryable by design)
+    - `PAPER`: Write operations delegated to `PaperExecutionAdapter`
+    - `LIVE_TRADE`: Not implemented in v0, raises `ConnectorNonRetryableError`
+  - **Wire-up in LiveConnectorV0:**
+    - `paper_adapter` property — `PaperExecutionAdapter | None`, initialized only in PAPER mode
+    - `place_order(symbol, side, price, quantity, client_order_id)` → `OrderResult`
+    - `cancel_order(order_id)` → `OrderResult`
+    - `replace_order(order_id, new_price, new_quantity)` → `OrderResult`
+    - All methods check `ConnectorState.CLOSED` first
+  - **Types:**
+    - `OrderRequest`: Frozen dataclass for place/replace input
+    - `OrderResult`: Frozen dataclass for operation result (snapshot of order state)
+    - `PaperOrder`: Mutable internal order record
+    - `OrderType`: Enum (LIMIT, MARKET)
+    - `PaperOrderError`: Non-retryable error for paper order failures
+  - **No H2/H4 Wiring for Paper:**
+    - Paper execution is synchronous and never fails transiently
+    - Retries and circuit breaker not needed for in-memory simulation
+    - Errors are logical (invalid state) not transient (network)
+- **Mode → Operations → Backend Table:**
+  | Mode        | stream_ticks | place_order | cancel_order | replace_order | Backend           |
+  |-------------|--------------|-------------|--------------|---------------|-------------------|
+  | READ_ONLY   | ✓            | ✗           | ✗            | ✗             | N/A               |
+  | PAPER       | ✓            | ✓           | ✓            | ✓             | PaperExecutionAdapter |
+  | LIVE_TRADE  | ✓            | ✗ (v0)      | ✗ (v0)       | ✗ (v0)        | Not implemented   |
+- **Consequences:**
+  - Paper mode provides full order lifecycle without exchange dependency
+  - Order IDs are deterministic for replay/testing
+  - No network calls in PAPER mode — tests are fast and reliable
+  - Unit tests: 21 tests in `test_paper_execution.py`
+  - Integration tests: 17 tests in `test_paper_write_path.py`
+- **Out of Scope (v0):**
+  - Real trading (testnet/mainnet) — deferred to M3-LC-03
+  - Partial fills / slippage / L2 market simulation — deferred
+  - PnL calculation and commission modeling — deferred
+  - Persistent order storage — deferred
+- **Alternatives:**
+  - Shared adapter for PAPER and LIVE_TRADE — rejected; different requirements (mock vs real API)
+  - Random order IDs — rejected; breaks determinism for replay
+  - Async paper operations — rejected; unnecessary complexity for in-memory simulation
+
+
+## ADR-031 — Auto-Sizing v1: Risk-Budget-Based Position Sizing (ASM-P2-01)
+- **Date:** 2026-02-04
+- **Status:** accepted
+- **Context:** Grid policies used uniform `size_per_level` without risk awareness. Position sizes were manually configured and didn't adapt to account equity, drawdown limits, or adverse market scenarios. This made it hard to ensure portfolio-level risk stayed within bounds.
+- **Decision:**
+  - **AutoSizer Module** (`src/grinder/sizing/auto_sizer.py`):
+    - Pure function computing size_schedule from risk parameters
+    - Inputs: `equity`, `dd_budget`, `adverse_move`, `grid_shape`, `price`
+    - Output: `SizeSchedule` with `qty_per_level[]` and risk metrics
+  - **Core Formula:**
+    ```
+    max_loss_usd = equity * dd_budget
+    total_qty_allowed = max_loss_usd / (price * adverse_move)
+    qty_per_level = total_qty_allowed / n_levels  (for uniform mode)
+    ```
+    - Worst-case assumption: All levels fill on one side, price moves by `adverse_move`
+    - Always rounds DOWN to stay within risk budget
+  - **Sizing Modes:**
+    - `UNIFORM`: Equal quantity at each level (default)
+    - `PYRAMID`: Larger quantities at outer levels
+    - `INVERSE_PYRAMID`: Smaller quantities at outer levels
+  - **Integration with AdaptiveGridPolicy:**
+    - `auto_sizing_enabled: bool` flag in config (default False for backward compat)
+    - When enabled, `_compute_size_schedule()` uses AutoSizer instead of legacy uniform sizing
+    - Falls back to legacy if equity/dd_budget/adverse_move are missing
+  - **Determinism:**
+    - Pure function: same inputs → same outputs
+    - Integer bps for risk parameters
+    - Decimal arithmetic with explicit rounding
+- **Risk Bound Guarantee:**
+  ```
+  worst_case_loss = sum(qty_i * price) * adverse_move
+  constraint: worst_case_loss <= equity * dd_budget
+  ```
+  - Due to ROUND_DOWN, actual utilization is always <= 100%
+  - `risk_utilization` metric tracks efficiency (should be ~90-99%)
+- **Configuration:**
+  ```python
+  AdaptiveGridConfig(
+      auto_sizing_enabled=True,
+      equity=Decimal("10000"),          # Account equity
+      dd_budget=Decimal("0.20"),        # 20% max drawdown
+      adverse_move=Decimal("0.25"),     # 25% worst-case price move
+      auto_sizer_config=AutoSizerConfig(
+          sizing_mode=SizingMode.UNIFORM,
+          min_qty=Decimal("0.0001"),    # Exchange minimum
+          qty_precision=8,
+      ),
+  )
+  ```
+- **Consequences:**
+  - Size schedules automatically adapt to account equity and risk parameters
+  - Risk bound is enforced: worst-case loss stays within dd_budget
+  - Backward compatible: legacy uniform sizing when auto_sizing_enabled=False
+  - Unit tests: 36 tests in `test_auto_sizer.py`
+  - Integration tests: 5 tests in `test_adaptive_policy.py::TestAutoSizingIntegration`
+- **Out of Scope (v1):**
+  - Multi-symbol DD allocation (deferred to ASM-P2-02)
+  - Dynamic equity tracking (equity is static config, not live P&L)
+  - Position-aware sizing (doesn't account for existing inventory)
+  - L2 depth-aware sizing
+- **Alternatives:**
+  - Kelly criterion sizing — rejected; requires probability estimates we don't have
+  - VaR-based sizing — rejected; needs distribution assumptions
+  - Fixed notional sizing — rejected; doesn't scale with account size

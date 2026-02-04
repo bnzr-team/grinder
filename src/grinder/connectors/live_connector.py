@@ -44,13 +44,20 @@ from grinder.connectors.errors import (
     ConnectorTransientError,
 )
 from grinder.connectors.metrics import CircuitMetricState, get_connector_metrics
+from grinder.connectors.paper_execution import (
+    OrderRequest,
+    OrderResult,
+    PaperExecutionAdapter,
+)
 from grinder.connectors.retries import RetryPolicy, retry_with_policy
 from grinder.connectors.timeouts import cancel_tasks_with_timeout, wait_for_with_op
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
+    from decimal import Decimal
 
     from grinder.contracts import Snapshot
+    from grinder.core import OrderSide
 
 logger = logging.getLogger(__name__)
 
@@ -174,6 +181,14 @@ class LiveConnectorV0(DataConnector):
         for symbol in self._config.symbols:
             op_name = f"stream_{symbol}"
             get_connector_metrics().set_circuit_state(op_name, CircuitMetricState.CLOSED)
+
+        # Paper execution adapter (only used in PAPER mode)
+        self._paper_adapter: PaperExecutionAdapter | None = None
+        if self._config.mode == SafeMode.PAPER:
+            self._paper_adapter = PaperExecutionAdapter(
+                clock=self._clock,
+                order_id_prefix="PAPER",
+            )
 
     def _now(self) -> float:
         """Get current time from clock."""
@@ -421,3 +436,144 @@ class LiveConnectorV0(DataConnector):
     def circuit_breaker(self) -> CircuitBreaker:
         """Get circuit breaker for testing/monitoring."""
         return self._circuit_breaker
+
+    @property
+    def paper_adapter(self) -> PaperExecutionAdapter | None:
+        """Get paper execution adapter (only available in PAPER mode)."""
+        return self._paper_adapter
+
+    # --- Write Operations (PAPER mode only in v0) ---
+
+    def place_order(
+        self,
+        symbol: str,
+        side: OrderSide,
+        price: Decimal,
+        quantity: Decimal,
+        client_order_id: str | None = None,
+    ) -> OrderResult:
+        """Place a new order.
+
+        In PAPER mode: Simulates order placement with instant fill.
+        In READ_ONLY mode: Raises ConnectorNonRetryableError.
+        In LIVE_TRADE mode: Not implemented in v0.
+
+        Args:
+            symbol: Trading pair symbol (e.g., "BTCUSDT")
+            side: Order side (BUY or SELL)
+            price: Limit price
+            quantity: Order quantity
+            client_order_id: Optional client-provided order ID
+
+        Returns:
+            OrderResult with the placed order details
+
+        Raises:
+            ConnectorNonRetryableError: If mode doesn't allow write operations
+            ConnectorClosedError: If connector is closed
+            PaperOrderError: If order parameters are invalid (PAPER mode)
+        """
+        if self._state == ConnectorState.CLOSED:
+            raise ConnectorClosedError("place_order")
+
+        # Check mode - READ_ONLY blocks all writes
+        self.assert_mode(SafeMode.PAPER)
+
+        # LIVE_TRADE not implemented in v0
+        if self._config.mode == SafeMode.LIVE_TRADE:
+            raise ConnectorNonRetryableError(
+                "LIVE_TRADE mode not implemented in v0. Use PAPER mode for testing."
+            )
+
+        # PAPER mode: use paper adapter
+        if self._paper_adapter is None:
+            raise ConnectorNonRetryableError("Paper adapter not initialized. This is a bug.")
+
+        request = OrderRequest(
+            symbol=symbol,
+            side=side,
+            price=price,
+            quantity=quantity,
+            client_order_id=client_order_id,
+        )
+
+        return self._paper_adapter.place_order(request)
+
+    def cancel_order(self, order_id: str) -> OrderResult:
+        """Cancel an existing order.
+
+        In PAPER mode: Cancels the simulated order.
+        In READ_ONLY mode: Raises ConnectorNonRetryableError.
+        In LIVE_TRADE mode: Not implemented in v0.
+
+        Args:
+            order_id: ID of order to cancel
+
+        Returns:
+            OrderResult with the cancelled order state
+
+        Raises:
+            ConnectorNonRetryableError: If mode doesn't allow write operations
+            ConnectorClosedError: If connector is closed
+            PaperOrderError: If order not found or cannot be cancelled
+        """
+        if self._state == ConnectorState.CLOSED:
+            raise ConnectorClosedError("cancel_order")
+
+        # Check mode - READ_ONLY blocks all writes
+        self.assert_mode(SafeMode.PAPER)
+
+        # LIVE_TRADE not implemented in v0
+        if self._config.mode == SafeMode.LIVE_TRADE:
+            raise ConnectorNonRetryableError(
+                "LIVE_TRADE mode not implemented in v0. Use PAPER mode for testing."
+            )
+
+        # PAPER mode: use paper adapter
+        if self._paper_adapter is None:
+            raise ConnectorNonRetryableError("Paper adapter not initialized. This is a bug.")
+
+        return self._paper_adapter.cancel_order(order_id)
+
+    def replace_order(
+        self,
+        order_id: str,
+        new_price: Decimal | None = None,
+        new_quantity: Decimal | None = None,
+    ) -> OrderResult:
+        """Replace an existing order with new parameters.
+
+        In PAPER mode: Cancels old order and places new one (cancel+new pattern).
+        In READ_ONLY mode: Raises ConnectorNonRetryableError.
+        In LIVE_TRADE mode: Not implemented in v0.
+
+        Args:
+            order_id: ID of order to replace
+            new_price: New price (uses old price if None)
+            new_quantity: New quantity (uses old quantity if None)
+
+        Returns:
+            OrderResult with the NEW order (not the cancelled one)
+
+        Raises:
+            ConnectorNonRetryableError: If mode doesn't allow write operations
+            ConnectorClosedError: If connector is closed
+            PaperOrderError: If order not found or cannot be replaced
+        """
+        if self._state == ConnectorState.CLOSED:
+            raise ConnectorClosedError("replace_order")
+
+        # Check mode - READ_ONLY blocks all writes
+        self.assert_mode(SafeMode.PAPER)
+
+        # LIVE_TRADE not implemented in v0
+        if self._config.mode == SafeMode.LIVE_TRADE:
+            raise ConnectorNonRetryableError(
+                "LIVE_TRADE mode not implemented in v0. Use PAPER mode for testing."
+            )
+
+        # PAPER mode: use paper adapter
+        if self._paper_adapter is None:
+            raise ConnectorNonRetryableError("Paper adapter not initialized. This is a bug.")
+
+        return self._paper_adapter.replace_order(order_id, new_price, new_quantity)

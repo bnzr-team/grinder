@@ -343,9 +343,35 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - `stream_ticks()` yields nothing (placeholder for real WebSocket)
     - Contract verified, hardening wired, tests pass
     - Real WebSocket integration in v1
+  - **Paper write-path (PAPER mode only):**
+    - `place_order(symbol, side, price, quantity)` → `OrderResult` (instant fill v0)
+    - `cancel_order(order_id)` → `OrderResult` (error if filled)
+    - `replace_order(order_id, new_price, new_quantity)` → `OrderResult` (cancel+new)
+    - Deterministic order IDs: `PAPER_{seq:08d}`
+    - No network calls — pure in-memory simulation via `PaperExecutionAdapter`
   - **Unit tests:** `tests/unit/test_live_connector.py` (31 tests)
   - **Integration tests:** `tests/integration/test_live_connector_integration.py` (6 tests)
-  - See ADR-029 for design decisions
+  - See ADR-029 (live connector v0), ADR-030 (paper write-path v0)
+- **PaperExecutionAdapter** (`src/grinder/connectors/paper_execution.py`):
+  - In-memory order execution backend for PAPER mode
+  - **Features:**
+    - Deterministic order ID generation (`{prefix}_{seq:08d}`)
+    - V0 semantics: instant fill on place, cancel+new on replace
+    - Injectable `clock` for deterministic timestamps
+    - No persistence, no network calls
+  - **Types:**
+    - `OrderRequest`: Place/replace input (frozen dataclass)
+    - `OrderResult`: Operation result snapshot (frozen dataclass)
+    - `PaperOrder`: Mutable internal order record
+    - `OrderType`: LIMIT, MARKET
+    - `PaperOrderError`: Non-retryable error for order failures
+  - **How to verify paper mode:**
+    ```bash
+    PYTHONPATH=src pytest tests/unit/test_paper_execution.py tests/integration/test_paper_write_path.py -v
+    ```
+  - **Unit tests:** `tests/unit/test_paper_execution.py` (21 tests)
+  - **Integration tests:** `tests/integration/test_paper_write_path.py` (17 tests)
+  - See ADR-030 for design decisions
 - **DrawdownGuard v0** (`src/grinder/risk/drawdown.py`):
   - Tracks equity high-water mark (HWM)
   - Computes drawdown: `(HWM - equity) / HWM`
@@ -354,6 +380,22 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - **Equity definition:** `equity = initial_capital + total_realized_pnl + total_unrealized_pnl`
   - **HWM initialization:** First equity sample (starts at `initial_capital`)
   - See ADR-013 for design decisions
+- **AutoSizer v1** (`src/grinder/sizing/auto_sizer.py`):
+  - Risk-budget-based position sizing for grid policies (ASM-P2-01)
+  - **Core formula:** `qty_per_level = (equity * dd_budget) / (n_levels * price * adverse_move)`
+  - **Risk guarantee:** worst_case_loss <= equity * dd_budget
+  - **Sizing modes:** UNIFORM (default), PYRAMID, INVERSE_PYRAMID
+  - **Inputs:** equity, dd_budget (e.g., 0.20), adverse_move (e.g., 0.25), grid_shape, price
+  - **Output:** SizeSchedule with qty_per_level[], risk_utilization, worst_case_loss
+  - **Integration:** AdaptiveGridPolicy (opt-in via `auto_sizing_enabled=True`)
+  - **Backward compat:** When disabled, uses legacy uniform `size_per_level`
+  - **How to verify:**
+    ```bash
+    PYTHONPATH=src pytest tests/unit/test_auto_sizer.py tests/unit/test_adaptive_policy.py::TestAutoSizingIntegration -v
+    ```
+  - **Unit tests:** `tests/unit/test_auto_sizer.py` (36 tests)
+  - **Integration tests:** `tests/unit/test_adaptive_policy.py::TestAutoSizingIntegration` (5 tests)
+  - See ADR-031 for design decisions
 - **KillSwitch v0** (`src/grinder/risk/kill_switch.py`):
   - Simple emergency halt latch for trading
   - **Idempotent:** triggering twice is a no-op
@@ -510,7 +552,7 @@ Comprehensive adaptive grid system design:
     - **Formulas:** step=max(5, 0.3*NATR*regime_mult), width=clamp(2.0*NATR*sqrt(H/TF), 20, 500), levels=clamp(ceil(width/step), 2, 20)
     - **Regime multipliers:** RANGE=1.0, VOL_SHOCK=1.5, THIN_BOOK=2.0, TREND asymmetric (1.3× on against-trend side)
     - **Units:** All thresholds/multipliers as integer bps (×100 scale) for determinism
-    - **NOT included:** auto-sizing (legacy size_per_level), DD allocator, L2 features, Top-K integration
+    - **NOT included:** DD allocator, L2 features (auto-sizing now available via ASM-P2-01)
     - **Fixture:** `sample_day_adaptive` — paper digest `1b8af993a8435ee6`
   - ✅ **Top-K v1 (ASM-P1-06):** Feature-based symbol selection (see ADR-023)
     - **Opt-in:** `topk_v1_enabled=False` default (backward compat with existing digests)

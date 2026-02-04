@@ -21,6 +21,7 @@ from grinder.policies.grid.adaptive import (
     compute_step_bps,
     compute_width_bps,
 )
+from grinder.sizing import AutoSizerConfig
 
 
 class TestComputeStepBps:
@@ -368,3 +369,143 @@ class TestAdaptiveGridPolicyDeterminism:
         )
         assert isinstance(levels_up, int)
         assert isinstance(levels_down, int)
+
+
+class TestAutoSizingIntegration:
+    """Tests for auto-sizing integration (ASM-P2-01)."""
+
+    def test_legacy_sizing_when_disabled(self) -> None:
+        """When auto_sizing_enabled=False, uses uniform size_per_level."""
+        config = AdaptiveGridConfig(
+            size_per_level=Decimal("0.05"),
+            auto_sizing_enabled=False,
+        )
+        policy = AdaptiveGridPolicy(config)
+
+        features = {
+            "mid_price": Decimal("50000"),
+            "natr_bps": 100,
+            "spread_bps": 10,
+            "thin_l1": Decimal("1.0"),
+            "net_return_bps": 50,
+            "range_score": 5,
+            "warmup_bars": 20,
+            "ts": 1000,
+            "symbol": "BTCUSDT",
+        }
+
+        plan = policy.evaluate(features)
+
+        # Should use legacy uniform sizing
+        assert all(q == Decimal("0.05") for q in plan.size_schedule)
+
+    def test_auto_sizing_when_enabled(self) -> None:
+        """When auto_sizing_enabled=True, uses AutoSizer for size_schedule."""
+        config = AdaptiveGridConfig(
+            size_per_level=Decimal("0.05"),  # Legacy fallback
+            auto_sizing_enabled=True,
+            equity=Decimal("10000"),
+            dd_budget=Decimal("0.20"),  # 20% max drawdown
+            adverse_move=Decimal("0.25"),  # 25% worst-case move
+            auto_sizer_config=AutoSizerConfig(),
+        )
+        policy = AdaptiveGridPolicy(config)
+
+        features = {
+            "mid_price": Decimal("50000"),
+            "natr_bps": 100,
+            "spread_bps": 10,
+            "thin_l1": Decimal("1.0"),
+            "net_return_bps": 50,
+            "range_score": 5,
+            "warmup_bars": 20,
+            "ts": 1000,
+            "symbol": "BTCUSDT",
+        }
+
+        plan = policy.evaluate(features)
+
+        # Should use auto-sizing (not uniform)
+        # With auto-sizing, quantities should be risk-derived, not all 0.05
+        # For $10k equity, 20% DD budget, 25% adverse move:
+        # max_loss = $2000, total_qty = $2000 / ($50000 * 0.25) = 0.16 BTC total
+        # If we have ~3-4 levels, qty_per_level should be ~0.04-0.05 each
+        assert len(plan.size_schedule) > 0
+        total_qty = sum(plan.size_schedule)
+        assert total_qty > Decimal("0")
+
+        # Verify risk bound: worst_case_loss <= dd_budget * equity
+        worst_case = total_qty * Decimal("50000") * Decimal("0.25")
+        max_allowed = Decimal("10000") * Decimal("0.20")
+        assert worst_case <= max_allowed
+
+    def test_auto_sizing_fallback_on_missing_params(self) -> None:
+        """When auto_sizing params are missing, falls back to legacy."""
+        config = AdaptiveGridConfig(
+            size_per_level=Decimal("0.05"),
+            auto_sizing_enabled=True,
+            # Missing: equity, dd_budget, adverse_move
+        )
+        policy = AdaptiveGridPolicy(config)
+
+        features = {
+            "mid_price": Decimal("50000"),
+            "natr_bps": 100,
+            "spread_bps": 10,
+            "thin_l1": Decimal("1.0"),
+            "net_return_bps": 50,
+            "range_score": 5,
+            "warmup_bars": 20,
+            "ts": 1000,
+            "symbol": "BTCUSDT",
+        }
+
+        plan = policy.evaluate(features)
+
+        # Should fall back to legacy uniform sizing
+        assert all(q == Decimal("0.05") for q in plan.size_schedule)
+
+    def test_auto_sizing_determinism(self) -> None:
+        """Auto-sizing produces deterministic results."""
+        config = AdaptiveGridConfig(
+            auto_sizing_enabled=True,
+            equity=Decimal("10000"),
+            dd_budget=Decimal("0.20"),
+            adverse_move=Decimal("0.25"),
+            auto_sizer_config=AutoSizerConfig(),
+        )
+        policy = AdaptiveGridPolicy(config)
+
+        features = {
+            "mid_price": Decimal("50000"),
+            "natr_bps": 100,
+            "spread_bps": 10,
+            "thin_l1": Decimal("1.0"),
+            "net_return_bps": 50,
+            "range_score": 5,
+            "warmup_bars": 20,
+            "ts": 1000,
+            "symbol": "BTCUSDT",
+        }
+
+        plan1 = policy.evaluate(features)
+        plan2 = policy.evaluate(features)
+
+        assert plan1.size_schedule == plan2.size_schedule
+
+    def test_config_serialization_with_auto_sizing(self) -> None:
+        """Config with auto-sizing serializes correctly."""
+        config = AdaptiveGridConfig(
+            auto_sizing_enabled=True,
+            equity=Decimal("10000"),
+            dd_budget=Decimal("0.20"),
+            adverse_move=Decimal("0.25"),
+            auto_sizer_config=AutoSizerConfig(),
+        )
+
+        d = config.to_dict()
+
+        assert d["auto_sizing_enabled"] is True
+        assert d["equity"] == "10000"
+        assert d["dd_budget"] == "0.20"
+        assert d["adverse_move"] == "0.25"
