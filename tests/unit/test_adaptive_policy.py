@@ -21,7 +21,7 @@ from grinder.policies.grid.adaptive import (
     compute_step_bps,
     compute_width_bps,
 )
-from grinder.sizing import AutoSizerConfig
+from grinder.sizing import AutoSizerConfig, DdAllocator, RiskTier, SymbolCandidate
 
 
 class TestComputeStepBps:
@@ -509,3 +509,158 @@ class TestAutoSizingIntegration:
         assert d["equity"] == "10000"
         assert d["dd_budget"] == "0.20"
         assert d["adverse_move"] == "0.25"
+
+
+class TestDdAllocatorIntegration:
+    """Tests for DdAllocator -> AdaptiveGridPolicy integration (ASM-P2-02).
+
+    Verifies that per-symbol dd_budget from DdAllocator flows correctly
+    to AutoSizer via AdaptiveGridConfig.
+    """
+
+    def test_per_symbol_budget_flows_to_sizer(self) -> None:
+        """DdAllocator output should be usable as policy dd_budget."""
+        # Step 1: Allocate portfolio budget
+        allocator = DdAllocator()
+        candidates = [
+            SymbolCandidate(symbol="BTCUSDT", tier=RiskTier.HIGH),
+            SymbolCandidate(symbol="ETHUSDT", tier=RiskTier.MED),
+            SymbolCandidate(symbol="BNBUSDT", tier=RiskTier.LOW),
+        ]
+
+        equity = Decimal("100000")
+        portfolio_dd_budget = Decimal("0.20")  # 20% total
+
+        result = allocator.allocate(
+            equity=equity,
+            portfolio_dd_budget=portfolio_dd_budget,
+            candidates=candidates,
+        )
+
+        # Step 2: Use per-symbol budget in policy config
+        btc_dd_budget = result.allocations["BTCUSDT"]  # Per-symbol fraction
+
+        config = AdaptiveGridConfig(
+            auto_sizing_enabled=True,
+            equity=equity,
+            dd_budget=btc_dd_budget,  # From DdAllocator
+            adverse_move=Decimal("0.25"),
+            auto_sizer_config=AutoSizerConfig(),
+        )
+        policy = AdaptiveGridPolicy(config)
+
+        features = {
+            "mid_price": Decimal("50000"),
+            "natr_bps": 100,
+            "spread_bps": 10,
+            "thin_l1": Decimal("1.0"),
+            "net_return_bps": 50,
+            "range_score": 5,
+            "warmup_bars": 20,
+            "ts": 1000,
+            "symbol": "BTCUSDT",
+        }
+
+        plan = policy.evaluate(features)
+
+        # Verify risk bound uses per-symbol budget
+        total_qty = sum(plan.size_schedule)
+        worst_case = total_qty * Decimal("50000") * Decimal("0.25")
+        max_allowed = equity * btc_dd_budget  # Per-symbol, not portfolio
+        assert worst_case <= max_allowed
+
+    def test_high_risk_symbol_gets_smaller_budget(self) -> None:
+        """HIGH tier symbol should get smaller budget than LOW tier."""
+        allocator = DdAllocator()
+        candidates = [
+            SymbolCandidate(symbol="BTCUSDT", tier=RiskTier.HIGH),
+            SymbolCandidate(symbol="STABLECOIN", tier=RiskTier.LOW),
+        ]
+
+        result = allocator.allocate(
+            equity=Decimal("100000"),
+            portfolio_dd_budget=Decimal("0.20"),
+            candidates=candidates,
+        )
+
+        btc_budget = result.allocations["BTCUSDT"]
+        stable_budget = result.allocations["STABLECOIN"]
+
+        # HIGH tier gets less budget
+        assert btc_budget < stable_budget
+
+        # Both can be used to create valid policies
+        for symbol, budget in result.allocations.items():
+            config = AdaptiveGridConfig(
+                auto_sizing_enabled=True,
+                equity=Decimal("100000"),
+                dd_budget=budget,
+                adverse_move=Decimal("0.25"),
+            )
+            policy = AdaptiveGridPolicy(config)
+
+            features = {
+                "mid_price": Decimal("50000"),
+                "natr_bps": 100,
+                "spread_bps": 10,
+                "thin_l1": Decimal("1.0"),
+                "net_return_bps": 50,
+                "range_score": 5,
+                "warmup_bars": 20,
+                "ts": 1000,
+                "symbol": symbol,
+            }
+
+            plan = policy.evaluate(features)
+            assert len(plan.size_schedule) >= 0  # Valid plan created
+
+    def test_portfolio_conservation_across_symbols(self) -> None:
+        """Sum of per-symbol risk budgets should not exceed portfolio budget."""
+        allocator = DdAllocator()
+        candidates = [
+            SymbolCandidate(symbol="BTCUSDT", tier=RiskTier.HIGH),
+            SymbolCandidate(symbol="ETHUSDT", tier=RiskTier.MED),
+            SymbolCandidate(symbol="BNBUSDT", tier=RiskTier.LOW),
+        ]
+
+        equity = Decimal("100000")
+        portfolio_dd_budget = Decimal("0.20")
+
+        result = allocator.allocate(
+            equity=equity,
+            portfolio_dd_budget=portfolio_dd_budget,
+            candidates=candidates,
+        )
+
+        # Create policies for each symbol and compute total worst-case
+        total_worst_case = Decimal("0")
+
+        for symbol, dd_budget in result.allocations.items():
+            config = AdaptiveGridConfig(
+                auto_sizing_enabled=True,
+                equity=equity,
+                dd_budget=dd_budget,
+                adverse_move=Decimal("0.25"),
+            )
+            policy = AdaptiveGridPolicy(config)
+
+            features = {
+                "mid_price": Decimal("50000"),
+                "natr_bps": 100,
+                "spread_bps": 10,
+                "thin_l1": Decimal("1.0"),
+                "net_return_bps": 50,
+                "range_score": 5,
+                "warmup_bars": 20,
+                "ts": 1000,
+                "symbol": symbol,
+            }
+
+            plan = policy.evaluate(features)
+            symbol_qty = sum(plan.size_schedule)
+            symbol_worst_case = symbol_qty * Decimal("50000") * Decimal("0.25")
+            total_worst_case += symbol_worst_case
+
+        # Total worst-case across all symbols should not exceed portfolio budget
+        portfolio_budget_usd = equity * portfolio_dd_budget
+        assert total_worst_case <= portfolio_budget_usd

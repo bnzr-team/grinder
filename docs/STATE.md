@@ -396,6 +396,27 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - **Unit tests:** `tests/unit/test_auto_sizer.py` (36 tests)
   - **Integration tests:** `tests/unit/test_adaptive_policy.py::TestAutoSizingIntegration` (5 tests)
   - See ADR-031 for design decisions
+- **DdAllocator v1** (`src/grinder/sizing/dd_allocator.py`):
+  - Portfolio-to-symbol DD budget distribution (ASM-P2-02)
+  - **Inputs:** equity, portfolio_dd_budget, candidates[] (symbol, tier, weight, enabled)
+  - **Output:** AllocationResult with per-symbol dd_budget fractions and residual
+  - **Algorithm:** `risk_weight = user_weight / tier_factor`, normalize, distribute, ROUND_DOWN
+  - **Tier factors:** LOW=1.0, MED=1.5, HIGH=2.0 (higher = less budget)
+  - **Invariants (all tested):**
+    1. Non-negativity: all budgets >= 0
+    2. Conservation: sum(budgets) + residual == portfolio_budget
+    3. Determinism: same inputs → same outputs
+    4. Monotonicity: larger budget → no decrease
+    5. Tier ordering: HIGH <= MED <= LOW (at equal weights)
+  - **Residual policy:** ROUND_DOWN residual stays in cash reserve
+  - **Integration:** Output feeds into AdaptiveGridConfig.dd_budget → AutoSizer
+  - **How to verify:**
+    ```bash
+    PYTHONPATH=src pytest tests/unit/test_dd_allocator.py tests/unit/test_adaptive_policy.py::TestDdAllocatorIntegration -v
+    ```
+  - **Unit tests:** `tests/unit/test_dd_allocator.py` (28 tests)
+  - **Integration tests:** `tests/unit/test_adaptive_policy.py::TestDdAllocatorIntegration` (3 tests)
+  - See ADR-032 for design decisions
 - **KillSwitch v0** (`src/grinder/risk/kill_switch.py`):
   - Simple emergency halt latch for trading
   - **Idempotent:** triggering twice is a no-op
