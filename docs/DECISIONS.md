@@ -1818,8 +1818,77 @@
   - Memory bounded by ring buffer + TTL eviction
   - Deterministic testing with injectable clocks
 - **Out of Scope (LC-10):**
-  - Automatic remediation actions (cancel-all, flatten)
-  - `RECONCILE_ACTION=cancel_all` execution
+  - Automatic remediation actions (cancel-all, flatten) → implemented in ADR-043
+  - `RECONCILE_ACTION=cancel_all` execution → implemented in ADR-043
   - Multi-symbol reconcile optimization
   - HA leader election for reconcile loop
   - Integration with LiveEngineV0 event loop
+
+---
+
+## ADR-043 — Active Remediation v0.1 (LC-10)
+- **Date:** 2026-02-05
+- **Status:** accepted
+- **Context:** Passive reconciliation (ADR-042) detects mismatches but takes no action. Need active remediation to cancel unexpected orders and flatten unexpected positions, but with strict safety gates to prevent accidental execution.
+- **Decision:**
+  - **Actions:**
+    - `cancel_all`: Cancel unexpected grinder_ prefixed orders
+    - `flatten`: Close unexpected positions with reduceOnly market orders
+  - **9 Safety Gates (ALL must pass for real execution):**
+    | # | Gate | Config/Env | Default |
+    |---|------|------------|---------|
+    | 1 | action != none | `action` | `none` |
+    | 2 | dry_run == False | `dry_run` | `True` |
+    | 3 | allow_active_remediation | `allow_active_remediation` | `False` |
+    | 4 | armed == True | passed from LiveEngine | `False` |
+    | 5 | ALLOW_MAINNET_TRADE=1 | env var | not set |
+    | 6 | cooldown elapsed | `cooldown_seconds` | 60s |
+    | 7 | symbol in whitelist | `symbol_whitelist` | required |
+    | 8 | grinder_ prefix (cancel) | hardcoded | required |
+    | 9 | notional <= limit (flatten) | `max_flatten_notional_usdt` | 500 |
+  - **Additional limits:**
+    - `max_orders_per_action=10`: Max cancels per reconcile run
+    - `max_symbols_per_action=3`: Max symbols per reconcile run
+    - `require_whitelist=True`: Require non-empty symbol whitelist
+  - **Kill-switch semantics:** Remediation ALLOWED under kill-switch (reduces risk exposure)
+  - **Default behavior:** dry-run only — plans but doesn't execute
+  - **grinder_ prefix:** Required for cancel operations (protects manual orders placed outside grinder)
+  - **Notional cap:** Required for flatten operations (limits exposure per remediation)
+  - **New types** (`src/grinder/reconcile/remediation.py`):
+    - `RemediationBlockReason`: Enum with 13 stable values for why remediation was blocked
+    - `RemediationStatus`: Enum (PLANNED, EXECUTED, BLOCKED, FAILED)
+    - `RemediationResult`: Frozen dataclass for remediation outcome
+    - `RemediationExecutor`: Class implementing safety gates and remediation logic
+  - **New metrics:**
+    - `grinder_reconcile_action_planned_total{action}`: Counter for dry-run plans
+    - `grinder_reconcile_action_executed_total{action}`: Counter for real executions
+    - `grinder_reconcile_action_blocked_total{reason}`: Counter for blocked actions
+  - **New config fields** (`ReconcileConfig`):
+    - `action: RemediationAction = NONE`
+    - `dry_run: bool = True`
+    - `allow_active_remediation: bool = False`
+    - `max_orders_per_action: int = 10`
+    - `max_symbols_per_action: int = 3`
+    - `cooldown_seconds: int = 60`
+    - `max_flatten_notional_usdt: Decimal = 500`
+    - `require_whitelist: bool = True`
+- **Test coverage:**
+  - `tests/unit/test_remediation.py` (28 tests):
+    - 9 safety gate tests (one per gate)
+    - 4 execution tests (cancel, flatten, max_orders, max_symbols)
+    - 2 kill-switch tests (allows cancel, allows flatten)
+    - 3 metrics tests (planned, executed, blocked counters)
+    - Contract tests for enum values and constants
+- **Consequences:**
+  - Active remediation available with explicit opt-in
+  - 9 layers of safety prevent accidental execution
+  - grinder_ prefix protects manual orders from accidental cancel
+  - Notional cap limits worst-case exposure per flatten
+  - Deterministic testing via injectable port
+- **Runbook:** `docs/runbooks/12_ACTIVE_REMEDIATION.md`
+- **Out of Scope (v0.1):**
+  - Smart order replacement/modification
+  - Automatic strategy recovery after remediation
+  - Multi-venue / COIN-M support
+  - HA orchestration for remediation loop
+  - ML-based decision making

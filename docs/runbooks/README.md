@@ -17,6 +17,7 @@ Operational runbooks for GRINDER trading system.
 | [09_MAINNET_TRADE_SMOKE](09_MAINNET_TRADE_SMOKE.md) | Spot mainnet smoke test procedure (LC-08b) |
 | [10_FUTURES_MAINNET_TRADE_SMOKE](10_FUTURES_MAINNET_TRADE_SMOKE.md) | Futures USDT-M mainnet smoke test (LC-08b-F) |
 | [11_RECONCILIATION_TRIAGE](11_RECONCILIATION_TRIAGE.md) | Reconciliation mismatch triage (LC-09b) |
+| [12_ACTIVE_REMEDIATION](12_ACTIVE_REMEDIATION.md) | Active remediation operations (LC-10) |
 
 ## Quick Reference
 
