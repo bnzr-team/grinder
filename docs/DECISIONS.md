@@ -2054,3 +2054,89 @@
   - Dynamic allowlist updates at runtime
   - Multi-prefix support (only one prefix per config)
   - Strategy registry with capabilities/permissions
+
+## ADR-046 — Audit JSONL for Reconcile/Remediation (LC-11b)
+
+- **Date:** 2026-02-05
+- **Status:** accepted
+- **Context:** Reconciliation and remediation runs need a deterministic audit trail for:
+  1. Post-mortem analysis of state mismatches
+  2. Compliance/regulatory evidence
+  3. Debugging and reproducibility
+
+  Requirements:
+  - Append-only JSONL format (one event per line)
+  - No secrets in output (redaction by default)
+  - Bounded file size with rotation
+  - Opt-in (disabled by default)
+  - Deterministic serialization (sorted keys)
+
+- **Decision:**
+  - **AuditConfig** (`src/grinder/reconcile/audit.py`): Configuration for audit logging:
+    ```python
+    @dataclass
+    class AuditConfig:
+        enabled: bool = False              # Opt-in
+        path: str = "audit/reconcile.jsonl"
+        max_bytes: int = 100_000_000       # 100 MB
+        max_events_per_file: int = 100_000
+        flush_every: int = 1               # Immediate flush
+        fsync: bool = False                # No fsync for performance
+        redact: bool = True                # Redact secrets
+        fail_open: bool = True             # Continue on write error
+    ```
+  - **AuditEventType** enum:
+    - `RECONCILE_RUN`: Summary of reconcile run
+    - `REMEDIATE_ATTEMPT`: Individual remediation attempt
+    - `REMEDIATE_RESULT`: Result of remediation (planned/executed/blocked/failed)
+  - **AuditEvent** frozen dataclass:
+    - `ts_ms`: Timestamp in milliseconds
+    - `event_type`: Event type enum
+    - `run_id`: Unique run identifier (format: `{ts_ms}_{seq}`)
+    - `schema_version`: Schema version (default: 1)
+    - `mode`: "dry_run" or "live"
+    - `action`: Action type (none/cancel_all/flatten)
+    - `status`: Event status (for REMEDIATE_* events)
+    - `block_reason`: Why blocked (if applicable)
+    - `symbols`: Bounded list of symbols (max 10)
+    - `mismatch_counts`: Counts by mismatch type
+    - `details`: Additional details dict
+  - **AuditWriter** class:
+    - Append-only writes to JSONL file
+    - Creates directories if needed
+    - Rotation when `max_bytes` or `max_events_per_file` exceeded
+    - Redaction of sensitive fields (api_key, secret, token, etc.)
+    - Context manager support
+    - Injectable clock and run_id factory for testing
+  - **Environment variables:**
+    - `GRINDER_AUDIT_ENABLED=1`: Enable audit logging
+    - `GRINDER_AUDIT_PATH=/path/to/file.jsonl`: Override audit path
+  - **Integration:**
+    - `ReconcileRunner` accepts optional `audit_writer` field
+    - Writes `RECONCILE_RUN` event at end of each run
+    - Collects mismatch counts and symbols during run
+  - **Redaction:** Fields containing these patterns are replaced with `[REDACTED]`:
+    - `api_key`, `api_secret`, `secret`, `password`, `token`, `signature`, `x-mbx-apikey`, `authorization`
+  - **Failure policy:** `fail_open=True` (default) continues on write error, logs warning
+
+- **Test coverage:**
+  - `tests/unit/test_audit.py` (33 tests):
+    - AuditConfig: defaults, env var overrides
+    - AuditEvent: serialization, schema, immutability
+    - AuditWriter: append-only, rotation, redaction, context manager
+    - Factory functions: event creation
+    - Determinism: same inputs → same outputs
+    - Runner integration: audit event written, no-audit works
+
+- **Consequences:**
+  - Audit trail available for post-mortems when enabled
+  - No secrets in audit files (redaction default)
+  - Bounded file size prevents disk exhaustion
+  - Opt-in: no impact when disabled
+  - Deterministic output enables diff-based testing
+
+- **Out of Scope (v0.1):**
+  - REMEDIATE_ATTEMPT/RESULT events in runner (only RECONCILE_RUN)
+  - Centralized storage (S3, Loki)
+  - Encryption/signing of audit files
+  - Audit metrics (planned for P1)
