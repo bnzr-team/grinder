@@ -1,0 +1,4 @@
+{"e":"ACCOUNT_UPDATE","E":1704067200000,"T":1704067200000,"a":{"m":"ORDER","B":[],"P":[{"s":"BTCUSDT","pa":"0","ep":"0","up":"0","mt":"cross","ps":"BOTH"}]}}
+{"e":"ACCOUNT_UPDATE","E":1704067201000,"T":1704067201000,"a":{"m":"ORDER","B":[],"P":[{"s":"BTCUSDT","pa":"0.010","ep":"42500.00","up":"0","mt":"cross","ps":"BOTH"}]}}
+{"e":"ACCOUNT_UPDATE","E":1704067205000,"T":1704067205000,"a":{"m":"ORDER","B":[],"P":[{"s":"BTCUSDT","pa":"0.010","ep":"42500.00","up":"25.50","mt":"cross","ps":"BOTH"}]}}
+{"e":"ACCOUNT_UPDATE","E":1704067210000,"T":1704067210000,"a":{"m":"ORDER","B":[],"P":[{"s":"BTCUSDT","pa":"0","ep":"0","up":"0","mt":"cross","ps":"BOTH"}]}}

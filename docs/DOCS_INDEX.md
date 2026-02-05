@@ -65,7 +65,9 @@ Where to find information:
     - `types.py` — LiveFeaturesUpdate, WsMessage, BookTickerData, LiveFeedStats
     - `feed.py` — LiveFeed pipeline (WS → Snapshot → FeatureEngine → features)
 - `src/grinder/connectors/binance_ws.py` — BinanceWsConnector (bookTicker stream)
-- See: `docs/STATE.md` §Live Trading, `docs/DECISIONS.md` ADR-036/ADR-037
+- `src/grinder/connectors/binance_user_data_ws.py` — FuturesUserDataWsConnector (user-data stream)
+- `src/grinder/execution/futures_events.py` — FuturesOrderEvent, FuturesPositionEvent, UserDataEvent
+- See: `docs/STATE.md` §Live Trading, `docs/DECISIONS.md` ADR-036/ADR-037/ADR-041
 
 ---
 

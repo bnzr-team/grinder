@@ -534,6 +534,44 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - Golden output tests prove determinism
   - **Fixtures:** `tests/fixtures/ws/bookticker_btcusdt.json`
   - See ADR-037 for design decisions
+- **FuturesUserDataWsConnector v0.1** (`src/grinder/connectors/binance_user_data_ws.py`):
+  - WebSocket connector for Binance Futures USDT-M user-data stream (LC-09a)
+  - **Features:**
+    - ListenKey lifecycle: create (POST), keepalive (PUT), close (DELETE)
+    - Auto-keepalive every 30 seconds (configurable)
+    - Auto-reconnect with exponential backoff
+    - Event normalization: ORDER_TRADE_UPDATE → FuturesOrderEvent, ACCOUNT_UPDATE → FuturesPositionEvent
+    - Unknown events yield as UNKNOWN with raw_data (don't crash)
+  - **Event types** (`src/grinder/execution/futures_events.py`):
+    - `FuturesOrderEvent`: Normalized order update (ts, symbol, order_id, client_order_id, side, status, price, qty, executed_qty, avg_price)
+    - `FuturesPositionEvent`: Normalized position update (ts, symbol, position_amt, entry_price, unrealized_pnl)
+    - `UserDataEvent`: Tagged union wrapper with event_type discriminator
+    - `BINANCE_STATUS_MAP`: Binance status → OrderState mapping (NEW→OPEN, CANCELED→CANCELLED)
+  - **ListenKeyManager** (`ListenKeyManager`):
+    - HTTP operations via injectable `HttpClient`
+    - 401 → `ConnectorNonRetryableError` (invalid API key)
+    - 5xx → `ConnectorTransientError` (retryable)
+  - **Testing:**
+    - `FakeListenKeyManager`: Mock for listenKey operations
+    - `FakeWsTransport`: Reused from binance_ws.py for WS testing
+    - Injectable clock for keepalive timing tests
+  - **How to verify:**
+    ```bash
+    PYTHONPATH=src pytest tests/unit/test_futures_events.py tests/unit/test_listen_key_manager.py tests/unit/test_user_data_ws.py -v
+    ```
+  - **Unit tests:**
+    - `tests/unit/test_futures_events.py` (41 tests): serialization, parsing, lifecycle golden tests
+    - `tests/unit/test_listen_key_manager.py` (17 tests): HTTP operations, error handling
+    - `tests/unit/test_user_data_ws.py` (21 tests): connection, events, stats
+  - **Fixtures:**
+    - `tests/fixtures/user_data/order_lifecycle.jsonl`: NEW → PARTIALLY_FILLED → FILLED
+    - `tests/fixtures/user_data/position_lifecycle.jsonl`: 0 → position → 0
+  - **Limitations (v0.1):**
+    - No reconciliation logic (LC-09b scope)
+    - No REST snapshot fallback
+    - No active actions (cancel-all, flatten)
+    - No metrics/counters for stream health
+  - See ADR-041 for design decisions
 - **Live Smoke Harness** (`scripts/smoke_live_testnet.py`):
   - Smoke test harness for Binance (testnet or mainnet): place micro order → cancel (LC-07, LC-08b)
   - **Safe-by-construction guards:**

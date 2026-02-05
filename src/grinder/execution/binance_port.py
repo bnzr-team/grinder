@@ -141,6 +141,13 @@ class NoopHttpClient:
         }
     )
     open_orders_response: list[dict[str, Any]] = field(default_factory=list)
+    listen_key_response: dict[str, Any] = field(
+        default_factory=lambda: {"listenKey": "test_listen_key_12345"}
+    )
+
+    # Response control
+    status_code: int = 200
+    raise_exception: Exception | None = None
 
     # Call tracking
     calls: list[dict[str, Any]] = field(default_factory=list)
@@ -164,16 +171,25 @@ class NoopHttpClient:
             }
         )
 
+        # Raise exception if configured (for error testing)
+        if self.raise_exception is not None:
+            raise self.raise_exception
+
+        # Use configured status code
+        status = self.status_code
+
         # Determine response based on endpoint
+        if "listenKey" in url:
+            return HttpResponse(status_code=status, json_data=self.listen_key_response)
         if "order" in url and method == "POST":
-            return HttpResponse(status_code=200, json_data=self.place_response)
+            return HttpResponse(status_code=status, json_data=self.place_response)
         if "order" in url and method == "DELETE":
-            return HttpResponse(status_code=200, json_data=self.cancel_response)
+            return HttpResponse(status_code=status, json_data=self.cancel_response)
         if "openOrders" in url:
-            return HttpResponse(status_code=200, json_data=self.open_orders_response)
+            return HttpResponse(status_code=status, json_data=self.open_orders_response)
 
         # Default empty response
-        return HttpResponse(status_code=200, json_data={})
+        return HttpResponse(status_code=status, json_data={})
 
 
 # --- Error Mapping ---

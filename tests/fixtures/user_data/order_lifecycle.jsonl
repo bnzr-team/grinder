@@ -1,0 +1,3 @@
+{"e":"ORDER_TRADE_UPDATE","E":1704067200000,"T":1704067200000,"o":{"s":"BTCUSDT","c":"grinder_order_001","S":"BUY","o":"LIMIT","X":"NEW","i":12345678,"p":"42500.00","q":"0.010","z":"0","ap":"0"}}
+{"e":"ORDER_TRADE_UPDATE","E":1704067201000,"T":1704067201000,"o":{"s":"BTCUSDT","c":"grinder_order_001","S":"BUY","o":"LIMIT","X":"PARTIALLY_FILLED","i":12345678,"p":"42500.00","q":"0.010","z":"0.005","ap":"42500.00"}}
+{"e":"ORDER_TRADE_UPDATE","E":1704067202000,"T":1704067202000,"o":{"s":"BTCUSDT","c":"grinder_order_001","S":"BUY","o":"LIMIT","X":"FILLED","i":12345678,"p":"42500.00","q":"0.010","z":"0.010","ap":"42500.00"}}

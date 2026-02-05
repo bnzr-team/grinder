@@ -1699,3 +1699,54 @@
   - Multi-symbol concurrent streaming (single pipeline)
   - WebSocket heartbeat/ping handling (delegated to websockets library)
   - Persistence of WS messages for replay (deferred)
+
+---
+
+## ADR-041 — Futures User-Data Stream v0.1 (LC-09a)
+- **Date:** 2026-02-05
+- **Status:** accepted
+- **Context:** Reconciliation between expected order state (from execution) and actual state (from exchange) requires real-time user-data stream. Binance Futures USDT-M uses a listenKey-based WebSocket for ORDER_TRADE_UPDATE and ACCOUNT_UPDATE events. Need event normalization, listenKey lifecycle management, and deterministic testing.
+- **Decision:**
+  - **New types** (`src/grinder/execution/futures_events.py`):
+    - `FuturesOrderEvent`: Normalized order update (ts, symbol, order_id, client_order_id, side, status, price, qty, executed_qty, avg_price)
+    - `FuturesPositionEvent`: Normalized position update (ts, symbol, position_amt, entry_price, unrealized_pnl)
+    - `UserDataEventType`: Enum for ORDER_TRADE_UPDATE, ACCOUNT_UPDATE, UNKNOWN
+    - `UserDataEvent`: Tagged union wrapper for event dispatch
+    - `BINANCE_STATUS_MAP`: Binance status → OrderState mapping (NEW→OPEN, CANCELED→CANCELLED, etc.)
+  - **ListenKey lifecycle** (`src/grinder/connectors/binance_user_data_ws.py`):
+    - `ListenKeyConfig`: API base URL, API key, timeout
+    - `ListenKeyManager`: HTTP operations for listenKey (POST create, PUT keepalive, DELETE close)
+    - 401 → `ConnectorNonRetryableError` (invalid API key)
+    - 5xx → `ConnectorTransientError` (retryable)
+  - **WebSocket connector** (`FuturesUserDataWsConnector`):
+    - Lifecycle: connect (create listenKey → WS connect → start keepalive), close (cancel keepalive → WS close → delete listenKey)
+    - `iter_events()`: AsyncIterator yielding `UserDataEvent`
+    - Auto-keepalive: PUT every 30 seconds (configurable)
+    - Auto-reconnect: exponential backoff on transient errors
+    - Unknown events: yield as UNKNOWN with raw_data (don't crash)
+    - listenKeyExpired: log warning, trigger reconnect
+  - **Testing infrastructure**:
+    - `FakeListenKeyManager`: Injectable mock for listenKey operations
+    - Reuses `FakeWsTransport` from binance_ws.py for WS testing
+    - Injectable clock for keepalive timing tests
+  - **Fixtures** (`tests/fixtures/user_data/`):
+    - `order_lifecycle.jsonl`: NEW → PARTIALLY_FILLED → FILLED
+    - `position_lifecycle.jsonl`: 0 → position → 0
+    - Golden tests verify deterministic normalization (same input → same output)
+- **API message format (Binance reference)**:
+  - ORDER_TRADE_UPDATE: `o.s`→symbol, `o.c`→client_order_id, `o.X`→status, `o.i`→order_id, etc.
+  - ACCOUNT_UPDATE: `a.P[]`→positions array, `a.P[].s`→symbol, `a.P[].pa`→position_amt, etc.
+- **Test coverage:**
+  - `tests/unit/test_futures_events.py` (41 tests): serialization, parsing, lifecycle golden tests
+  - `tests/unit/test_listen_key_manager.py` (17 tests): HTTP operations, error handling
+  - `tests/unit/test_user_data_ws.py` (21 tests): connection, events, stats, FakeListenKeyManager
+- **Consequences:**
+  - User-data stream infrastructure ready for reconciliation integration (LC-09b)
+  - Event normalization provides stable types for strategy logic
+  - Deterministic testing without network dependencies
+  - listenKey lifecycle managed automatically (no manual keepalive needed)
+- **Out of Scope (LC-09b):**
+  - Reconciliation logic (comparing expected vs observed state)
+  - REST snapshot fallback
+  - Active actions (cancel-all, flatten on mismatch)
+  - Metrics/counters for stream health
