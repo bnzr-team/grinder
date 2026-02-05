@@ -137,6 +137,56 @@ When you receive a `KillSwitchTripped` alert:
 
 ---
 
+## Kill-Switch Behavior
+
+### What Gets Blocked
+
+When kill-switch is active:
+
+| Action | Behavior |
+|--------|----------|
+| PLACE | **BLOCKED** - New orders rejected |
+| REPLACE | **BLOCKED** - Order modifications rejected |
+| CANCEL | **ALLOWED** - Can cancel existing orders |
+
+This allows operators to reduce risk by cancelling open orders even when the kill-switch is triggered.
+
+### Code Verification
+
+```python
+# In LiveEngineV0._process_action():
+if self._config.kill_switch_active and intent != RiskIntent.CANCEL:
+    return LiveAction(
+        status=LiveActionStatus.BLOCKED,
+        block_reason=BlockReason.KILL_SWITCH_ACTIVE,
+    )
+# CANCEL proceeds even with kill-switch active
+```
+
+---
+
+## Testnet Verification
+
+Use the smoke test script to verify kill-switch behavior:
+
+```bash
+# Test that kill-switch blocks PLACE
+PYTHONPATH=src python -m scripts.smoke_live_testnet --kill-switch
+```
+
+**Expected output:**
+
+```
+Kill-switch is ACTIVE - PLACE blocked, CANCEL allowed
+SMOKE TEST RESULT: PASS
+  Order placed: False
+  Error: Kill-switch active - order placement blocked (expected)
+```
+
+See: [08_SMOKE_TEST_TESTNET.md](08_SMOKE_TEST_TESTNET.md)
+
+---
+
 ## Prevention
 
 - Monitor `grinder_drawdown_pct` for early warning

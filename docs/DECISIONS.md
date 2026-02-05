@@ -1483,3 +1483,219 @@
   - Persistent state recovery (deferred)
   - Real E2E testnet testing (requires LC-07 runbook)
   - Engine-level metrics (H5) beyond existing port metrics
+
+## ADR-038 — Testnet Smoke Harness (LC-07)
+- **Date:** 2026-02-05
+- **Status:** accepted
+- **Context:** Need an E2E smoke test for Binance Testnet to verify live trading connectivity and order flow. Must be safe-by-construction: cannot accidentally trade on mainnet or place real orders without explicit opt-in.
+- **Decision:**
+  - **Safe-by-construction guards:**
+    - `--dry-run` by default (no real HTTP calls, simulated place/cancel)
+    - Requires `--confirm TESTNET` for real orders
+    - Mainnet FORBIDDEN (blocked in BinanceExchangePort)
+    - Requires `ARMED=1` + `ALLOW_TESTNET_TRADE=1` env vars for real trades
+    - Kill-switch blocks PLACE/REPLACE, allows CANCEL
+  - **Script:** `scripts/smoke_live_testnet.py`
+    - `RequestsHttpClient`: Real HTTP via requests library
+    - `SmokeResult`: Tracks simulated vs real outcomes
+    - Clear output: `** SIMULATED - No real HTTP calls made **` in dry-run
+    - Order ID prefixed with `SIM_` in dry-run mode
+  - **Runbook:** `docs/runbooks/08_SMOKE_TEST_TESTNET.md`
+    - Step-by-step procedure for testnet smoke test
+    - Failure scenarios and resolution
+    - Operator checklist
+  - **Kill-switch extension:** `docs/runbooks/04_KILL_SWITCH.md`
+    - Added kill-switch behavior table (PLACE blocked, CANCEL allowed)
+    - Testnet verification procedure
+- **E2E Run Status:**
+  - Smoke harness is READY and tested in dry-run mode
+  - Real E2E run is OPERATOR-DEPENDENT (requires Binance testnet credentials)
+  - Binance testnet may require KYC verification for API key generation
+  - Real E2E run NOT executed as part of this PR
+- **Verification (dry-run):**
+  ```bash
+  PYTHONPATH=src python -m scripts.smoke_live_testnet  # dry-run
+  PYTHONPATH=src python -m scripts.smoke_live_testnet --kill-switch  # kill-switch test
+  ```
+- **Consequences:**
+  - Operators can verify testnet connectivity when they have credentials
+  - Dry-run mode proves script logic works without external dependencies
+  - Mainnet protection hardcoded at BinanceExchangePort level
+  - Kill-switch behavior documented and testable
+- **Out of Scope (v0.1):**
+  - Mainnet trading (superseded by ADR-039)
+  - Automated CI execution of real testnet orders (no credentials in CI)
+  - Fill verification (order is far-from-market, should not fill)
+
+---
+
+## ADR-039 — Mainnet Trade Smoke v0.1 (LC-08b)
+- **Date:** 2026-02-05
+- **Status:** accepted
+- **Context:** Testnet unavailable due to KYC requirements. Mainnet trading is available with a dedicated test budget. Need safe-by-construction guards to enable mainnet smoke testing without risk of accidental large trades.
+- **Decision:**
+  - **Multi-layer safety guards:**
+    1. `allow_mainnet=False` by default (must explicitly opt-in in config)
+    2. `ALLOW_MAINNET_TRADE=1` env var required (prevents accidental mainnet)
+    3. `symbol_whitelist` REQUIRED for mainnet (no wildcard trading)
+    4. `max_notional_per_order` REQUIRED for mainnet (caps each order notional)
+    5. `max_orders_per_run=1` default (single order per script run)
+    6. `max_open_orders=1` default (single concurrent order)
+    7. `ARMED=1` env var required (same as testnet)
+  - **BinanceExchangePort changes:**
+    - Conditional mainnet allow (was: unconditional block)
+    - `is_mainnet()` method for URL detection
+    - `_validate_notional()` enforces notional limit
+    - `_validate_order_count()` enforces order count limit
+    - `reset()` clears order count for new runs
+  - **Smoke script changes:**
+    - `--confirm MAINNET_TRADE` flag for mainnet mode
+    - `--max-notional` argument (default: $50)
+    - Clear banner: `*** LIVE MAINNET MODE ***`
+    - Output shows `is_mainnet: True`, `base_url: api.binance.com`
+  - **Guard validation order (fail-fast):**
+    1. Config validation (allow_mainnet, env var, whitelist, max_notional)
+    2. Per-order validation (notional limit, order count)
+  - **Runbook:** `docs/runbooks/09_MAINNET_TRADE_SMOKE.md`
+    - Prerequisites (credentials, test budget, env vars)
+    - Step-by-step procedure
+    - Verification checklist
+    - Emergency procedures
+- **Test coverage:**
+  - `TestMainnetGuards` class (7 tests) in `tests/unit/test_binance_port.py`
+  - Tests: env var required, whitelist required, max_notional required, limit enforcement
+- **Verification:**
+  ```bash
+  # Dry-run (default)
+  PYTHONPATH=src python3 -m scripts.smoke_live_testnet
+
+  # Real mainnet order (budgeted)
+  BINANCE_API_KEY=xxx BINANCE_API_SECRET=yyy ARMED=1 ALLOW_MAINNET_TRADE=1 \
+      PYTHONPATH=src python3 -m scripts.smoke_live_testnet --confirm MAINNET_TRADE
+  ```
+- **Consequences:**
+  - Mainnet smoke testing enabled with strict guardrails
+  - 7+ layers of safety prevent accidental large trades
+  - Order count limits prevent runaway scripts
+  - Notional limits cap worst-case per-order loss
+  - All guards verified by unit tests
+- **Out of Scope (v0.1):**
+  - Multi-symbol mainnet trading (single symbol per run)
+  - Automated mainnet E2E in CI (manual operator runs only)
+  - Fill verification (order placed far from market)
+
+## ADR-040 — Futures USDT-M Mainnet Smoke v0.1 (LC-08b-F)
+- **Date:** 2026-02-05
+- **Status:** accepted
+- **Context:** Target execution venue is Binance Futures USDT-M (`fapi.binance.com`), not Spot. ADR-039 implemented Spot mainnet smoke (`api.binance.com`), but this does not validate the actual execution path. Need futures-specific port and smoke harness.
+- **Decision:**
+  - **New module:** `src/grinder/execution/binance_futures_port.py`
+    - `BinanceFuturesPortConfig`: Configuration with futures-specific guards
+    - `BinanceFuturesPort`: Exchange port implementing futures API
+    - Base URL: `https://fapi.binance.com` (mainnet), `https://testnet.binancefuture.com` (testnet)
+  - **Futures-specific safety guards:**
+    - Same 7 layers as ADR-039 (allow_mainnet, env var, whitelist, notional, order count)
+    - `target_leverage`: Enforce leverage setting (default: 1x = no leverage)
+    - Position mode logging (hedge vs one-way)
+    - Margin type logging (isolated vs cross)
+  - **Position cleanup on fill:**
+    - After order placement + cancel, check for residual position
+    - If position exists → close with market order (`reduceOnly=True`)
+    - Final verification: position should be 0
+  - **Smoke script:** `scripts/smoke_futures_mainnet.py`
+    - `--confirm FUTURES_MAINNET_TRADE` flag for live mode
+    - 7-step procedure: account info → leverage → position check → order → cancel → cleanup → verify
+    - Clear output: leverage, position mode, order details, cleanup status
+  - **API endpoints:**
+    - `POST /fapi/v1/order` (place order)
+    - `DELETE /fapi/v1/order` (cancel order)
+    - `POST /fapi/v1/leverage` (set leverage)
+    - `GET /fapi/v2/positionRisk` (check position)
+    - `GET /fapi/v2/account` (account info)
+    - `GET /fapi/v1/positionSide/dual` (position mode)
+- **Test coverage:**
+  - `tests/unit/test_binance_futures_port.py` (30 tests)
+  - Dry-run tests (0 HTTP calls)
+  - SafeMode enforcement tests
+  - Mainnet guard tests
+  - Notional/order count limit tests
+  - Leverage validation tests
+- **Consequences:**
+  - Futures USDT-M execution path now validated
+  - Same guardrails as Spot (ADR-039)
+  - Leverage enforced at 1x by default (no margin amplification)
+  - Position cleanup ensures no residual exposure
+- **Runbook:** `docs/runbooks/10_FUTURES_MAINNET_TRADE_SMOKE.md`
+- **Spot vs Futures:**
+  - ADR-039 (LC-08b): Spot mainnet smoke → validates Spot path
+  - ADR-040 (LC-08b-F): Futures mainnet smoke → validates Futures USDT-M path
+  - Target production venue: Futures USDT-M
+
+---
+
+## ADR-037 — LiveFeed: Live Read-Path Pipeline (LC-06)
+- **Date:** 2026-02-05
+- **Status:** accepted
+- **Context:** LiveEngineV0 (ADR-036) handles write-path (order execution), but we need a read-only data pipeline to convert Binance WebSocket bookTicker stream into FeatureSnapshot objects for the policy layer. This must be strictly read-only with ZERO imports from execution module.
+- **Decision:**
+  - **New modules:**
+    - `grinder.connectors.binance_ws`: WebSocket client for Binance bookTicker stream
+    - `grinder.live.types`: LiveFeaturesUpdate, WsMessage, BookTickerData, LiveFeedStats
+    - `grinder.live.feed`: LiveFeed pipeline orchestrator
+  - **Architecture:** DataConnector → Snapshot → FeatureEngine → LiveFeaturesUpdate
+  - **Hard read-only constraint:**
+    - `feed.py` MUST NOT import from `grinder.execution.*`
+    - Enforced by `test_feed_py_has_no_execution_imports` using AST parsing
+    - Violation = CI failure
+  - **BinanceWsConnector:**
+    - Implements `DataConnector` ABC with `iter_snapshots()` async iterator
+    - Parses bookTicker JSON → Snapshot objects
+    - Idempotency via `last_seen_ts` tracking (skips old/duplicate)
+    - Auto-reconnect with exponential backoff
+    - Testable via `WsTransport` ABC injection
+  - **FakeWsTransport:**
+    - Pre-loaded messages queue for testing
+    - Simulated delays (`delay_ms`)
+    - Error injection (`error_after=N`)
+    - Injectable clock for deterministic timestamps
+  - **LiveFeed pipeline:**
+    - Receives Snapshots from DataConnector
+    - Filters by configured symbols
+    - Feeds through FeatureEngine (BarBuilder → indicators)
+    - Yields LiveFeaturesUpdate with computed features
+    - Tracks stats (ticks, bars, errors, latency)
+  - **LiveFeaturesUpdate:**
+    - `ts`: Snapshot timestamp
+    - `symbol`: Trading symbol
+    - `features`: FeatureSnapshot from engine
+    - `bar_completed`: Whether a new bar was completed
+    - `bars_available`: Count of completed bars
+    - `is_warmed_up`: Whether enough bars for full feature computation
+    - `latency_ms`: Processing latency
+  - **Configuration:**
+    - `LiveFeedConfig`: symbols filter, feature_config, warmup_bars
+    - `BinanceWsConfig`: symbols, use_testnet, timeout, retry
+- **Implementation:**
+  - `src/grinder/connectors/binance_ws.py`: WsTransport, BinanceWsConnector
+  - `src/grinder/live/types.py`: LiveFeaturesUpdate, WsMessage, BookTickerData
+  - `src/grinder/live/feed.py`: LiveFeed, LiveFeedConfig, LiveFeedRunner
+  - `tests/unit/test_live_feed.py`: 21 tests
+  - `tests/fixtures/ws/bookticker_btcusdt.jsonl`: Golden fixture
+- **Testing:**
+  - **P0 Hard-block tests (2):** AST check for 0 execution imports in feed.py and types.py
+  - **FakeWsTransport tests (3):** Message ordering, not-connected error, error injection
+  - **BinanceWsConnector tests (4):** Connect/subscribe, yields snapshots, skip subscription response, idempotency
+  - **LiveFeed tests (7):** Process snapshot, bars tracking, symbol filtering, warmup detection, stats, reset
+  - **Determinism tests (2):** Same input → same output, golden fixture SHA256 match
+  - **LiveFeaturesUpdate tests (1):** to_dict serialization
+- **Consequences:**
+  - Live data pipeline ready for integration with LiveEngineV0
+  - Strictly read-only (no accidental trades from data plane)
+  - Deterministic testing with fake WS transport
+  - Golden fixtures enable regression detection
+  - FeatureEngine produces features for policy evaluation
+- **Out of Scope (v0):**
+  - Real WebSocket connection to mainnet (testnet only)
+  - Multi-symbol concurrent streaming (single pipeline)
+  - WebSocket heartbeat/ping handling (delegated to websockets library)
+  - Persistence of WS messages for replay (deferred)

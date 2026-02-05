@@ -57,10 +57,15 @@ Where to find information:
 ---
 
 ## Live Trading
-- `src/grinder/live/` — LiveEngineV0 module (ADR-036)
-  - `config.py` — LiveEngineConfig (arming, mode, kill-switch, whitelist)
-  - `engine.py` — LiveEngineV0 (safety gates, intent classification, hardening chain)
-- See: `docs/STATE.md` §Live Trading, `docs/DECISIONS.md` ADR-036
+- `src/grinder/live/` — Live trading modules
+  - **Write-path (ADR-036):**
+    - `config.py` — LiveEngineConfig (arming, mode, kill-switch, whitelist)
+    - `engine.py` — LiveEngineV0 (safety gates, intent classification, hardening chain)
+  - **Read-path (ADR-037):**
+    - `types.py` — LiveFeaturesUpdate, WsMessage, BookTickerData, LiveFeedStats
+    - `feed.py` — LiveFeed pipeline (WS → Snapshot → FeatureEngine → features)
+- `src/grinder/connectors/binance_ws.py` — BinanceWsConnector (bookTicker stream)
+- See: `docs/STATE.md` §Live Trading, `docs/DECISIONS.md` ADR-036/ADR-037
 
 ---
 
@@ -75,6 +80,11 @@ Where to find information:
   - `05_SOAK_GATE.md` — running soak tests
   - `06_ALERT_RESPONSE.md` — responding to alerts
   - `07_HA_OPERATIONS.md` — HA deployment, failover, rolling restart
+  - `08_SMOKE_TEST_TESTNET.md` — testnet smoke test procedure
+  - `09_MAINNET_TRADE_SMOKE.md` — Spot mainnet smoke test procedure (LC-08b)
+  - `10_FUTURES_MAINNET_TRADE_SMOKE.md` — Futures USDT-M mainnet smoke test (LC-08b-F)
+- `scripts/smoke_live_testnet.py` — Spot smoke test script (testnet/mainnet)
+- `scripts/smoke_futures_mainnet.py` — Futures USDT-M smoke test script (mainnet)
 
 ---
 

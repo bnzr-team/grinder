@@ -383,13 +383,19 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - **Unit tests:** `tests/unit/test_paper_execution.py` (21 tests)
   - **Integration tests:** `tests/integration/test_paper_write_path.py` (17 tests)
   - See ADR-030 for design decisions
-- **BinanceExchangePort v0.1** (`src/grinder/execution/binance_port.py`):
-  - Live exchange port implementing ExchangePort protocol for Binance Spot Testnet (LC-04)
+- **BinanceExchangePort v0.2** (`src/grinder/execution/binance_port.py`):
+  - Live exchange port implementing ExchangePort protocol for Binance Spot (LC-04, LC-08b)
   - **Safety by design:**
     - `SafeMode.READ_ONLY` (default): blocks ALL write operations → 0 risk
     - `SafeMode.LIVE_TRADE` required for real API calls (explicit opt-in)
-    - Mainnet URLs (`api.binance.com`) forbidden in v0.1 (raises `ConnectorNonRetryableError`)
-    - Default URL: `https://testnet.binance.vision` (testnet only)
+    - Default URL: `https://testnet.binance.vision` (testnet)
+  - **Mainnet guards (ADR-039, LC-08b):**
+    - `allow_mainnet=False` by default (must explicitly opt-in)
+    - `ALLOW_MAINNET_TRADE=1` env var REQUIRED for mainnet
+    - `symbol_whitelist` REQUIRED for mainnet (non-empty)
+    - `max_notional_per_order` REQUIRED for mainnet
+    - `max_orders_per_run=1` default (single order per run)
+    - `max_open_orders=1` default (single concurrent order)
   - **Injectable HTTP client:**
     - `HttpClient` protocol for HTTP operations
     - `NoopHttpClient` for mock transport testing (records calls but no real HTTP)
@@ -397,7 +403,7 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - Enables deterministic testing without external dependencies
   - **Symbol whitelist:**
     - `symbol_whitelist` config parameter
-    - Blocks trades for unlisted symbols (empty = all allowed)
+    - Blocks trades for unlisted symbols (empty = all allowed for testnet, REQUIRED for mainnet)
   - **Error mapping:**
     - 5xx → `ConnectorTransientError` (retryable)
     - 429 → `ConnectorTransientError` (rate limit)
@@ -407,7 +413,7 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - Wrap with `IdempotentExchangePort` for idempotency + circuit breaker
     - Replace = cancel + place with shared idempotency key (safe under retries)
   - **Operations:**
-    - `place_order()`: POST /api/v3/order
+    - `place_order()`: POST /api/v3/order (validates notional + order count)
     - `cancel_order()`: DELETE /api/v3/order
     - `replace_order()`: cancel + place
     - `fetch_open_orders()`: GET /api/v3/openOrders
@@ -415,18 +421,54 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     ```bash
     PYTHONPATH=src pytest tests/unit/test_binance_port.py -v
     ```
-  - **Unit tests:** `tests/unit/test_binance_port.py` (28 tests)
+  - **Unit tests:** `tests/unit/test_binance_port.py` (42 tests)
     - Dry-run tests prove NoopHttpClient makes 0 HTTP calls
     - SafeMode tests prove READ_ONLY blocks writes
-    - Mainnet tests prove api.binance.com is rejected
+    - Mainnet guard tests prove env var, whitelist, notional limits enforced
     - Error mapping tests prove correct classification
     - Idempotency integration tests prove caching works
-  - **Limitations (v0.1):**
-    - Testnet only (mainnet forbidden)
+  - **Limitations (v0.2):**
     - HTTP REST only (no WebSocket streaming)
     - Spot only (no futures/margin)
     - Real AiohttpClient not implemented (only protocol)
-  - See ADR-035 for design decisions
+  - See ADR-035, ADR-039 for design decisions
+- **BinanceFuturesPort v0.1** (`src/grinder/execution/binance_futures_port.py`):
+  - Live exchange port implementing ExchangePort protocol for Binance Futures USDT-M (LC-08b-F)
+  - **Target execution venue:** `fapi.binance.com` (Futures USDT-M mainnet)
+  - **Safety by design:**
+    - `SafeMode.READ_ONLY` (default): blocks ALL write operations → 0 risk
+    - `SafeMode.LIVE_TRADE` required for real API calls (explicit opt-in)
+    - Default URL: `https://testnet.binancefuture.com` (testnet)
+  - **Mainnet guards (ADR-040, LC-08b-F):**
+    - `allow_mainnet=False` by default (must explicitly opt-in)
+    - `ALLOW_MAINNET_TRADE=1` env var REQUIRED for mainnet
+    - `symbol_whitelist` REQUIRED for mainnet (non-empty)
+    - `max_notional_per_order` REQUIRED for mainnet
+    - `max_orders_per_run=1` default (single order per run)
+    - `target_leverage=3` default (reduces margin req; safe: far-from-market, cancelled)
+  - **Futures-specific features:**
+    - `set_leverage()`: Set leverage for symbol (1-125x)
+    - `get_leverage()`: Get current leverage
+    - `get_position_mode()`: Check hedge vs one-way mode
+    - `get_positions()`: Get open positions
+    - `close_position()`: Close position with reduceOnly market order
+    - `place_market_order()`: Market order for position cleanup
+  - **Operations:**
+    - `place_order()`: POST /fapi/v1/order (with reduceOnly support)
+    - `cancel_order()`: DELETE /fapi/v1/order
+    - `cancel_order_by_binance_id()`: Cancel by numeric order ID
+    - `cancel_all_orders()`: DELETE /fapi/v1/allOpenOrders
+    - `fetch_open_orders()`: GET /fapi/v1/openOrders
+  - **How to verify:**
+    ```bash
+    PYTHONPATH=src pytest tests/unit/test_binance_futures_port.py -v
+    ```
+  - **Unit tests:** `tests/unit/test_binance_futures_port.py` (30 tests)
+    - Dry-run tests prove 0 HTTP calls
+    - SafeMode tests prove READ_ONLY blocks writes
+    - Mainnet guard tests prove all guards enforced
+    - Leverage validation tests
+  - See ADR-040 for design decisions
 - **LiveEngineV0** (`src/grinder/live/engine.py`):
   - Live write-path wiring from PaperEngine to ExchangePort (LC-05)
   - **Arming model (two-layer safety):**
@@ -457,6 +499,116 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - Idempotency tests prove duplicate→cached
     - Circuit breaker tests prove OPEN→reject
   - See ADR-036 for design decisions
+- **LiveFeed v0** (`src/grinder/live/feed.py`):
+  - Live read-path pipeline: WS → Snapshot → FeatureEngine → features (LC-06)
+  - **Architecture:** DataConnector → Snapshot → FeatureEngine → LiveFeaturesUpdate
+  - **Hard read-only constraint:**
+    - `feed.py` MUST NOT import from `grinder.execution.*`
+    - Enforced by `test_feed_py_has_no_execution_imports` (AST parsing)
+    - Violation = CI failure
+  - **BinanceWsConnector** (`src/grinder/connectors/binance_ws.py`):
+    - Implements `DataConnector` ABC with `iter_snapshots()` async iterator
+    - Parses bookTicker JSON → Snapshot objects
+    - Idempotency via `last_seen_ts` tracking
+    - Auto-reconnect with exponential backoff
+    - Testable via `WsTransport` ABC injection (FakeWsTransport for tests)
+  - **LiveFeed pipeline:**
+    - Symbol filtering (optional)
+    - FeatureEngine integration (BarBuilder → indicators)
+    - Yields `LiveFeaturesUpdate` with computed features
+    - Warmup detection (`is_warmed_up` when bars >= warmup_bars)
+  - **Key types:**
+    - `LiveFeaturesUpdate`: ts, symbol, features, bar_completed, is_warmed_up, latency_ms
+    - `WsMessage`: Raw WebSocket message wrapper
+    - `BookTickerData`: Parsed Binance bookTicker fields
+    - `LiveFeedStats`: Ticks/bars/errors tracking
+  - **How to verify:**
+    ```bash
+    PYTHONPATH=src pytest tests/unit/test_live_feed.py -v
+    ```
+  - **Unit tests:** `tests/unit/test_live_feed.py` (21 tests)
+    - P0 hard-block tests prove 0 execution imports
+    - FakeWsTransport tests prove testable WS behavior
+    - Connector tests prove yields snapshots, skips duplicates
+    - LiveFeed tests prove features computed correctly
+    - Golden output tests prove determinism
+  - **Fixtures:** `tests/fixtures/ws/bookticker_btcusdt.json`
+  - See ADR-037 for design decisions
+- **Live Smoke Harness** (`scripts/smoke_live_testnet.py`):
+  - Smoke test harness for Binance (testnet or mainnet): place micro order → cancel (LC-07, LC-08b)
+  - **Safe-by-construction guards:**
+    - `--dry-run` by default (no real HTTP calls)
+    - Requires `--confirm TESTNET` for testnet orders
+    - Requires `--confirm MAINNET_TRADE` for mainnet orders (LC-08b)
+    - Requires `ARMED=1` env var for any real trades
+    - Testnet: requires `ALLOW_TESTNET_TRADE=1` env var
+    - Mainnet: requires `ALLOW_MAINNET_TRADE=1` env var + guards (ADR-039)
+    - Kill-switch blocks PLACE/REPLACE, allows CANCEL
+  - **Mainnet guards (ADR-039):**
+    - `--max-notional` argument (default: $50) caps each order
+    - `symbol_whitelist` required (non-empty)
+    - `max_orders_per_run=1` (single order per run)
+    - All guards enforced at config validation time
+  - **E2E execution status:**
+    - Harness is READY and tested in dry-run + kill-switch modes
+    - Real E2E run is OPERATOR-DEPENDENT (requires API credentials)
+  - **Failure paths:**
+    - Missing keys → clear exit 1 + message
+    - Missing env var → clear error message
+    - Notional exceeds limit → clear error message
+    - Kill-switch active → PLACE blocked (expected), CANCEL allowed
+  - **How to verify:**
+    ```bash
+    # Dry-run (default) — no credentials needed
+    PYTHONPATH=src python -m scripts.smoke_live_testnet
+
+    # Kill-switch test — no credentials needed
+    PYTHONPATH=src python -m scripts.smoke_live_testnet --kill-switch
+
+    # Real testnet order
+    BINANCE_API_KEY=xxx BINANCE_API_SECRET=yyy ARMED=1 ALLOW_TESTNET_TRADE=1 \
+        PYTHONPATH=src python -m scripts.smoke_live_testnet --confirm TESTNET
+
+    # Real mainnet order (budgeted)
+    BINANCE_API_KEY=xxx BINANCE_API_SECRET=yyy ARMED=1 ALLOW_MAINNET_TRADE=1 \
+        PYTHONPATH=src python -m scripts.smoke_live_testnet --confirm MAINNET_TRADE
+    ```
+  - **Runbooks:**
+    - `docs/runbooks/08_SMOKE_TEST_TESTNET.md` — testnet procedure
+    - `docs/runbooks/09_MAINNET_TRADE_SMOKE.md` — mainnet procedure (LC-08b)
+  - See ADR-038, ADR-039 for design decisions
+- **Futures Smoke Harness** (`scripts/smoke_futures_mainnet.py`):
+  - Smoke test harness for Binance Futures USDT-M mainnet (LC-08b-F)
+  - **Target execution venue:** `fapi.binance.com` (Futures USDT-M)
+  - **Safe-by-construction guards (9 layers):**
+    - `--dry-run` by default (no real HTTP calls)
+    - Requires `--confirm FUTURES_MAINNET_TRADE` for real orders
+    - Requires `ARMED=1` env var
+    - Requires `ALLOW_MAINNET_TRADE=1` env var
+    - `symbol_whitelist` required (non-empty)
+    - `max_notional_per_order` required (default: $125, above Binance $100 min)
+    - `max_orders_per_run=1` (single order per run)
+    - `target_leverage=3` (reduces margin req; safe: far-from-market, cancelled)
+    - Position cleanup on fill
+  - **7-step procedure:**
+    1. Get account info (position mode)
+    2. Set leverage to target (default: 1x)
+    3. Check existing position
+    4. Place limit order (far from market)
+    5. Cancel order
+    6. Check and close any position (if filled)
+    7. Final position verification (should be 0)
+  - **How to verify:**
+    ```bash
+    # Dry-run (default) — no credentials needed
+    PYTHONPATH=src python -m scripts.smoke_futures_mainnet
+
+    # Real futures mainnet order (budgeted)
+    BINANCE_API_KEY=xxx BINANCE_API_SECRET=yyy ARMED=1 ALLOW_MAINNET_TRADE=1 \
+        PYTHONPATH=src python -m scripts.smoke_futures_mainnet --confirm FUTURES_MAINNET_TRADE
+    ```
+  - **Runbook:** `docs/runbooks/10_FUTURES_MAINNET_TRADE_SMOKE.md`
+  - See ADR-040 for design decisions
 - **DrawdownGuard v0** (`src/grinder/risk/drawdown.py`):
   - Tracks equity high-water mark (HWM)
   - Computes drawdown: `(HWM - equity) / HWM`

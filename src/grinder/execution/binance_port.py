@@ -1,15 +1,23 @@
-"""Binance Spot Testnet exchange port implementation.
+"""Binance Spot exchange port implementation.
 
 Implements ExchangePort protocol for real order operations via Binance Spot API.
 
-Key design decisions (see ADR-035):
+Key design decisions (see ADR-035, ADR-039):
 - SafeMode.LIVE_TRADE required for any write operation (impossible by default)
-- Mainnet URLs forbidden in v0.1 (testnet only)
+- Mainnet requires explicit opt-in via allow_mainnet=True + strict guards (ADR-039)
 - dry_run=True returns synthetic results WITHOUT calling http_client (0 HTTP calls)
 - Injectable HttpClient for integration testing (NoopHttpClient still receives calls)
 - Symbol whitelist enforcement
 - Error mapping: Binance errors → Connector*Error types
 - Integrates with H2/H3/H4 via IdempotentExchangePort wrapper
+
+Mainnet guards (LC-08b, ADR-039):
+- allow_mainnet=True required (default: False)
+- ALLOW_MAINNET_TRADE=1 env var required
+- symbol_whitelist MUST be non-empty
+- max_notional_per_order MUST be set
+- max_orders_per_run=1 default (single order per run)
+- max_open_orders=1 default (single open order)
 
 Testing modes:
 
@@ -46,6 +54,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import hmac
+import os
 import time
 import urllib.parse
 from dataclasses import dataclass, field
@@ -223,15 +232,27 @@ class BinanceExchangePortConfig:
 
     Attributes:
         mode: SafeMode (default: READ_ONLY - blocks all writes)
-        base_url: API base URL (default: testnet, mainnet forbidden in v0.1)
+        base_url: API base URL (default: testnet)
         api_key: API key for authentication
         api_secret: API secret for signing
-        symbol_whitelist: Allowed symbols (empty = all allowed)
+        symbol_whitelist: Allowed symbols (empty = all allowed for testnet, REQUIRED for mainnet)
         recv_window_ms: Binance recvWindow parameter (default: 5000)
         timeout_ms: Request timeout (default: 5000)
         dry_run: If True, return synthetic results WITHOUT calling http_client.
                  This is distinct from NoopHttpClient (which still receives calls).
                  dry_run=True guarantees 0 http_client.request() calls.
+
+    Mainnet guards (ADR-039, LC-08b):
+        allow_mainnet: Explicit opt-in for mainnet (default: False)
+        max_notional_per_order: Maximum notional (price*qty) per order (REQUIRED for mainnet)
+        max_orders_per_run: Maximum orders in single run (default: 1 for mainnet)
+        max_open_orders: Maximum concurrent open orders (default: 1 for mainnet)
+
+    To enable mainnet, ALL of these must be true:
+    1. allow_mainnet=True
+    2. ALLOW_MAINNET_TRADE=1 env var set
+    3. symbol_whitelist is non-empty
+    4. max_notional_per_order is set
     """
 
     mode: SafeMode = SafeMode.READ_ONLY
@@ -243,17 +264,53 @@ class BinanceExchangePortConfig:
     timeout_ms: int = 5000
     dry_run: bool = False
 
+    # Mainnet guards (ADR-039)
+    allow_mainnet: bool = False
+    max_notional_per_order: Decimal | None = None
+    max_orders_per_run: int = 1
+    max_open_orders: int = 1
+
+    # Internal counter for order limit enforcement
+    _orders_this_run: int = field(default=0, repr=False)
+
     def __post_init__(self) -> None:
         """Validate configuration."""
-        # v0.1: Mainnet is FORBIDDEN
-        if BINANCE_SPOT_MAINNET_URL in self.base_url:
-            raise ConnectorNonRetryableError(
-                "Mainnet is forbidden in v0.1. Use testnet.binance.vision for testing."
+        is_mainnet = BINANCE_SPOT_MAINNET_URL in self.base_url or "api.binance.com" in self.base_url
+
+        if is_mainnet:
+            # Mainnet requires explicit opt-in + env var + guards
+            if not self.allow_mainnet:
+                raise ConnectorNonRetryableError(
+                    "Mainnet requires allow_mainnet=True. "
+                    "Set allow_mainnet=True in config to enable mainnet trading."
+                )
+
+            allow_env = os.environ.get("ALLOW_MAINNET_TRADE", "").lower() in (
+                "1",
+                "true",
+                "yes",
             )
-        if "api.binance.com" in self.base_url:
-            raise ConnectorNonRetryableError(
-                "Mainnet (api.binance.com) is forbidden in v0.1. Use testnet only."
-            )
+            if not allow_env:
+                raise ConnectorNonRetryableError(
+                    "Mainnet requires ALLOW_MAINNET_TRADE=1 environment variable. "
+                    "This is a safety guard to prevent accidental mainnet trading."
+                )
+
+            if not self.symbol_whitelist:
+                raise ConnectorNonRetryableError(
+                    "Mainnet requires non-empty symbol_whitelist. "
+                    "Specify allowed symbols (e.g., symbol_whitelist=['BTCUSDT'])."
+                )
+
+            if self.max_notional_per_order is None:
+                raise ConnectorNonRetryableError(
+                    "Mainnet requires max_notional_per_order to be set. "
+                    "Specify maximum notional (price*qty) per order (e.g., Decimal('50'))."
+                )
+
+    def is_mainnet(self) -> bool:
+        """Check if configured for mainnet."""
+        return BINANCE_SPOT_MAINNET_URL in self.base_url or "api.binance.com" in self.base_url
 
 
 @dataclass
@@ -317,6 +374,33 @@ class BinanceExchangePort:
                 f"Symbol '{symbol}' not in whitelist: {self.config.symbol_whitelist}"
             )
 
+    def _validate_notional(self, price: Decimal, quantity: Decimal) -> None:
+        """Validate order notional is within limits (mainnet guard).
+
+        Raises:
+            ConnectorNonRetryableError: If notional exceeds max_notional_per_order
+        """
+        if self.config.max_notional_per_order is not None:
+            notional = price * quantity
+            if notional > self.config.max_notional_per_order:
+                raise ConnectorNonRetryableError(
+                    f"Order notional ${notional:.2f} exceeds max_notional_per_order "
+                    f"${self.config.max_notional_per_order:.2f}. "
+                    "Reduce price or quantity."
+                )
+
+    def _validate_order_count(self) -> None:
+        """Validate order count is within limits (mainnet guard).
+
+        Raises:
+            ConnectorNonRetryableError: If order count exceeds max_orders_per_run
+        """
+        if self.config._orders_this_run >= self.config.max_orders_per_run:
+            raise ConnectorNonRetryableError(
+                f"Order count limit reached: {self.config.max_orders_per_run} orders per run. "
+                "Reset port or create new instance to place more orders."
+            )
+
     def _sign_request(self, params: dict[str, Any]) -> dict[str, Any]:
         """Add timestamp and signature to request params."""
         params["timestamp"] = int(time.time() * 1000)
@@ -365,10 +449,16 @@ class BinanceExchangePort:
         """
         self._validate_mode("place_order")
         self._validate_symbol(symbol)
+        self._validate_notional(price, quantity)
+        self._validate_order_count()
 
         # Generate deterministic client order ID
         self._order_counter += 1
         client_order_id = f"grinder_{symbol}_{level_id}_{ts}_{self._order_counter}"
+
+        # Track order count (even for dry-run to maintain consistency)
+        # Use object.__setattr__ since config is a dataclass
+        object.__setattr__(self.config, "_orders_this_run", self.config._orders_this_run + 1)
 
         # DRY-RUN: Return synthetic order_id WITHOUT calling http_client
         if self.config.dry_run:
@@ -575,5 +665,7 @@ class BinanceExchangePort:
         return orders
 
     def reset(self) -> None:
-        """Reset internal state (for testing)."""
+        """Reset internal state (for testing and new runs)."""
         self._order_counter = 0
+        # Reset order count limit (use object.__setattr__ for dataclass)
+        object.__setattr__(self.config, "_orders_this_run", 0)
