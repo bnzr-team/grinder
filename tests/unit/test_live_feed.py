@@ -18,6 +18,7 @@ import hashlib
 import json
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -593,7 +594,7 @@ class TestGoldenOutput:
         messages = json.loads(fixture_path.read_text())
         assert len(messages) == 10
 
-        def process_fixture_run(run_id: int) -> tuple[list[dict], str]:
+        def process_fixture_run(run_id: int) -> tuple[list[dict[str, Any]], str]:
             """Process fixture and return updates + digest."""
             # Fake clock for deterministic timestamps and latency
             ts_counter = [1000000]
@@ -607,7 +608,7 @@ class TestGoldenOutput:
             feed = LiveFeed(config, clock=fake_clock)
 
             # Process each message (messages are already dicts from JSON array)
-            updates: list[dict] = []
+            updates: list[dict[str, Any]] = []
             for i, data in enumerate(messages):
                 # Use deterministic timestamp for snapshot
                 snapshot_ts = 1000100 + i * 100

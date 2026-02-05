@@ -109,10 +109,13 @@ class SmokeResult:
     """Result of smoke test."""
 
     success: bool
-    mode: str  # "dry-run" or "live"
-    order_placed: bool = False
+    mode: str  # "dry-run" or "live-testnet"
+    simulated: bool = False  # True if dry-run (no real HTTP calls)
+    order_placed: bool = False  # Only True for REAL orders
     order_id: str | None = None
-    order_cancelled: bool = False
+    order_cancelled: bool = False  # Only True for REAL cancels
+    sim_place_ok: bool = False  # True if simulated place succeeded
+    sim_cancel_ok: bool = False  # True if simulated cancel succeeded
     error: str | None = None
     details: dict[str, Any] | None = None
 
@@ -123,13 +126,28 @@ class SmokeResult:
         print(f"SMOKE TEST RESULT: {status}")
         print(f"{'=' * 60}")
         print(f"  Mode: {self.mode}")
-        print(f"  Order placed: {self.order_placed}")
-        if self.order_id:
-            print(f"  Order ID: {self.order_id}")
-        print(f"  Order cancelled: {self.order_cancelled}")
+
+        # Check for kill-switch scenario
+        is_kill_switch = self.details and self.details.get("kill_switch")
+        if is_kill_switch:
+            print("  Kill-switch test:")
+            print("    PLACE: BLOCKED (expected)")
+            print("    CANCEL: ALLOWED")
+        elif self.simulated:
+            print("  ** SIMULATED - No real HTTP calls made **")
+            print(f"  Simulated place: {'OK' if self.sim_place_ok else 'FAILED'}")
+            print(f"  Simulated cancel: {'OK' if self.sim_cancel_ok else 'FAILED'}")
+            if self.order_id:
+                print(f"  Simulated order ID: {self.order_id}")
+        else:
+            print(f"  Order placed: {self.order_placed}")
+            if self.order_id:
+                print(f"  Order ID: {self.order_id}")
+            print(f"  Order cancelled: {self.order_cancelled}")
+
         if self.error:
             print(f"  Error: {self.error}")
-        if self.details:
+        if self.details and not is_kill_switch:
             print(f"  Details: {self.details}")
         print(f"{'=' * 60}\n")
 
@@ -221,13 +239,14 @@ def run_smoke_test(
         return SmokeResult(
             success=True,
             mode=mode,
+            simulated=dry_run,
             order_placed=False,
-            error="Kill-switch active - order placement blocked (expected)",
-            details={"kill_switch": True},
+            details={"kill_switch": True, "place_blocked": True, "cancel_allowed": True},
         )
 
     # Step 1: Place order
-    print(f"  Placing limit order: {symbol} BUY {quantity} @ {price}")
+    action_prefix = "SIMULATED " if dry_run else ""
+    print(f"  {action_prefix}Placing limit order: {symbol} BUY {quantity} @ {price}")
     order_id: str | None = None
     try:
         ts = int(time.time() * 1000)
@@ -239,36 +258,46 @@ def run_smoke_test(
             level_id=0,
             ts=ts,
         )
-        print(f"  Order placed: {order_id}")
+        # In dry-run, prefix order_id to make it obvious
+        if dry_run:
+            order_id = f"SIM_{order_id}"
+        print(f"  {action_prefix}Order placed: {order_id}")
     except (ConnectorNonRetryableError, ConnectorTransientError) as e:
         return SmokeResult(
             success=False,
             mode=mode,
+            simulated=dry_run,
             order_placed=False,
             error=f"Place order failed: {e}",
         )
 
     # Step 2: Cancel order
-    print(f"  Cancelling order: {order_id}")
+    print(f"  {action_prefix}Cancelling order: {order_id}")
     cancelled = False
     try:
-        cancelled = port.cancel_order(order_id)
-        print(f"  Order cancelled: {cancelled}")
+        # For cancel, use original order_id without SIM_ prefix
+        cancel_id = order_id.replace("SIM_", "") if dry_run and order_id else order_id
+        cancelled = port.cancel_order(cancel_id) if cancel_id else False
+        print(f"  {action_prefix}Order cancelled: {cancelled}")
     except (ConnectorNonRetryableError, ConnectorTransientError) as e:
         # Cancel failure is not necessarily fatal (order may have filled)
-        print(f"  Cancel failed (may have filled): {e}")
+        print(f"  {action_prefix}Cancel failed (may have filled): {e}")
 
     return SmokeResult(
         success=True,
         mode=mode,
-        order_placed=True,
+        simulated=dry_run,
+        order_placed=not dry_run and order_id is not None,  # Only True for REAL orders
         order_id=order_id,
-        order_cancelled=cancelled,
+        order_cancelled=cancelled if not dry_run else False,  # Only True for REAL cancels
+        sim_place_ok=dry_run and order_id is not None,  # Simulated place succeeded
+        sim_cancel_ok=dry_run and cancelled,  # Simulated cancel succeeded
         details={
             "symbol": symbol,
             "price": str(price),
             "quantity": str(quantity),
             "testnet_url": BINANCE_SPOT_TESTNET_URL,
+            "simulated": dry_run,
         },
     )
 
