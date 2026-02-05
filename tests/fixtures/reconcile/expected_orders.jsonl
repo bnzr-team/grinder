@@ -1,0 +1,3 @@
+{"client_order_id":"grinder_BTCUSDT_1_1704067200000_1","symbol":"BTCUSDT","side":"BUY","order_type":"LIMIT","price":"42500.00","orig_qty":"0.010","ts_created":1704067200000,"expected_status":"OPEN"}
+{"client_order_id":"grinder_BTCUSDT_2_1704067200000_2","symbol":"BTCUSDT","side":"SELL","order_type":"LIMIT","price":"43500.00","orig_qty":"0.010","ts_created":1704067200000,"expected_status":"OPEN"}
+{"client_order_id":"grinder_ETHUSDT_1_1704067200000_3","symbol":"ETHUSDT","side":"BUY","order_type":"LIMIT","price":"2250.00","orig_qty":"0.100","ts_created":1704067200000,"expected_status":"OPEN"}

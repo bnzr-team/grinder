@@ -572,6 +572,51 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - No active actions (cancel-all, flatten)
     - No metrics/counters for stream health
   - See ADR-041 for design decisions
+- **Reconciliation v0.1 (Passive)** (`src/grinder/reconcile/`):
+  - Detects mismatches between expected state (what we sent) and observed state (stream + REST) for Binance Futures USDT-M (LC-09b)
+  - **Passive only:** logs + metrics + action_plan text — no actual remediation actions
+  - **Mismatch types** (`MismatchType` enum):
+    - `ORDER_MISSING_ON_EXCHANGE`: Expected OPEN order not found after grace period
+    - `ORDER_EXISTS_UNEXPECTED`: Order on exchange (grinder_ prefix) not in expected state
+    - `ORDER_STATUS_DIVERGENCE`: Expected vs observed status differs
+    - `POSITION_NONZERO_UNEXPECTED`: Position != 0 when expected = 0
+  - **Components:**
+    - `ExpectedStateStore`: Ring buffer (max_orders=200) + TTL (24h) eviction, injectable clock
+    - `ObservedStateStore`: Updated from FuturesOrderEvent/FuturesPositionEvent + REST snapshots
+    - `ReconcileEngine`: Compares expected vs observed, emits Mismatch list
+    - `ReconcileMetrics`: Prometheus-compatible counters/gauges
+    - `SnapshotClient`: REST polling with retry/backoff on 429/5xx
+  - **Metrics:**
+    - `grinder_reconcile_mismatch_total{type="..."}`: Counter by mismatch type
+    - `grinder_reconcile_last_snapshot_age_seconds`: Gauge for REST snapshot staleness
+    - `grinder_reconcile_runs_total`: Counter for reconcile runs
+  - **Configuration** (`ReconcileConfig`):
+    - `order_grace_period_ms=5000`: Delay before ORDER_MISSING fires
+    - `snapshot_interval_sec=60`: REST snapshot polling interval
+    - `expected_max_orders=200`: Ring buffer limit
+    - `expected_ttl_ms=86400000`: 24h TTL for expected orders
+    - `symbol_filter`: Optional symbol filter
+    - `enabled=True`: Feature flag
+  - **How to verify:**
+    ```bash
+    PYTHONPATH=src pytest tests/unit/test_reconcile*.py tests/unit/test_expected_state.py tests/unit/test_observed_state.py tests/unit/test_snapshot_client.py -v
+    ```
+  - **Unit tests:**
+    - `tests/unit/test_reconcile_types.py` (22 tests): serialization roundtrips
+    - `tests/unit/test_expected_state.py` (16 tests): ring buffer, TTL eviction
+    - `tests/unit/test_observed_state.py` (15 tests): stream/REST updates
+    - `tests/unit/test_reconcile_engine.py` (13 tests): mismatch detection
+    - `tests/unit/test_snapshot_client.py` (16 tests): retry logic
+  - **Fixtures:**
+    - `tests/fixtures/reconcile/expected_orders.jsonl`: Sample expected orders
+    - `tests/fixtures/reconcile/rest_open_orders.json`: GET /openOrders response
+    - `tests/fixtures/reconcile/rest_position_risk.json`: GET /positionRisk response
+    - `tests/fixtures/reconcile/mismatch_scenarios.jsonl`: Test scenarios
+  - **Limitations (v0.1):**
+    - No automatic remediation actions (cancel-all, flatten)
+    - No integration with LiveEngineV0 event loop
+    - No HA leader election for reconcile loop
+  - See ADR-042 for design decisions
 - **Live Smoke Harness** (`scripts/smoke_live_testnet.py`):
   - Smoke test harness for Binance (testnet or mainnet): place micro order → cancel (LC-07, LC-08b)
   - **Safe-by-construction guards:**

@@ -13,6 +13,10 @@ Operational runbooks for GRINDER trading system.
 | [05_SOAK_GATE](05_SOAK_GATE.md) | Running soak tests and interpreting results |
 | [06_ALERT_RESPONSE](06_ALERT_RESPONSE.md) | Responding to Prometheus alerts |
 | [07_HA_OPERATIONS](07_HA_OPERATIONS.md) | HA deployment, failover, and troubleshooting |
+| [08_SMOKE_TEST_TESTNET](08_SMOKE_TEST_TESTNET.md) | Testnet smoke test procedure |
+| [09_MAINNET_TRADE_SMOKE](09_MAINNET_TRADE_SMOKE.md) | Spot mainnet smoke test procedure (LC-08b) |
+| [10_FUTURES_MAINNET_TRADE_SMOKE](10_FUTURES_MAINNET_TRADE_SMOKE.md) | Futures USDT-M mainnet smoke test (LC-08b-F) |
+| [11_RECONCILIATION_TRIAGE](11_RECONCILIATION_TRIAGE.md) | Reconciliation mismatch triage (LC-09b) |
 
 ## Quick Reference
 
