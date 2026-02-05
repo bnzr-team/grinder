@@ -454,8 +454,8 @@ Examples:
     parser.add_argument(
         "--quantity",
         type=Decimal,
-        default=Decimal("0.001"),
-        help="Order quantity (default: 0.001, micro lot)",
+        default=Decimal("0.0005"),
+        help="Order quantity (default: 0.0005, notional ~$40 at $80k)",
     )
     parser.add_argument(
         "--max-notional",
