@@ -67,7 +67,8 @@ from grinder.execution.binance_futures_port import (
 from grinder.execution.binance_port import HttpResponse
 
 # --- Default safety limits ---
-DEFAULT_MAX_NOTIONAL = Decimal("50.00")  # $50 max per order
+# Binance Futures BTCUSDT has $100 minimum notional requirement
+DEFAULT_MAX_NOTIONAL = Decimal("125.00")  # $125 max per order (above $100 min)
 DEFAULT_MAX_ORDERS = 1  # Single order per run
 DEFAULT_LEVERAGE = 1  # 1x leverage (no leverage)
 
@@ -219,7 +220,7 @@ def check_env_guards() -> tuple[bool, str]:
 def run_futures_smoke_test(  # noqa: PLR0912, PLR0915
     symbol: str = "BTCUSDT",
     price: Decimal = Decimal("40000.00"),  # Far below market, won't fill
-    quantity: Decimal = Decimal("0.001"),  # Min BTCUSDT precision
+    quantity: Decimal = Decimal("0.003"),  # $120 notional at $40k (above $100 min)
     dry_run: bool = True,
     max_notional: Decimal = DEFAULT_MAX_NOTIONAL,
     target_leverage: int = DEFAULT_LEVERAGE,
@@ -454,8 +455,8 @@ Examples:
     parser.add_argument(
         "--quantity",
         type=Decimal,
-        default=Decimal("0.001"),
-        help="Order quantity (default: 0.001, min BTCUSDT precision)",
+        default=Decimal("0.003"),
+        help="Order quantity (default: 0.003, $120 notional at $40k)",
     )
     parser.add_argument(
         "--max-notional",

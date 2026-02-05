@@ -54,7 +54,7 @@ Before the script places any mainnet order, ALL of these guards must pass:
 | 3 | `ALLOW_MAINNET_TRADE` env var | Not set | Must be `1` |
 | 4 | `ARMED` env var | Not set | Must be `1` |
 | 5 | `symbol_whitelist` | Empty | Must be non-empty for mainnet |
-| 6 | `max_notional_per_order` | `None` | Must be set (default: $50) |
+| 6 | `max_notional_per_order` | `None` | Must be set (default: $125, above $100 min) |
 | 7 | `max_orders_per_run` | `1` | Single order per script run |
 | 8 | `target_leverage` | `1` | Enforced (no amplification) |
 | 9 | API key/secret | Empty | Must be valid credentials |
@@ -84,9 +84,9 @@ To place real orders:
 
 Starting futures smoke test (mode=dry-run, symbol=BTCUSDT)
   Base URL: https://fapi.binance.com
-  Price: 40000.00, Quantity: 0.001
-  Notional: $40.00
-  Max notional: $50.00
+  Price: 40000.00, Quantity: 0.003
+  Notional: $120.00
+  Max notional: $125.00
   Target leverage: 1x
 
   [Step 1] Getting account info...
@@ -98,7 +98,7 @@ Starting futures smoke test (mode=dry-run, symbol=BTCUSDT)
   [Step 3] Checking existing position...
   No existing position
 
-  [Step 4] Placing limit order: BTCUSDT BUY 0.001 @ 40000.00
+  [Step 4] Placing limit order: BTCUSDT BUY 0.003 @ 40000.00
   Order placed: grinder_BTCUSDT_0_...
 
   [Step 5] Cancelling order: grinder_BTCUSDT_0_...
@@ -200,10 +200,19 @@ FUTURES SMOKE TEST RESULT: FAIL
 
 ```
 FUTURES SMOKE TEST RESULT: FAIL
-  Error: Place order failed: Order notional $100.00 exceeds max_notional_per_order $50.00
+  Error: Place order failed: Order notional $200.00 exceeds max_notional_per_order $125.00
 ```
 
 **Resolution:** Reduce `--quantity` or increase `--max-notional`.
+
+### Notional Below Binance Minimum
+
+```
+FUTURES SMOKE TEST RESULT: FAIL
+  Error: Place order failed: Binance error -4164: Order's notional must be no smaller than 100
+```
+
+**Resolution:** BTCUSDT requires $100+ notional. Increase quantity or price.
 
 ### Leverage Error
 
