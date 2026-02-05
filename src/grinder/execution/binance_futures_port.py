@@ -494,7 +494,8 @@ class BinanceFuturesPort:
             map_binance_error(response.status_code, response.json_data)
 
         if isinstance(response.json_data, dict):
-            return str(response.json_data.get("orderId", client_order_id))
+            # Return clientOrderId (our ID) for internal tracking, not orderId (Binance numeric)
+            return response.json_data.get("clientOrderId", client_order_id)
         return client_order_id
 
     def place_market_order(
@@ -552,7 +553,8 @@ class BinanceFuturesPort:
             map_binance_error(response.status_code, response.json_data)
 
         if isinstance(response.json_data, dict):
-            return str(response.json_data.get("orderId", client_order_id))
+            # Return clientOrderId (our ID) for internal tracking, not orderId (Binance numeric)
+            return response.json_data.get("clientOrderId", client_order_id)
         return client_order_id
 
     def cancel_order(self, order_id: str) -> bool:

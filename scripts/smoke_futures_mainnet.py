@@ -134,8 +134,7 @@ class FuturesSmokeResult:
 
     # Order info
     order_placed: bool = False
-    order_id: str | None = None
-    binance_order_id: int | None = None
+    order_id: str | None = None  # clientOrderId (our grinder_* format)
     order_cancelled: bool = False
 
     # Position cleanup
@@ -171,8 +170,6 @@ class FuturesSmokeResult:
             print(f"  Order placed: {self.order_placed}")
             if self.order_id:
                 print(f"  Client order ID: {self.order_id}")
-            if self.binance_order_id:
-                print(f"  Binance order ID: {self.binance_order_id}")
             print(f"  Order cancelled: {self.order_cancelled}")
 
             # Position cleanup
@@ -322,8 +319,7 @@ def run_futures_smoke_test(  # noqa: PLR0912, PLR0915
 
     # --- Step 4: Place order ---
     print(f"\n  [Step 4] Placing limit order: {symbol} BUY {quantity} @ {price}")
-    order_id = None
-    binance_order_id = None
+    order_id = None  # clientOrderId (our grinder_* format)
     try:
         ts = int(time.time() * 1000)
         order_id = port.place_order(
@@ -334,11 +330,7 @@ def run_futures_smoke_test(  # noqa: PLR0912, PLR0915
             level_id=0,
             ts=ts,
         )
-        print(f"  Order placed: {order_id}")
-
-        # Try to extract Binance order ID
-        if order_id and order_id.isdigit():
-            binance_order_id = int(order_id)
+        print(f"  Order placed (clientOrderId): {order_id}")
 
     except (ConnectorNonRetryableError, ConnectorTransientError) as e:
         return FuturesSmokeResult(
@@ -355,10 +347,8 @@ def run_futures_smoke_test(  # noqa: PLR0912, PLR0915
     print(f"\n  [Step 5] Cancelling order: {order_id}")
     cancelled = False
     try:
-        if binance_order_id:
-            cancelled = port.cancel_order_by_binance_id(symbol, binance_order_id)
-        else:
-            cancelled = port.cancel_order(order_id) if order_id else False
+        # cancel_order uses origClientOrderId param, works with our grinder_* IDs
+        cancelled = port.cancel_order(order_id) if order_id else False
         print(f"  Order cancelled: {cancelled}")
     except (ConnectorNonRetryableError, ConnectorTransientError) as e:
         print(f"  Cancel failed (may have filled): {e}")
@@ -406,7 +396,6 @@ def run_futures_smoke_test(  # noqa: PLR0912, PLR0915
         leverage_actual=leverage_actual,
         order_placed=not dry_run and order_id is not None,
         order_id=order_id,
-        binance_order_id=binance_order_id,
         order_cancelled=cancelled if not dry_run else False,
         had_position=had_position,
         position_closed=position_closed,
