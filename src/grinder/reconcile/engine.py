@@ -12,6 +12,11 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 from grinder.core import OrderState
+from grinder.reconcile.identity import (
+    OrderIdentityConfig,
+    get_default_identity_config,
+    is_ours,
+)
 from grinder.reconcile.metrics import ReconcileMetrics
 from grinder.reconcile.types import Mismatch, MismatchType
 
@@ -47,6 +52,7 @@ class ReconcileEngine:
     expected: ExpectedStateStore
     observed: ObservedStateStore
     metrics: ReconcileMetrics = field(default_factory=ReconcileMetrics)
+    identity_config: OrderIdentityConfig | None = None
 
     _clock: Callable[[], int] = field(default=lambda: int(time.time() * 1000))
 
@@ -141,9 +147,12 @@ class ReconcileEngine:
 
         expected_cids = {o.client_order_id for o in self.expected.get_all_orders()}
 
+        # LC-12: Use identity config for ownership check
+        identity = self.identity_config or get_default_identity_config()
+
         for observed_order in self.observed.get_open_orders():
-            # Skip orders that don't match our naming pattern
-            if not observed_order.client_order_id.startswith("grinder_"):
+            # Skip orders that don't match our identity (prefix + strategy allowlist)
+            if not is_ours(observed_order.client_order_id, identity):
                 continue
 
             if observed_order.client_order_id not in expected_cids:

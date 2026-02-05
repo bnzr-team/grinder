@@ -33,15 +33,15 @@ def mock_port() -> MagicMock:
     """Create mock BinanceFuturesPort."""
     port = MagicMock()
     port.cancel_order.return_value = True
-    port.place_market_order.return_value = "grinder_BTCUSDT_cleanup_123_1"
+    port.place_market_order.return_value = "grinder_default_BTCUSDT_cleanup_123_1"
     return port
 
 
 @pytest.fixture
 def observed_order() -> ObservedOrder:
-    """Create a sample observed order with grinder_ prefix."""
+    """Create a sample observed order with grinder_ prefix (v1 format with strategy_id)."""
     return ObservedOrder(
-        client_order_id="grinder_BTCUSDT_1_1704067200000_1",
+        client_order_id="grinder_default_BTCUSDT_1_1704067200000_1",
         symbol="BTCUSDT",
         order_id=12345678,
         side=OrderSide.BUY,
@@ -432,7 +432,7 @@ class TestRemediationExecution:
 
         # Execute for 2 different symbols
         order1 = ObservedOrder(
-            client_order_id="grinder_BTCUSDT_1_1704067200000_1",
+            client_order_id="grinder_default_BTCUSDT_1_1704067200000_1",
             symbol="BTCUSDT",
             order_id=1,
             side=OrderSide.BUY,
@@ -444,7 +444,7 @@ class TestRemediationExecution:
             ts_observed=1,
         )
         order2 = ObservedOrder(
-            client_order_id="grinder_ETHUSDT_1_1704067200000_1",
+            client_order_id="grinder_default_ETHUSDT_1_1704067200000_1",
             symbol="ETHUSDT",
             order_id=2,
             side=OrderSide.BUY,
@@ -456,7 +456,7 @@ class TestRemediationExecution:
             ts_observed=1,
         )
         order3 = ObservedOrder(
-            client_order_id="grinder_SOLUSDT_1_1704067200000_1",
+            client_order_id="grinder_default_SOLUSDT_1_1704067200000_1",
             symbol="SOLUSDT",
             order_id=3,
             side=OrderSide.BUY,
@@ -606,7 +606,7 @@ class TestRemediationResult:
         result = RemediationResult(
             mismatch_type="ORDER_EXISTS_UNEXPECTED",
             symbol="BTCUSDT",
-            client_order_id="grinder_BTCUSDT_1_1704067200000_1",
+            client_order_id="grinder_default_BTCUSDT_1_1704067200000_1",
             status=RemediationStatus.EXECUTED,
             action="cancel_all",
         )
@@ -615,7 +615,7 @@ class TestRemediationResult:
 
         assert extra["mismatch_type"] == "ORDER_EXISTS_UNEXPECTED"
         assert extra["symbol"] == "BTCUSDT"
-        assert extra["client_order_id"] == "grinder_BTCUSDT_1_1704067200000_1"
+        assert extra["client_order_id"] == "grinder_default_BTCUSDT_1_1704067200000_1"
         assert extra["status"] == "executed"
         assert extra["action"] == "cancel_all"
         assert extra["block_reason"] is None

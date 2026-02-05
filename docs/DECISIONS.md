@@ -1977,3 +1977,80 @@
   - Multi-action-type per run (cancel AND flatten)
   - Smart retry for ORDER_MISSING_ON_EXCHANGE
   - Integration with LiveEngineV0 event loop (separate task)
+
+---
+
+## ADR-045 — Configurable Order Identity (LC-12)
+- **Date:** 2026-02-05
+- **Status:** accepted
+- **Context:** The hardcoded `grinder_` prefix in multiple places made it impossible to:
+  1. Run multiple strategy instances with isolated order ownership
+  2. Identify which strategy placed an order
+  3. Selectively remediate orders by strategy allowlist
+  
+  Gate 8 in ADR-043 checked `startswith("grinder_")` but couldn't distinguish between strategies.
+
+- **Decision:**
+  - **OrderIdentityConfig** (`src/grinder/reconcile/identity.py`): Central config for order identity:
+    ```python
+    @dataclass
+    class OrderIdentityConfig:
+        prefix: str = "grinder_"           # Order ID prefix
+        strategy_id: str = "default"       # Strategy identifier
+        allowed_strategies: set[str] = {}  # Allowlist for remediation
+        require_strategy_allowlist: bool = True
+        allow_legacy_format: bool = False  # Env: ALLOW_LEGACY_ORDER_ID=1
+        identity_format_version: int = 1
+    ```
+  - **clientOrderId Format v1:** `{prefix}{strategy_id}_{symbol}_{level_id}_{ts}_{seq}`
+    - Example: `grinder_momentum_BTCUSDT_1_1704067200000_1`
+  - **Legacy Format:** `grinder_{symbol}_{level_id}_{ts}_{seq}` (no strategy_id)
+    - Supported via `allow_legacy_format=True` or `ALLOW_LEGACY_ORDER_ID=1` env var
+    - Parsed strategy_id: `__legacy__` (internal marker)
+  - **ParsedOrderId:** Frozen dataclass with parsed components:
+    - `prefix`, `strategy_id`, `symbol`, `level_id`, `ts`, `seq`, `is_legacy`
+  - **Core functions:**
+    - `parse_client_order_id(cid) -> ParsedOrderId | None`: Parse any format
+    - `is_ours(cid, config) -> bool`: Check ownership via prefix + strategy allowlist
+    - `generate_client_order_id(config, symbol, level_id, ts, seq) -> str`: Create v1 format
+  - **Singleton pattern:**
+    - `get_default_identity_config()`: Returns singleton (lazy init)
+    - `set_default_identity_config(config)`: Set at startup
+    - `reset_default_identity_config()`: For testing
+  - **Integration points updated:**
+    - `BinanceFuturesPort.place_order()`: Uses `generate_client_order_id()`
+    - `BinanceFuturesPort.place_market_order()`: Uses `generate_client_order_id()`
+    - `BinancePort.place_order()`: Uses `generate_client_order_id()`
+    - `ReconcileEngine._check_unexpected_orders()`: Uses `is_ours()`
+    - `RemediationExecutor.can_execute()` Gate 8: Uses `is_ours()`
+  - **Strategy allowlist semantics:**
+    - If `allowed_strategies` empty at init → defaults to `{strategy_id}`
+    - Legacy orders (`__legacy__`) allowed only if `allow_legacy_format=True`
+    - `require_strategy_allowlist=False` → accept any strategy
+  - **Backward compatibility:**
+    - Default config produces identical format to legacy when `strategy_id="default"`
+    - Legacy format parsing enabled via env var or config flag
+    - GRINDER_PREFIX constant preserved in remediation.py for backward compat
+
+- **Test coverage:**
+  - `tests/unit/test_identity.py` (44 tests):
+    - Config validation tests
+    - V1 format parsing tests
+    - Legacy format parsing tests
+    - `is_ours()` allowlist tests
+    - Generation tests
+    - Security edge cases
+    - Singleton pattern tests
+
+- **Consequences:**
+  - Orders can be identified by prefix + strategy
+  - Multiple strategies can coexist with isolated remediation scope
+  - Gate 8 now checks allowlist, not just prefix
+  - Legacy orders can be migrated gradually
+  - No breaking changes for existing deployments (defaults match legacy behavior)
+
+- **Out of Scope (v0.1):**
+  - Strategy-specific config loading from file
+  - Dynamic allowlist updates at runtime
+  - Multi-prefix support (only one prefix per config)
+  - Strategy registry with capabilities/permissions

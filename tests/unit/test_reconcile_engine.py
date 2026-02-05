@@ -185,14 +185,14 @@ class TestOrderExistsUnexpected(TestReconcileEngine):
         observed_store: ObservedStateStore,
         metrics: ReconcileMetrics,
     ) -> None:
-        """Should detect unexpected grinder_ order."""
-        # No expected orders, but one observed
+        """Should detect unexpected grinder_ order (v1 format with strategy_id)."""
+        # No expected orders, but one observed (using v1 format: grinder_{strategy}_{symbol}_{level}_{ts}_{seq})
         observed_store.update_from_order_event(
             FuturesOrderEvent(
                 ts=10000000,
                 symbol="BTCUSDT",
                 order_id=12345678,
-                client_order_id="grinder_BTCUSDT_1_1000000_1",
+                client_order_id="grinder_default_BTCUSDT_1_1000000_1",
                 side=OrderSide.BUY,
                 status=OrderState.OPEN,
                 price=Decimal("42500.00"),
@@ -214,7 +214,7 @@ class TestOrderExistsUnexpected(TestReconcileEngine):
 
         assert len(mismatches) == 1
         assert mismatches[0].mismatch_type == MismatchType.ORDER_EXISTS_UNEXPECTED
-        assert mismatches[0].client_order_id == "grinder_BTCUSDT_1_1000000_1"
+        assert mismatches[0].client_order_id == "grinder_default_BTCUSDT_1_1000000_1"
 
     def test_ignores_non_grinder_orders(
         self,
@@ -515,10 +515,10 @@ class TestReconcileEngineMultipleMismatches(TestReconcileEngine):
         metrics: ReconcileMetrics,
     ) -> None:
         """Should detect multiple mismatches in one run."""
-        # Missing order (created 10s ago)
+        # Missing order (created 10s ago) - v1 format with strategy_id
         expected_store.record_order(
             ExpectedOrder(
-                client_order_id="grinder_BTCUSDT_1_1000000_1",
+                client_order_id="grinder_default_BTCUSDT_1_1000000_1",
                 symbol="BTCUSDT",
                 side=OrderSide.BUY,
                 order_type="LIMIT",
@@ -528,13 +528,13 @@ class TestReconcileEngineMultipleMismatches(TestReconcileEngine):
             )
         )
 
-        # Unexpected order
+        # Unexpected order - v1 format with strategy_id
         observed_store.update_from_order_event(
             FuturesOrderEvent(
                 ts=10000000,
                 symbol="ETHUSDT",
                 order_id=99999999,
-                client_order_id="grinder_ETHUSDT_1_1000000_1",
+                client_order_id="grinder_default_ETHUSDT_1_1000000_1",
                 side=OrderSide.SELL,
                 status=OrderState.OPEN,
                 price=Decimal("3000.00"),

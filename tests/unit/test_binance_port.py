@@ -122,9 +122,9 @@ class TestTrueDryRunMode:
             ts=1000000,
         )
 
-        # Returns synthetic order_id
+        # Returns synthetic order_id (v1 format: grinder_{strategy}_{symbol}_{level}_{ts}_{seq})
         assert order_id is not None
-        assert "grinder_BTCUSDT_1_1000000" in order_id
+        assert "grinder_default_BTCUSDT_1_1000000" in order_id
 
         # CRITICAL: 0 http_client calls
         assert len(noop_client.calls) == 0
@@ -158,9 +158,9 @@ class TestTrueDryRunMode:
             ts=2000000,
         )
 
-        # Returns synthetic order_id
+        # Returns synthetic order_id (v1 format)
         assert new_order_id is not None
-        assert "grinder_BTCUSDT_1_2000000" in new_order_id
+        assert "grinder_default_BTCUSDT_1_2000000" in new_order_id
 
         # CRITICAL: 0 http_client calls (cancel + place both dry-run)
         assert len(noop_client.calls) == 0
@@ -799,10 +799,10 @@ class TestOrderIdFormat:
             ts=1234567890,
         )
 
-        # Check the params sent to HTTP client contain our format
+        # Check the params sent to HTTP client contain our format (v1: grinder_{strategy}_{symbol}_{level}_{ts}_{seq})
         call = noop_client.calls[0]
         client_order_id = call["params"]["newClientOrderId"]
-        assert "grinder_BTCUSDT_5_1234567890" in client_order_id
+        assert "grinder_default_BTCUSDT_5_1234567890" in client_order_id
 
 
 # --- Reset Tests ---

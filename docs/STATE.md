@@ -687,6 +687,32 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - Not integrated with LiveEngineV0 event loop
   - **Runbook:** `docs/runbooks/13_OPERATOR_CEREMONY.md`
   - See ADR-044 for design decisions
+- **Configurable Order Identity v0.1** (`src/grinder/reconcile/identity.py`):
+  - Central config for order identity: prefix + strategy allowlist (LC-12)
+  - **OrderIdentityConfig:**
+    - `prefix`: Order ID prefix (default: "grinder_")
+    - `strategy_id`: Strategy identifier (default: "default")
+    - `allowed_strategies`: Set of allowed strategy IDs for remediation
+    - `require_strategy_allowlist`: If True, strategy must be in allowlist
+    - `allow_legacy_format`: Allow legacy format (env: `ALLOW_LEGACY_ORDER_ID=1`)
+  - **clientOrderId Formats:**
+    - v1: `{prefix}{strategy_id}_{symbol}_{level_id}_{ts}_{seq}`
+    - Legacy: `grinder_{symbol}_{level_id}_{ts}_{seq}` (no strategy_id)
+  - **Core functions:**
+    - `parse_client_order_id(cid)`: Parse v1 or legacy format
+    - `is_ours(cid, config)`: Check ownership via prefix + strategy allowlist
+    - `generate_client_order_id(config, ...)`: Create v1 format
+  - **Integration points:**
+    - `BinanceFuturesPort.place_order()`: Uses `generate_client_order_id()`
+    - `BinancePort.place_order()`: Uses `generate_client_order_id()`
+    - `ReconcileEngine._check_unexpected_orders()`: Uses `is_ours()`
+    - `RemediationExecutor.can_execute()` Gate 8: Uses `is_ours()`
+  - **How to verify:**
+    ```bash
+    PYTHONPATH=src pytest tests/unit/test_identity.py -v
+    ```
+  - **Unit tests:** `tests/unit/test_identity.py` (44 tests)
+  - See ADR-045 for design decisions
 - **Live Smoke Harness** (`scripts/smoke_live_testnet.py`):
   - Smoke test harness for Binance (testnet or mainnet): place micro order → cancel (LC-07, LC-08b)
   - **Safe-by-construction guards:**
