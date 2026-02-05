@@ -56,6 +56,14 @@ Where to find information:
 
 ---
 
+## Live Trading
+- `src/grinder/live/` — LiveEngineV0 module (ADR-036)
+  - `config.py` — LiveEngineConfig (arming, mode, kill-switch, whitelist)
+  - `engine.py` — LiveEngineV0 (safety gates, intent classification, hardening chain)
+- See: `docs/STATE.md` §Live Trading, `docs/DECISIONS.md` ADR-036
+
+---
+
 ## Operations
 - `docs/HOW_TO_OPERATE.md` — operator's guide (includes Release Checklist v1)
 - `docs/OBSERVABILITY_STACK.md` — Prometheus + Grafana setup

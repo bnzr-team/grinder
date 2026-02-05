@@ -1421,3 +1421,65 @@
   - Futures/margin trading (spot only)
   - Real AiohttpClient implementation (only protocol defined)
   - Rate limiting (handled by H4 circuit breaker)
+
+## ADR-036 — LiveEngineV0: Live Write-Path Wiring (LC-05)
+- **Date:** 2026-02-04
+- **Status:** accepted
+- **Context:** We have individual components (BinanceExchangePort, IdempotentExchangePort, DrawdownGuardV1, KillSwitch) but no orchestration layer that wires them together for live trading. PaperEngine handles paper mode but shouldn't be polluted with live I/O concerns.
+- **Decision:**
+  - **New module:** `grinder.live` with `LiveEngineV0` class
+  - **Architecture:** Thin wrapper around PaperEngine that forwards execution to real ExchangePort
+  - **Arming model (two-layer safety):**
+    - `LiveEngineConfig.armed: bool = False` — master switch, blocks ALL writes when False
+    - `LiveEngineConfig.mode: SafeMode = READ_ONLY` — secondary check via port
+    - Both `armed=True` AND `mode=LIVE_TRADE` required for actual writes
+    - Engine arming is checked BEFORE port SafeMode (faster rejection)
+  - **Intent classification:**
+    - `ActionType.CANCEL` → `OrderIntent.CANCEL` (always allowed)
+    - `ActionType.PLACE` → `OrderIntent.INCREASE_RISK` (blocked in DRAWDOWN)
+    - `ActionType.REPLACE` → `OrderIntent.INCREASE_RISK` (blocked in DRAWDOWN)
+    - `ActionType.NOOP` → `OrderIntent.CANCEL` (safe, skipped)
+  - **Kill-switch semantics:**
+    - `kill_switch_active=True` → blocks PLACE/REPLACE, allows CANCEL
+    - Enables "reduce only" mode to exit positions when triggered
+  - **Safety gate ordering (checked in this order):**
+    1. Arming check (`armed=False` → blocked)
+    2. Mode check (`mode≠LIVE_TRADE` → blocked)
+    3. Kill-switch check (if active, blocks INCREASE_RISK)
+    4. Symbol whitelist check
+    5. DrawdownGuardV1.allow(intent) check
+    6. Execute via exchange_port
+  - **Hardening chain (H2/H3/H4):**
+    - H3: IdempotentExchangePort wraps base port for idempotency
+    - H4: CircuitBreaker integrated into IdempotentExchangePort for fast-fail
+    - H2: RetryPolicy for transient errors (exponential backoff)
+    - Chain: `LiveEngineV0 → IdempotentExchangePort(H3+H4) → BinanceExchangePort`
+  - **Error handling:**
+    - `ConnectorNonRetryableError` → fail immediately (no retries)
+    - `ConnectorTransientError` → retry with backoff
+    - `CircuitOpenError` → fail immediately (breaker OPEN)
+    - Other `ConnectorError` → check `is_retryable()` to decide
+- **Implementation:**
+  - `src/grinder/live/config.py`: `LiveEngineConfig` dataclass
+  - `src/grinder/live/engine.py`: `LiveEngineV0` class
+  - `LiveEngineV0.process_snapshot(snapshot)` → `LiveEngineOutput`
+  - `LiveAction` dataclass tracks status, block_reason, attempts
+  - `BlockReason` enum for gate-specific rejection codes
+- **Testing:**
+  - 16 unit tests in `test_live_engine.py`
+  - A) Safety/arming (4): armed=False, mode=READ_ONLY, kill-switch, whitelist
+  - B) Drawdown guard (3): NORMAL allows, DRAWDOWN blocks INCREASE_RISK, allows CANCEL
+  - C) Idempotency+retry (3): duplicate→cached, transient→retry, non-retryable→no-retry
+  - D) Circuit breaker (2): trip→reject, half-open→close
+- **Consequences:**
+  - Live trading possible with explicit `armed=True` + `mode=LIVE_TRADE`
+  - By default nothing writes (`armed=False`)
+  - DrawdownGuardV1 blocks risk-increasing actions in DRAWDOWN state
+  - Idempotency ensures 1 side-effect even under retries
+  - Circuit breaker fast-fails when upstream degraded
+- **Out of Scope (v0):**
+  - Reconciliation via `fetch_open_orders()` (deferred to LC-06)
+  - Multi-symbol support (single-symbol focus)
+  - Persistent state recovery (deferred)
+  - Real E2E testnet testing (requires LC-07 runbook)
+  - Engine-level metrics (H5) beyond existing port metrics

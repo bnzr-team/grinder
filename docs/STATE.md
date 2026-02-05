@@ -427,6 +427,36 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - Spot only (no futures/margin)
     - Real AiohttpClient not implemented (only protocol)
   - See ADR-035 for design decisions
+- **LiveEngineV0** (`src/grinder/live/engine.py`):
+  - Live write-path wiring from PaperEngine to ExchangePort (LC-05)
+  - **Arming model (two-layer safety):**
+    - `armed=False` (default): blocks ALL writes before reaching port
+    - `mode=SafeMode.LIVE_TRADE` required at port level
+    - Both required for actual writes: `armed=True AND mode=LIVE_TRADE`
+  - **Intent classification:**
+    - PLACE/REPLACE → INCREASE_RISK (blocked in DRAWDOWN)
+    - CANCEL → CANCEL (always allowed)
+  - **Safety gate ordering:**
+    1. Arming check
+    2. Mode check
+    3. Kill-switch check (blocks INCREASE_RISK, allows CANCEL)
+    4. Symbol whitelist check
+    5. DrawdownGuardV1.allow(intent)
+    6. Execute via exchange_port
+  - **Hardening chain:**
+    - H3: IdempotentExchangePort for idempotency
+    - H4: CircuitBreaker for fast-fail
+    - H2: RetryPolicy for transient errors
+  - **How to verify:**
+    ```bash
+    PYTHONPATH=src pytest tests/unit/test_live_engine.py -v
+    ```
+  - **Unit tests:** `tests/unit/test_live_engine.py` (16 tests)
+    - Safety/arming tests prove armed=False blocks writes
+    - Drawdown tests prove INCREASE_RISK blocked in DRAWDOWN
+    - Idempotency tests prove duplicate→cached
+    - Circuit breaker tests prove OPEN→reject
+  - See ADR-036 for design decisions
 - **DrawdownGuard v0** (`src/grinder/risk/drawdown.py`):
   - Tracks equity high-water mark (HWM)
   - Computes drawdown: `(HWM - equity) / HWM`

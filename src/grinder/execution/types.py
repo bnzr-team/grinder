@@ -108,6 +108,20 @@ class ExecutionAction:
             "reason": self.reason,
         }
 
+    @classmethod
+    def from_dict(cls, d: dict[str, Any]) -> ExecutionAction:
+        """Create from dict."""
+        return cls(
+            action_type=ActionType(d["action_type"]),
+            order_id=d.get("order_id"),
+            symbol=d.get("symbol", ""),
+            side=OrderSide(d["side"]) if d.get("side") else None,
+            price=Decimal(d["price"]) if d.get("price") else None,
+            quantity=Decimal(d["quantity"]) if d.get("quantity") else None,
+            level_id=d.get("level_id", 0),
+            reason=d.get("reason", ""),
+        )
+
 
 @dataclass
 class ExecutionEvent:
