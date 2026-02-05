@@ -457,6 +457,41 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - Idempotency tests prove duplicate→cached
     - Circuit breaker tests prove OPEN→reject
   - See ADR-036 for design decisions
+- **LiveFeed v0** (`src/grinder/live/feed.py`):
+  - Live read-path pipeline: WS → Snapshot → FeatureEngine → features (LC-06)
+  - **Architecture:** DataConnector → Snapshot → FeatureEngine → LiveFeaturesUpdate
+  - **Hard read-only constraint:**
+    - `feed.py` MUST NOT import from `grinder.execution.*`
+    - Enforced by `test_feed_py_has_no_execution_imports` (AST parsing)
+    - Violation = CI failure
+  - **BinanceWsConnector** (`src/grinder/connectors/binance_ws.py`):
+    - Implements `DataConnector` ABC with `iter_snapshots()` async iterator
+    - Parses bookTicker JSON → Snapshot objects
+    - Idempotency via `last_seen_ts` tracking
+    - Auto-reconnect with exponential backoff
+    - Testable via `WsTransport` ABC injection (FakeWsTransport for tests)
+  - **LiveFeed pipeline:**
+    - Symbol filtering (optional)
+    - FeatureEngine integration (BarBuilder → indicators)
+    - Yields `LiveFeaturesUpdate` with computed features
+    - Warmup detection (`is_warmed_up` when bars >= warmup_bars)
+  - **Key types:**
+    - `LiveFeaturesUpdate`: ts, symbol, features, bar_completed, is_warmed_up, latency_ms
+    - `WsMessage`: Raw WebSocket message wrapper
+    - `BookTickerData`: Parsed Binance bookTicker fields
+    - `LiveFeedStats`: Ticks/bars/errors tracking
+  - **How to verify:**
+    ```bash
+    PYTHONPATH=src pytest tests/unit/test_live_feed.py -v
+    ```
+  - **Unit tests:** `tests/unit/test_live_feed.py` (21 tests)
+    - P0 hard-block tests prove 0 execution imports
+    - FakeWsTransport tests prove testable WS behavior
+    - Connector tests prove yields snapshots, skips duplicates
+    - LiveFeed tests prove features computed correctly
+    - Golden output tests prove determinism
+  - **Fixtures:** `tests/fixtures/ws/bookticker_btcusdt.jsonl`
+  - See ADR-037 for design decisions
 - **DrawdownGuard v0** (`src/grinder/risk/drawdown.py`):
   - Tracks equity high-water mark (HWM)
   - Computes drawdown: `(HWM - equity) / HWM`

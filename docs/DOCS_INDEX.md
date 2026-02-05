@@ -57,10 +57,15 @@ Where to find information:
 ---
 
 ## Live Trading
-- `src/grinder/live/` — LiveEngineV0 module (ADR-036)
-  - `config.py` — LiveEngineConfig (arming, mode, kill-switch, whitelist)
-  - `engine.py` — LiveEngineV0 (safety gates, intent classification, hardening chain)
-- See: `docs/STATE.md` §Live Trading, `docs/DECISIONS.md` ADR-036
+- `src/grinder/live/` — Live trading modules
+  - **Write-path (ADR-036):**
+    - `config.py` — LiveEngineConfig (arming, mode, kill-switch, whitelist)
+    - `engine.py` — LiveEngineV0 (safety gates, intent classification, hardening chain)
+  - **Read-path (ADR-037):**
+    - `types.py` — LiveFeaturesUpdate, WsMessage, BookTickerData, LiveFeedStats
+    - `feed.py` — LiveFeed pipeline (WS → Snapshot → FeatureEngine → features)
+- `src/grinder/connectors/binance_ws.py` — BinanceWsConnector (bookTicker stream)
+- See: `docs/STATE.md` §Live Trading, `docs/DECISIONS.md` ADR-036/ADR-037
 
 ---
 

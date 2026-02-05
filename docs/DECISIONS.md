@@ -1483,3 +1483,70 @@
   - Persistent state recovery (deferred)
   - Real E2E testnet testing (requires LC-07 runbook)
   - Engine-level metrics (H5) beyond existing port metrics
+
+## ADR-037 — LiveFeed: Live Read-Path Pipeline (LC-06)
+- **Date:** 2026-02-05
+- **Status:** accepted
+- **Context:** LiveEngineV0 (ADR-036) handles write-path (order execution), but we need a read-only data pipeline to convert Binance WebSocket bookTicker stream into FeatureSnapshot objects for the policy layer. This must be strictly read-only with ZERO imports from execution module.
+- **Decision:**
+  - **New modules:**
+    - `grinder.connectors.binance_ws`: WebSocket client for Binance bookTicker stream
+    - `grinder.live.types`: LiveFeaturesUpdate, WsMessage, BookTickerData, LiveFeedStats
+    - `grinder.live.feed`: LiveFeed pipeline orchestrator
+  - **Architecture:** DataConnector → Snapshot → FeatureEngine → LiveFeaturesUpdate
+  - **Hard read-only constraint:**
+    - `feed.py` MUST NOT import from `grinder.execution.*`
+    - Enforced by `test_feed_py_has_no_execution_imports` using AST parsing
+    - Violation = CI failure
+  - **BinanceWsConnector:**
+    - Implements `DataConnector` ABC with `iter_snapshots()` async iterator
+    - Parses bookTicker JSON → Snapshot objects
+    - Idempotency via `last_seen_ts` tracking (skips old/duplicate)
+    - Auto-reconnect with exponential backoff
+    - Testable via `WsTransport` ABC injection
+  - **FakeWsTransport:**
+    - Pre-loaded messages queue for testing
+    - Simulated delays (`delay_ms`)
+    - Error injection (`error_after=N`)
+    - Injectable clock for deterministic timestamps
+  - **LiveFeed pipeline:**
+    - Receives Snapshots from DataConnector
+    - Filters by configured symbols
+    - Feeds through FeatureEngine (BarBuilder → indicators)
+    - Yields LiveFeaturesUpdate with computed features
+    - Tracks stats (ticks, bars, errors, latency)
+  - **LiveFeaturesUpdate:**
+    - `ts`: Snapshot timestamp
+    - `symbol`: Trading symbol
+    - `features`: FeatureSnapshot from engine
+    - `bar_completed`: Whether a new bar was completed
+    - `bars_available`: Count of completed bars
+    - `is_warmed_up`: Whether enough bars for full feature computation
+    - `latency_ms`: Processing latency
+  - **Configuration:**
+    - `LiveFeedConfig`: symbols filter, feature_config, warmup_bars
+    - `BinanceWsConfig`: symbols, use_testnet, timeout, retry
+- **Implementation:**
+  - `src/grinder/connectors/binance_ws.py`: WsTransport, BinanceWsConnector
+  - `src/grinder/live/types.py`: LiveFeaturesUpdate, WsMessage, BookTickerData
+  - `src/grinder/live/feed.py`: LiveFeed, LiveFeedConfig, LiveFeedRunner
+  - `tests/unit/test_live_feed.py`: 21 tests
+  - `tests/fixtures/ws/bookticker_btcusdt.jsonl`: Golden fixture
+- **Testing:**
+  - **P0 Hard-block tests (2):** AST check for 0 execution imports in feed.py and types.py
+  - **FakeWsTransport tests (3):** Message ordering, not-connected error, error injection
+  - **BinanceWsConnector tests (4):** Connect/subscribe, yields snapshots, skip subscription response, idempotency
+  - **LiveFeed tests (7):** Process snapshot, bars tracking, symbol filtering, warmup detection, stats, reset
+  - **Determinism tests (2):** Same input → same output, golden fixture SHA256 match
+  - **LiveFeaturesUpdate tests (1):** to_dict serialization
+- **Consequences:**
+  - Live data pipeline ready for integration with LiveEngineV0
+  - Strictly read-only (no accidental trades from data plane)
+  - Deterministic testing with fake WS transport
+  - Golden fixtures enable regression detection
+  - FeatureEngine produces features for policy evaluation
+- **Out of Scope (v0):**
+  - Real WebSocket connection to mainnet (testnet only)
+  - Multi-symbol concurrent streaming (single pipeline)
+  - WebSocket heartbeat/ping handling (delegated to websockets library)
+  - Persistence of WS messages for replay (deferred)
