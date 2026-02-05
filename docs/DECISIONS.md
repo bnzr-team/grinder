@@ -2028,8 +2028,8 @@
     - Legacy orders (`__legacy__`) allowed only if `allow_legacy_format=True`
     - `require_strategy_allowlist=False` → accept any strategy
   - **Backward compatibility:**
-    - Default config produces identical format to legacy when `strategy_id="default"`
-    - Legacy format parsing enabled via env var or config flag
+    - v1 format includes strategy_id: `grinder_default_BTCUSDT_...` (differs from legacy `grinder_BTCUSDT_...`)
+    - Legacy format parsing enabled via env var (`ALLOW_LEGACY_ORDER_ID=1`) or config flag
     - GRINDER_PREFIX constant preserved in remediation.py for backward compat
 
 - **Test coverage:**
@@ -2047,7 +2047,7 @@
   - Multiple strategies can coexist with isolated remediation scope
   - Gate 8 now checks allowlist, not just prefix
   - Legacy orders can be migrated gradually
-  - No breaking changes for existing deployments (defaults match legacy behavior)
+  - Parser reads both v1 and legacy formats; generation always produces v1
 
 - **Out of Scope (v0.1):**
   - Strategy-specific config loading from file
