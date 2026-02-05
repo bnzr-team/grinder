@@ -613,10 +613,45 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - `tests/fixtures/reconcile/rest_position_risk.json`: GET /positionRisk response
     - `tests/fixtures/reconcile/mismatch_scenarios.jsonl`: Test scenarios
   - **Limitations (v0.1):**
-    - No automatic remediation actions (cancel-all, flatten)
     - No integration with LiveEngineV0 event loop
     - No HA leader election for reconcile loop
   - See ADR-042 for design decisions
+- **Active Remediation v0.1** (`src/grinder/reconcile/remediation.py`):
+  - Extends passive reconciliation (LC-09b) with active actions (LC-10)
+  - **Actions:**
+    - `cancel_all`: Cancel unexpected grinder_ prefixed orders via `port.cancel_order()`
+    - `flatten`: Close unexpected positions via `port.place_market_order(reduce_only=True)`
+  - **9 Safety Gates (ALL must pass for real execution):**
+    1. `action != NONE` (config)
+    2. `dry_run == False` (config)
+    3. `allow_active_remediation == True` (config)
+    4. `armed == True` (from LiveEngine)
+    5. `ALLOW_MAINNET_TRADE=1` (env var)
+    6. Cooldown elapsed since last action
+    7. Symbol in whitelist
+    8. grinder_ prefix for cancel (protects manual orders)
+    9. Notional <= cap for flatten (limits exposure)
+  - **Kill-switch semantics:** Remediation ALLOWED (reduces risk)
+  - **Default behavior:** dry-run only (plans but doesn't execute)
+  - **New types:**
+    - `RemediationBlockReason`: Enum (13 values for why blocked)
+    - `RemediationStatus`: Enum (PLANNED, EXECUTED, BLOCKED, FAILED)
+    - `RemediationResult`: Frozen dataclass for remediation outcome
+    - `RemediationExecutor`: Class with `can_execute()`, `remediate_cancel()`, `remediate_flatten()`
+  - **New metrics:**
+    - `grinder_reconcile_action_planned_total{action}`: Dry-run plans
+    - `grinder_reconcile_action_executed_total{action}`: Real executions
+    - `grinder_reconcile_action_blocked_total{reason}`: Blocked actions
+  - **How to verify:**
+    ```bash
+    PYTHONPATH=src pytest tests/unit/test_remediation.py -v
+    ```
+  - **Unit tests:** `tests/unit/test_remediation.py` (28 tests)
+  - **Limitations (v0.1):**
+    - Not integrated with LiveEngineV0 event loop
+    - No HA leader election for remediation
+    - No automatic strategy recovery
+  - See ADR-043 for design decisions
 - **Live Smoke Harness** (`scripts/smoke_live_testnet.py`):
   - Smoke test harness for Binance (testnet or mainnet): place micro order → cancel (LC-07, LC-08b)
   - **Safe-by-construction guards:**
