@@ -1699,3 +1699,127 @@
   - Multi-symbol concurrent streaming (single pipeline)
   - WebSocket heartbeat/ping handling (delegated to websockets library)
   - Persistence of WS messages for replay (deferred)
+
+---
+
+## ADR-041 — Futures User-Data Stream v0.1 (LC-09a)
+- **Date:** 2026-02-05
+- **Status:** accepted
+- **Context:** Reconciliation between expected order state (from execution) and actual state (from exchange) requires real-time user-data stream. Binance Futures USDT-M uses a listenKey-based WebSocket for ORDER_TRADE_UPDATE and ACCOUNT_UPDATE events. Need event normalization, listenKey lifecycle management, and deterministic testing.
+- **Decision:**
+  - **New types** (`src/grinder/execution/futures_events.py`):
+    - `FuturesOrderEvent`: Normalized order update (ts, symbol, order_id, client_order_id, side, status, price, qty, executed_qty, avg_price)
+    - `FuturesPositionEvent`: Normalized position update (ts, symbol, position_amt, entry_price, unrealized_pnl)
+    - `UserDataEventType`: Enum for ORDER_TRADE_UPDATE, ACCOUNT_UPDATE, UNKNOWN
+    - `UserDataEvent`: Tagged union wrapper for event dispatch
+    - `BINANCE_STATUS_MAP`: Binance status → OrderState mapping (NEW→OPEN, CANCELED→CANCELLED, etc.)
+  - **ListenKey lifecycle** (`src/grinder/connectors/binance_user_data_ws.py`):
+    - `ListenKeyConfig`: API base URL, API key, timeout
+    - `ListenKeyManager`: HTTP operations for listenKey (POST create, PUT keepalive, DELETE close)
+    - 401 → `ConnectorNonRetryableError` (invalid API key)
+    - 5xx → `ConnectorTransientError` (retryable)
+  - **WebSocket connector** (`FuturesUserDataWsConnector`):
+    - Lifecycle: connect (create listenKey → WS connect → start keepalive), close (cancel keepalive → WS close → delete listenKey)
+    - `iter_events()`: AsyncIterator yielding `UserDataEvent`
+    - Auto-keepalive: PUT every 30 seconds (configurable)
+    - Auto-reconnect: exponential backoff on transient errors
+    - Unknown events: yield as UNKNOWN with raw_data (don't crash)
+    - listenKeyExpired: log warning, trigger reconnect
+  - **Testing infrastructure**:
+    - `FakeListenKeyManager`: Injectable mock for listenKey operations
+    - Reuses `FakeWsTransport` from binance_ws.py for WS testing
+    - Injectable clock for keepalive timing tests
+  - **Fixtures** (`tests/fixtures/user_data/`):
+    - `order_lifecycle.jsonl`: NEW → PARTIALLY_FILLED → FILLED
+    - `position_lifecycle.jsonl`: 0 → position → 0
+    - Golden tests verify deterministic normalization (same input → same output)
+- **API message format (Binance reference)**:
+  - ORDER_TRADE_UPDATE: `o.s`→symbol, `o.c`→client_order_id, `o.X`→status, `o.i`→order_id, etc.
+  - ACCOUNT_UPDATE: `a.P[]`→positions array, `a.P[].s`→symbol, `a.P[].pa`→position_amt, etc.
+- **Test coverage:**
+  - `tests/unit/test_futures_events.py` (41 tests): serialization, parsing, lifecycle golden tests
+  - `tests/unit/test_listen_key_manager.py` (17 tests): HTTP operations, error handling
+  - `tests/unit/test_user_data_ws.py` (21 tests): connection, events, stats, FakeListenKeyManager
+- **Consequences:**
+  - User-data stream infrastructure ready for reconciliation integration (LC-09b)
+  - Event normalization provides stable types for strategy logic
+  - Deterministic testing without network dependencies
+  - listenKey lifecycle managed automatically (no manual keepalive needed)
+- **Out of Scope (LC-09b):**
+  - Reconciliation logic (comparing expected vs observed state)
+  - REST snapshot fallback
+  - Active actions (cancel-all, flatten on mismatch)
+  - Metrics/counters for stream health
+
+---
+
+## ADR-042 — Passive Reconciliation v0.1 (LC-09b)
+- **Date:** 2026-02-05
+- **Status:** accepted
+- **Context:** Need to detect mismatches between expected state (what we sent to exchange) and observed state (from user-data stream + REST snapshots) for Binance Futures USDT-M. v0.1 is **passive only**: logs + metrics + action plan text. No actual remediation actions.
+- **Decision:**
+  - **New types** (`src/grinder/reconcile/types.py`):
+    - `ExpectedOrder`: Frozen dataclass for order we expect on exchange (client_order_id, symbol, side, order_type, price, orig_qty, ts_created, expected_status)
+    - `ExpectedPosition`: Frozen dataclass for expected position (symbol, expected_position_amt, ts_updated)
+    - `ObservedOrder`: Frozen dataclass for order seen via stream/REST (includes order_id, executed_qty, avg_price, source)
+    - `ObservedPosition`: Frozen dataclass for observed position (position_amt, entry_price, unrealized_pnl, source)
+    - `MismatchType`: Enum with 4 stable values (metric labels):
+      - `ORDER_MISSING_ON_EXCHANGE`: Expected OPEN order not found after grace period
+      - `ORDER_EXISTS_UNEXPECTED`: Order on exchange (grinder_ prefix) not in expected state
+      - `ORDER_STATUS_DIVERGENCE`: Expected vs observed status differs
+      - `POSITION_NONZERO_UNEXPECTED`: Position != 0 when expected = 0
+    - `Mismatch`: Frozen dataclass for detected mismatch (type, symbol, client_order_id, expected, observed, ts_detected, action_plan)
+  - **Configuration** (`src/grinder/reconcile/config.py`):
+    - `ReconcileConfig`: order_grace_period_ms (5s), snapshot_interval_sec (60s), expected_max_orders (200), expected_ttl_ms (24h), symbol_filter, enabled
+  - **State stores**:
+    - `ExpectedStateStore` (`src/grinder/reconcile/expected_state.py`):
+      - Ring buffer (max_orders=200) with OrderedDict for FIFO eviction
+      - TTL eviction (24h) - terminal orders evicted first
+      - Methods: record_order, mark_filled, mark_cancelled, get_active_orders, get_all_orders
+      - Injectable clock for deterministic testing
+    - `ObservedStateStore` (`src/grinder/reconcile/observed_state.py`):
+      - Updated from FuturesOrderEvent/FuturesPositionEvent (stream) and REST snapshots
+      - Methods: update_from_order_event, update_from_position_event, update_from_rest_orders, update_from_rest_positions
+      - Tracks last_snapshot_ts for staleness detection
+  - **Reconciliation engine** (`src/grinder/reconcile/engine.py`):
+    - `ReconcileEngine`: Compares expected vs observed state
+    - `reconcile()` returns `list[Mismatch]`, logs warnings (RECONCILE_MISMATCH), updates metrics
+    - Grace period: ORDER_MISSING only fires after order_grace_period_ms (prevents false positives during network lag)
+    - Only detects grinder_ prefixed orders (ignores third-party orders)
+    - **Passive only**: action_plan is text describing what v1.0 *would* do
+  - **Metrics** (`src/grinder/reconcile/metrics.py`):
+    - `grinder_reconcile_mismatch_total{type="..."}`: Counter by mismatch type
+    - `grinder_reconcile_last_snapshot_age_seconds`: Gauge for REST snapshot staleness
+    - `grinder_reconcile_runs_total`: Counter for reconcile runs
+    - Thread-safe via GIL, Prometheus text export via `to_prometheus_lines()`
+    - Global singleton: `get_reconcile_metrics()`, `reset_reconcile_metrics()`
+  - **Snapshot client** (`src/grinder/reconcile/snapshot_client.py`):
+    - `SnapshotClient`: Periodic REST polling of /fapi/v1/openOrders and /fapi/v2/positionRisk
+    - Retry with exponential backoff on 429/5xx (max_retries=3, base_delay=1s, max_delay=10s)
+    - Injectable HttpClient for testing
+    - `fetch_snapshot()` updates ObservedStateStore
+    - `should_fetch()` checks if interval elapsed
+- **Test coverage:**
+  - `tests/unit/test_reconcile_types.py` (22 tests): serialization roundtrips, MismatchType contract
+  - `tests/unit/test_expected_state.py` (16 tests): ring buffer, TTL eviction, mark_filled/cancelled
+  - `tests/unit/test_observed_state.py` (15 tests): stream/REST updates, symbol filtering
+  - `tests/unit/test_reconcile_engine.py` (13 tests): all 4 mismatch types, grace period, metrics
+  - `tests/unit/test_snapshot_client.py` (16 tests): retry logic, backoff, fetch_snapshot
+  - Total: 82 tests, all passing
+- **Fixtures** (`tests/fixtures/reconcile/`):
+  - `expected_orders.jsonl`: Sample expected orders
+  - `rest_open_orders.json`: GET /openOrders response
+  - `rest_position_risk.json`: GET /positionRisk response
+  - `mismatch_scenarios.jsonl`: Test scenarios for golden tests
+- **Consequences:**
+  - Passive reconciliation infrastructure ready for integration
+  - Mismatch detection available via ReconcileEngine.reconcile()
+  - Metrics enable alerting on reconciliation issues
+  - Memory bounded by ring buffer + TTL eviction
+  - Deterministic testing with injectable clocks
+- **Out of Scope (LC-10):**
+  - Automatic remediation actions (cancel-all, flatten)
+  - `RECONCILE_ACTION=cancel_all` execution
+  - Multi-symbol reconcile optimization
+  - HA leader election for reconcile loop
+  - Integration with LiveEngineV0 event loop

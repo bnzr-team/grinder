@@ -65,7 +65,16 @@ Where to find information:
     - `types.py` — LiveFeaturesUpdate, WsMessage, BookTickerData, LiveFeedStats
     - `feed.py` — LiveFeed pipeline (WS → Snapshot → FeatureEngine → features)
 - `src/grinder/connectors/binance_ws.py` — BinanceWsConnector (bookTicker stream)
-- See: `docs/STATE.md` §Live Trading, `docs/DECISIONS.md` ADR-036/ADR-037
+- `src/grinder/connectors/binance_user_data_ws.py` — FuturesUserDataWsConnector (user-data stream)
+- `src/grinder/execution/futures_events.py` — FuturesOrderEvent, FuturesPositionEvent, UserDataEvent
+- `src/grinder/reconcile/` — Reconciliation module (LC-09b)
+  - `types.py` — ExpectedOrder, ObservedOrder, Mismatch, MismatchType
+  - `expected_state.py` — ExpectedStateStore (ring buffer + TTL)
+  - `observed_state.py` — ObservedStateStore (stream + REST)
+  - `engine.py` — ReconcileEngine (mismatch detection)
+  - `metrics.py` — ReconcileMetrics (Prometheus export)
+  - `snapshot_client.py` — SnapshotClient (REST polling)
+- See: `docs/STATE.md` §Live Trading, `docs/DECISIONS.md` ADR-036/ADR-037/ADR-041/ADR-042
 
 ---
 
@@ -83,6 +92,7 @@ Where to find information:
   - `08_SMOKE_TEST_TESTNET.md` — testnet smoke test procedure
   - `09_MAINNET_TRADE_SMOKE.md` — Spot mainnet smoke test procedure (LC-08b)
   - `10_FUTURES_MAINNET_TRADE_SMOKE.md` — Futures USDT-M mainnet smoke test (LC-08b-F)
+  - `11_RECONCILIATION_TRIAGE.md` — Reconciliation mismatch triage (LC-09b)
 - `scripts/smoke_live_testnet.py` — Spot smoke test script (testnet/mainnet)
 - `scripts/smoke_futures_mainnet.py` — Futures USDT-M smoke test script (mainnet)
 
