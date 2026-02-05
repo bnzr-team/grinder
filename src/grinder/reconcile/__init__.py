@@ -2,6 +2,7 @@
 
 See ADR-042 for passive reconciliation design decisions.
 See ADR-043 for active remediation design decisions.
+See ADR-044 for runner wiring and routing policy.
 """
 
 from grinder.reconcile.config import ReconcileConfig, RemediationAction
@@ -20,6 +21,15 @@ from grinder.reconcile.remediation import (
     RemediationResult,
     RemediationStatus,
 )
+from grinder.reconcile.runner import (
+    ACTIONABLE_STATUSES,
+    NO_ACTION_MISMATCHES,
+    ORDER_MISMATCHES_FOR_CANCEL,
+    POSITION_MISMATCHES_FOR_FLATTEN,
+    TERMINAL_STATUSES,
+    ReconcileRunner,
+    ReconcileRunReport,
+)
 from grinder.reconcile.snapshot_client import SnapshotClient, SnapshotClientConfig
 from grinder.reconcile.types import (
     ExpectedOrder,
@@ -31,7 +41,12 @@ from grinder.reconcile.types import (
 )
 
 __all__ = [
+    "ACTIONABLE_STATUSES",
     "GRINDER_PREFIX",
+    "NO_ACTION_MISMATCHES",
+    "ORDER_MISMATCHES_FOR_CANCEL",
+    "POSITION_MISMATCHES_FOR_FLATTEN",
+    "TERMINAL_STATUSES",
     "ExpectedOrder",
     "ExpectedPosition",
     "ExpectedStateStore",
@@ -43,6 +58,8 @@ __all__ = [
     "ReconcileConfig",
     "ReconcileEngine",
     "ReconcileMetrics",
+    "ReconcileRunReport",
+    "ReconcileRunner",
     "RemediationAction",
     "RemediationBlockReason",
     "RemediationExecutor",

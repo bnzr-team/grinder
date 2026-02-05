@@ -2,6 +2,7 @@
 
 See ADR-042 for design decisions.
 See ADR-043 for active remediation metrics.
+See ADR-044 for runner wiring metrics.
 """
 
 from __future__ import annotations
@@ -19,6 +20,11 @@ METRIC_RECONCILE_RUNS = "grinder_reconcile_runs_total"
 METRIC_ACTION_PLANNED = "grinder_reconcile_action_planned_total"
 METRIC_ACTION_EXECUTED = "grinder_reconcile_action_executed_total"
 METRIC_ACTION_BLOCKED = "grinder_reconcile_action_blocked_total"
+
+# LC-11: Runner wiring metrics
+METRIC_RUNS_WITH_MISMATCH = "grinder_reconcile_runs_with_mismatch_total"
+METRIC_RUNS_WITH_REMEDIATION = "grinder_reconcile_runs_with_remediation_total"
+METRIC_LAST_REMEDIATION_TS = "grinder_reconcile_last_remediation_ts_ms"
 
 # Label keys
 LABEL_TYPE = "type"
@@ -45,6 +51,11 @@ class ReconcileMetrics:
         action_planned_counts: {action: count} - dry-run plans
         action_executed_counts: {action: count} - real executions
         action_blocked_counts: {reason: count} - blocked by safety gates
+
+    Runner Wiring (LC-11):
+        runs_with_mismatch: Total runs that detected at least one mismatch
+        runs_with_remediation_counts: {action: count} - runs with executed actions
+        last_remediation_ts_ms: Timestamp of last remediation action
     """
 
     # Passive reconciliation (LC-09b)
@@ -56,6 +67,11 @@ class ReconcileMetrics:
     action_planned_counts: dict[str, int] = field(default_factory=dict)
     action_executed_counts: dict[str, int] = field(default_factory=dict)
     action_blocked_counts: dict[str, int] = field(default_factory=dict)
+
+    # Runner wiring (LC-11)
+    runs_with_mismatch: int = 0
+    runs_with_remediation_counts: dict[str, int] = field(default_factory=dict)
+    last_remediation_ts_ms: int = 0
 
     def record_mismatch(self, mismatch_type: MismatchType) -> None:
         """Record a mismatch event."""
@@ -81,6 +97,20 @@ class ReconcileMetrics:
     def record_action_blocked(self, reason: str) -> None:
         """Record a blocked remediation action."""
         self.action_blocked_counts[reason] = self.action_blocked_counts.get(reason, 0) + 1
+
+    def record_run_with_mismatch(self) -> None:
+        """Record a run that detected at least one mismatch."""
+        self.runs_with_mismatch += 1
+
+    def record_run_with_remediation(self, action: str) -> None:
+        """Record a run that executed at least one remediation action."""
+        self.runs_with_remediation_counts[action] = (
+            self.runs_with_remediation_counts.get(action, 0) + 1
+        )
+
+    def set_last_remediation_ts(self, ts_ms: int) -> None:
+        """Set timestamp of last remediation action."""
+        self.last_remediation_ts_ms = ts_ms
 
     def to_prometheus_lines(self) -> list[str]:
         """Generate Prometheus text format lines."""
@@ -149,6 +179,35 @@ class ReconcileMetrics:
         for reason, count in sorted(self.action_blocked_counts.items()):
             lines.append(f'{METRIC_ACTION_BLOCKED}{{{LABEL_REASON}="{reason}"}} {count}')
 
+        # LC-11: Runs with mismatch counter
+        lines.extend(
+            [
+                f"# HELP {METRIC_RUNS_WITH_MISMATCH} Total runs that detected mismatches",
+                f"# TYPE {METRIC_RUNS_WITH_MISMATCH} counter",
+                f"{METRIC_RUNS_WITH_MISMATCH} {self.runs_with_mismatch}",
+            ]
+        )
+
+        # LC-11: Runs with remediation counter
+        lines.extend(
+            [
+                f"# HELP {METRIC_RUNS_WITH_REMEDIATION} Total runs that executed remediation",
+                f"# TYPE {METRIC_RUNS_WITH_REMEDIATION} counter",
+            ]
+        )
+        for action in _KNOWN_ACTIONS:
+            count = self.runs_with_remediation_counts.get(action, 0)
+            lines.append(f'{METRIC_RUNS_WITH_REMEDIATION}{{{LABEL_ACTION}="{action}"}} {count}')
+
+        # LC-11: Last remediation timestamp gauge
+        lines.extend(
+            [
+                f"# HELP {METRIC_LAST_REMEDIATION_TS} Timestamp of last remediation action (ms)",
+                f"# TYPE {METRIC_LAST_REMEDIATION_TS} gauge",
+                f"{METRIC_LAST_REMEDIATION_TS} {self.last_remediation_ts_ms}",
+            ]
+        )
+
         return lines
 
     def reset(self) -> None:
@@ -159,6 +218,9 @@ class ReconcileMetrics:
         self.action_planned_counts.clear()
         self.action_executed_counts.clear()
         self.action_blocked_counts.clear()
+        self.runs_with_mismatch = 0
+        self.runs_with_remediation_counts.clear()
+        self.last_remediation_ts_ms = 0
 
 
 # Global singleton
