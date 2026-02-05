@@ -1,12 +1,13 @@
 """Reconciliation runner that wires engine to remediation.
 
 See ADR-044 for design decisions.
+See ADR-046 for audit trail design.
 
 Orchestration flow:
 1. ReconcileEngine.reconcile() → list[Mismatch]
 2. Route mismatch → action via ROUTING_POLICY
 3. RemediationExecutor.remediate_cancel/flatten() → RemediationResult
-4. Emit audit logs and update metrics
+4. Emit audit logs (JSONL) and update metrics
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from grinder.core import OrderState
+from grinder.reconcile.audit import AuditWriter, create_reconcile_run_event
 from grinder.reconcile.metrics import get_reconcile_metrics
 from grinder.reconcile.remediation import (
     RemediationExecutor,
@@ -207,10 +209,11 @@ class ReconcileRunner:
     executor: RemediationExecutor
     observed: ObservedStateStore
     price_getter: Callable[[str], Decimal] | None = None
+    audit_writer: AuditWriter | None = None
 
     _clock: Callable[[], int] = field(default=lambda: int(time.time() * 1000))
 
-    def run(self) -> ReconcileRunReport:
+    def run(self) -> ReconcileRunReport:  # noqa: PLR0912, PLR0915
         """Execute one reconciliation run.
 
         Returns:
@@ -219,12 +222,25 @@ class ReconcileRunner:
         ts_start = self._clock()
         metrics = get_reconcile_metrics()
 
+        # Generate audit run_id if audit is enabled
+        run_id: str | None = None
+        if self.audit_writer is not None:
+            run_id = self.audit_writer.start_run()
+
         # Reset per-run counters in executor
         self.executor.reset_run_counters()
 
         # Step 1: Detect mismatches
         mismatches = self.engine.reconcile()
         mismatches_detected = len(mismatches)
+
+        # Collect mismatch counts by type and symbols for audit
+        mismatch_counts: dict[str, int] = {}
+        symbols_with_mismatches: list[str] = []
+        for m in mismatches:
+            mt = m.mismatch_type.value
+            mismatch_counts[mt] = mismatch_counts.get(mt, 0) + 1
+            symbols_with_mismatches.append(m.symbol)
 
         # Update runs_with_mismatch metric
         if mismatches_detected > 0:
@@ -299,8 +315,12 @@ class ReconcileRunner:
             skipped_no_action=skipped_no_action,
         )
 
-        # Audit log
+        # Structured log
         self._log_run_complete(report)
+
+        # Write audit event (JSONL)
+        if self.audit_writer is not None and run_id is not None:
+            self._write_audit_event(report, run_id, mismatch_counts, symbols_with_mismatches)
 
         return report
 
@@ -403,3 +423,37 @@ class ReconcileRunner:
             "RECONCILE_RUN",
             extra=report.to_log_extra(),
         )
+
+    def _write_audit_event(
+        self,
+        report: ReconcileRunReport,
+        run_id: str,
+        mismatch_counts: dict[str, int],
+        symbols: list[str],
+    ) -> None:
+        """Write RECONCILE_RUN event to audit trail."""
+        if self.audit_writer is None:
+            return
+
+        # Determine mode from executor config
+        mode = "dry_run" if self.executor.config.dry_run else "live"
+        action = self.executor.config.action.value
+
+        event = create_reconcile_run_event(
+            run_id=run_id,
+            ts_start=report.ts_start,
+            ts_end=report.ts_end,
+            mode=mode,
+            action=action,
+            mismatch_counts=mismatch_counts,
+            symbols=symbols,
+            cancel_count=len(report.cancel_results),
+            flatten_count=len(report.flatten_results),
+            executed_count=report.executed_count,
+            planned_count=report.planned_count,
+            blocked_count=report.blocked_count,
+            skipped_terminal=report.skipped_terminal,
+            skipped_no_action=report.skipped_no_action,
+        )
+
+        self.audit_writer.write(event)

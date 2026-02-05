@@ -4,8 +4,18 @@ See ADR-042 for passive reconciliation design decisions.
 See ADR-043 for active remediation design decisions.
 See ADR-044 for runner wiring and routing policy.
 See ADR-045 for order identity design decisions.
+See ADR-046 for audit trail design decisions.
 """
 
+from grinder.reconcile.audit import (
+    AuditConfig,
+    AuditEvent,
+    AuditEventType,
+    AuditWriter,
+    create_reconcile_run_event,
+    create_remediate_attempt_event,
+    create_remediate_result_event,
+)
 from grinder.reconcile.config import ReconcileConfig, RemediationAction
 from grinder.reconcile.engine import ReconcileEngine
 from grinder.reconcile.expected_state import ExpectedStateStore
@@ -69,6 +79,11 @@ __all__ = [
     "ORDER_MISMATCHES_FOR_CANCEL",
     "POSITION_MISMATCHES_FOR_FLATTEN",
     "TERMINAL_STATUSES",
+    # Audit (LC-11b)
+    "AuditConfig",
+    "AuditEvent",
+    "AuditEventType",
+    "AuditWriter",
     # Types
     "ExpectedOrder",
     "ExpectedPosition",
@@ -92,6 +107,9 @@ __all__ = [
     "RemediationStatus",
     # NOTE: SnapshotClient/Config not exported here - import from grinder.reconcile.snapshot_client
     # Functions
+    "create_reconcile_run_event",
+    "create_remediate_attempt_event",
+    "create_remediate_result_event",
     "generate_client_order_id",
     "get_default_identity_config",
     "get_reconcile_metrics",

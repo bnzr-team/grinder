@@ -106,6 +106,29 @@ curl -s http://localhost:9090/metrics | grep action_planned
 - Mismatches are expected behavior (manual orders, etc.)
 - Any uncertainty about what would be cancelled
 
+### 2.4 Enable Audit Trail (Optional)
+
+Enable JSONL audit trail for post-mortem analysis:
+
+```bash
+# Enable audit logging
+export GRINDER_AUDIT_ENABLED=1
+export GRINDER_AUDIT_PATH=/var/log/grinder/reconcile_audit.jsonl
+
+# Deploy and verify audit file is created
+ls -la /var/log/grinder/reconcile_audit.jsonl
+
+# View recent audit events
+tail -f /var/log/grinder/reconcile_audit.jsonl | jq .
+```
+
+Audit events include:
+- `RECONCILE_RUN`: Summary of each reconciliation run
+- Mismatch counts by type
+- Mode (dry_run/live), action, symbols
+
+See ADR-046 for audit schema details.
+
 ## Stage 3: Enable Real Execution (Minimal Limits)
 
 Only proceed after Stage 2 shows expected behavior.
@@ -300,5 +323,6 @@ watch -n 10 'curl -s http://localhost:9090/metrics | grep action_executed'
 ## See Also
 
 - [ADR-044](../DECISIONS.md#adr-044--remediation-wiring--routing-policy-lc-11) — Design decisions
+- [ADR-046](../DECISIONS.md#adr-046--audit-jsonl-for-reconcileremediation-lc-11b) — Audit trail design
 - [12_ACTIVE_REMEDIATION](12_ACTIVE_REMEDIATION.md) — RemediationExecutor details
 - [11_RECONCILIATION_TRIAGE](11_RECONCILIATION_TRIAGE.md) — Passive reconciliation triage

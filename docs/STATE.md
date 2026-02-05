@@ -713,6 +713,35 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     ```
   - **Unit tests:** `tests/unit/test_identity.py` (44 tests)
   - See ADR-045 for design decisions
+- **Audit JSONL v0.1** (`src/grinder/reconcile/audit.py`):
+  - Append-only JSONL audit trail for reconcile/remediation runs (LC-11b)
+  - **Opt-in:** Disabled by default, enable via `GRINDER_AUDIT_ENABLED=1`
+  - **Event types:**
+    - `RECONCILE_RUN`: Summary at end of each reconcile run
+    - `REMEDIATE_ATTEMPT`: Individual remediation attempt (future)
+    - `REMEDIATE_RESULT`: Result of remediation (future)
+  - **Safety guarantees:**
+    - Redaction of secrets by default (api_key, token, password, etc.)
+    - Bounded file size: rotation at 100MB or 100k events
+    - Fail-open: continues on write error (logs warning)
+  - **Configuration:**
+    ```python
+    AuditConfig(
+        enabled=False,              # Opt-in
+        path="audit/reconcile.jsonl",
+        max_bytes=100_000_000,      # 100 MB
+        redact=True,                # Redact secrets
+        fail_open=True,             # Continue on error
+    )
+    ```
+  - **Integration:** Pass `AuditWriter` to `ReconcileRunner.audit_writer`
+  - **How to enable:**
+    ```bash
+    GRINDER_AUDIT_ENABLED=1 GRINDER_AUDIT_PATH=/path/to/audit.jsonl \
+        PYTHONPATH=src python -m your_app
+    ```
+  - **Unit tests:** `tests/unit/test_audit.py` (33 tests)
+  - See ADR-046 for design decisions
 - **Live Smoke Harness** (`scripts/smoke_live_testnet.py`):
   - Smoke test harness for Binance (testnet or mainnet): place micro order → cancel (LC-07, LC-08b)
   - **Safe-by-construction guards:**
