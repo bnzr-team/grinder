@@ -84,7 +84,7 @@ To place real orders:
 
 Starting futures smoke test (mode=dry-run, symbol=BTCUSDT)
   Base URL: https://fapi.binance.com
-  Price: 80000.00, Quantity: 0.0005
+  Price: 40000.00, Quantity: 0.001
   Notional: $40.00
   Max notional: $50.00
   Target leverage: 1x
@@ -98,7 +98,7 @@ Starting futures smoke test (mode=dry-run, symbol=BTCUSDT)
   [Step 3] Checking existing position...
   No existing position
 
-  [Step 4] Placing limit order: BTCUSDT BUY 0.0005 @ 80000.00
+  [Step 4] Placing limit order: BTCUSDT BUY 0.001 @ 40000.00
   Order placed: grinder_BTCUSDT_0_...
 
   [Step 5] Cancelling order: grinder_BTCUSDT_0_...

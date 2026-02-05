@@ -218,8 +218,8 @@ def check_env_guards() -> tuple[bool, str]:
 
 def run_futures_smoke_test(  # noqa: PLR0912, PLR0915
     symbol: str = "BTCUSDT",
-    price: Decimal = Decimal("80000.00"),  # Close to market but unlikely to fill
-    quantity: Decimal = Decimal("0.001"),  # Micro lot
+    price: Decimal = Decimal("40000.00"),  # Far below market, won't fill
+    quantity: Decimal = Decimal("0.001"),  # Min BTCUSDT precision
     dry_run: bool = True,
     max_notional: Decimal = DEFAULT_MAX_NOTIONAL,
     target_leverage: int = DEFAULT_LEVERAGE,
@@ -448,14 +448,14 @@ Examples:
     parser.add_argument(
         "--price",
         type=Decimal,
-        default=Decimal("80000.00"),
-        help="Limit price (default: 80000.00)",
+        default=Decimal("40000.00"),
+        help="Limit price (default: 40000.00, far below market)",
     )
     parser.add_argument(
         "--quantity",
         type=Decimal,
-        default=Decimal("0.0005"),
-        help="Order quantity (default: 0.0005, notional ~$40 at $80k)",
+        default=Decimal("0.001"),
+        help="Order quantity (default: 0.001, min BTCUSDT precision)",
     )
     parser.add_argument(
         "--max-notional",
