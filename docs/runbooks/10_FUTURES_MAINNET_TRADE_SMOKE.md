@@ -21,9 +21,10 @@ This runbook documents the procedure for running a budgeted smoke test on Binanc
 ### 2. Test Budget
 
 - Ensure the account has a small test budget (e.g., $50-100 USDT)
+- Margin required: ~$40 at default 3x leverage ($120 notional / 3)
 - This limits worst-case loss if something goes wrong
-- The script uses far-from-market prices to minimize fill risk
-- Leverage is set to 1x by default (no margin amplification)
+- The script uses far-from-market prices ($40k vs ~$97k market) to minimize fill risk
+- Default leverage is 3x to reduce margin requirement; safe because order won't fill
 
 ### 3. Environment Setup
 
@@ -56,7 +57,7 @@ Before the script places any mainnet order, ALL of these guards must pass:
 | 5 | `symbol_whitelist` | Empty | Must be non-empty for mainnet |
 | 6 | `max_notional_per_order` | `None` | Must be set (default: $125, above $100 min) |
 | 7 | `max_orders_per_run` | `1` | Single order per script run |
-| 8 | `target_leverage` | `1` | Enforced (no amplification) |
+| 8 | `target_leverage` | `3` | Reduces margin req (safe: far-from-market, cancelled) |
 | 9 | API key/secret | Empty | Must be valid credentials |
 
 **If any guard fails → script exits with error, 0 orders placed.**
@@ -87,13 +88,13 @@ Starting futures smoke test (mode=dry-run, symbol=BTCUSDT)
   Price: 40000.00, Quantity: 0.003
   Notional: $120.00
   Max notional: $125.00
-  Target leverage: 1x
+  Target leverage: 3x
 
   [Step 1] Getting account info...
   Position mode: one-way
 
-  [Step 2] Setting leverage to 1x...
-  Leverage set to: 1x
+  [Step 2] Setting leverage to 3x...
+  Leverage set to: 3x
 
   [Step 3] Checking existing position...
   No existing position

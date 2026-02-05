@@ -70,7 +70,9 @@ from grinder.execution.binance_port import HttpResponse
 # Binance Futures BTCUSDT has $100 minimum notional requirement
 DEFAULT_MAX_NOTIONAL = Decimal("125.00")  # $125 max per order (above $100 min)
 DEFAULT_MAX_ORDERS = 1  # Single order per run
-DEFAULT_LEVERAGE = 1  # 1x leverage (no leverage)
+# Leverage 3x reduces margin requirement to ~$40 (allows smoke with small balance)
+# Safe because: far-from-market price won't fill, order cancelled immediately
+DEFAULT_LEVERAGE = 3
 
 
 # --- Simple Requests-based HTTP Client ---
