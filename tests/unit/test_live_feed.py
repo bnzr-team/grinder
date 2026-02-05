@@ -57,15 +57,22 @@ class TestNoExecutionImports:
         execution_imports: list[str] = []
 
         for node in ast.walk(tree):
-            # Check import statements
+            # Check import statements: import grinder.execution
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     if "execution" in alias.name:
                         execution_imports.append(alias.name)
 
             # Check from ... import statements
-            if isinstance(node, ast.ImportFrom) and node.module and "execution" in node.module:
-                execution_imports.append(node.module)
+            if isinstance(node, ast.ImportFrom):
+                # Case 1: from grinder.execution import X
+                if node.module and "execution" in node.module:
+                    execution_imports.append(node.module)
+                # Case 2: from grinder import execution
+                if node.module and node.module.startswith("grinder"):
+                    for alias in node.names:
+                        if alias.name == "execution" or alias.name.startswith("execution."):
+                            execution_imports.append(f"{node.module}.{alias.name}")
 
         assert not execution_imports, (
             f"feed.py must not import from execution module! Found imports: {execution_imports}"
@@ -82,12 +89,22 @@ class TestNoExecutionImports:
         execution_imports: list[str] = []
 
         for node in ast.walk(tree):
+            # Check import statements: import grinder.execution
             if isinstance(node, ast.Import):
                 for alias in node.names:
                     if "execution" in alias.name:
                         execution_imports.append(alias.name)
-            if isinstance(node, ast.ImportFrom) and node.module and "execution" in node.module:
-                execution_imports.append(node.module)
+
+            # Check from ... import statements
+            if isinstance(node, ast.ImportFrom):
+                # Case 1: from grinder.execution import X
+                if node.module and "execution" in node.module:
+                    execution_imports.append(node.module)
+                # Case 2: from grinder import execution
+                if node.module and node.module.startswith("grinder"):
+                    for alias in node.names:
+                        if alias.name == "execution" or alias.name.startswith("execution."):
+                            execution_imports.append(f"{node.module}.{alias.name}")
 
         assert not execution_imports, (
             f"types.py must not import from execution module! Found imports: {execution_imports}"
