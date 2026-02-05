@@ -432,6 +432,43 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - Spot only (no futures/margin)
     - Real AiohttpClient not implemented (only protocol)
   - See ADR-035, ADR-039 for design decisions
+- **BinanceFuturesPort v0.1** (`src/grinder/execution/binance_futures_port.py`):
+  - Live exchange port implementing ExchangePort protocol for Binance Futures USDT-M (LC-08b-F)
+  - **Target execution venue:** `fapi.binance.com` (Futures USDT-M mainnet)
+  - **Safety by design:**
+    - `SafeMode.READ_ONLY` (default): blocks ALL write operations → 0 risk
+    - `SafeMode.LIVE_TRADE` required for real API calls (explicit opt-in)
+    - Default URL: `https://testnet.binancefuture.com` (testnet)
+  - **Mainnet guards (ADR-040, LC-08b-F):**
+    - `allow_mainnet=False` by default (must explicitly opt-in)
+    - `ALLOW_MAINNET_TRADE=1` env var REQUIRED for mainnet
+    - `symbol_whitelist` REQUIRED for mainnet (non-empty)
+    - `max_notional_per_order` REQUIRED for mainnet
+    - `max_orders_per_run=1` default (single order per run)
+    - `target_leverage=1` default (no margin amplification)
+  - **Futures-specific features:**
+    - `set_leverage()`: Set leverage for symbol (1-125x)
+    - `get_leverage()`: Get current leverage
+    - `get_position_mode()`: Check hedge vs one-way mode
+    - `get_positions()`: Get open positions
+    - `close_position()`: Close position with reduceOnly market order
+    - `place_market_order()`: Market order for position cleanup
+  - **Operations:**
+    - `place_order()`: POST /fapi/v1/order (with reduceOnly support)
+    - `cancel_order()`: DELETE /fapi/v1/order
+    - `cancel_order_by_binance_id()`: Cancel by numeric order ID
+    - `cancel_all_orders()`: DELETE /fapi/v1/allOpenOrders
+    - `fetch_open_orders()`: GET /fapi/v1/openOrders
+  - **How to verify:**
+    ```bash
+    PYTHONPATH=src pytest tests/unit/test_binance_futures_port.py -v
+    ```
+  - **Unit tests:** `tests/unit/test_binance_futures_port.py` (30 tests)
+    - Dry-run tests prove 0 HTTP calls
+    - SafeMode tests prove READ_ONLY blocks writes
+    - Mainnet guard tests prove all guards enforced
+    - Leverage validation tests
+  - See ADR-040 for design decisions
 - **LiveEngineV0** (`src/grinder/live/engine.py`):
   - Live write-path wiring from PaperEngine to ExchangePort (LC-05)
   - **Arming model (two-layer safety):**
@@ -540,6 +577,38 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - `docs/runbooks/08_SMOKE_TEST_TESTNET.md` — testnet procedure
     - `docs/runbooks/09_MAINNET_TRADE_SMOKE.md` — mainnet procedure (LC-08b)
   - See ADR-038, ADR-039 for design decisions
+- **Futures Smoke Harness** (`scripts/smoke_futures_mainnet.py`):
+  - Smoke test harness for Binance Futures USDT-M mainnet (LC-08b-F)
+  - **Target execution venue:** `fapi.binance.com` (Futures USDT-M)
+  - **Safe-by-construction guards (9 layers):**
+    - `--dry-run` by default (no real HTTP calls)
+    - Requires `--confirm FUTURES_MAINNET_TRADE` for real orders
+    - Requires `ARMED=1` env var
+    - Requires `ALLOW_MAINNET_TRADE=1` env var
+    - `symbol_whitelist` required (non-empty)
+    - `max_notional_per_order` required (default: $50)
+    - `max_orders_per_run=1` (single order per run)
+    - `target_leverage=1` (no margin amplification)
+    - Position cleanup on fill
+  - **7-step procedure:**
+    1. Get account info (position mode)
+    2. Set leverage to target (default: 1x)
+    3. Check existing position
+    4. Place limit order (far from market)
+    5. Cancel order
+    6. Check and close any position (if filled)
+    7. Final position verification (should be 0)
+  - **How to verify:**
+    ```bash
+    # Dry-run (default) — no credentials needed
+    PYTHONPATH=src python -m scripts.smoke_futures_mainnet
+
+    # Real futures mainnet order (budgeted)
+    BINANCE_API_KEY=xxx BINANCE_API_SECRET=yyy ARMED=1 ALLOW_MAINNET_TRADE=1 \
+        PYTHONPATH=src python -m scripts.smoke_futures_mainnet --confirm FUTURES_MAINNET_TRADE
+    ```
+  - **Runbook:** `docs/runbooks/10_FUTURES_MAINNET_TRADE_SMOKE.md`
+  - See ADR-040 for design decisions
 - **DrawdownGuard v0** (`src/grinder/risk/drawdown.py`):
   - Tracks equity high-water mark (HWM)
   - Computes drawdown: `(HWM - equity) / HWM`

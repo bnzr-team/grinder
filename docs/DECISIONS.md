@@ -1584,6 +1584,53 @@
   - Automated mainnet E2E in CI (manual operator runs only)
   - Fill verification (order placed far from market)
 
+## ADR-040 — Futures USDT-M Mainnet Smoke v0.1 (LC-08b-F)
+- **Date:** 2026-02-05
+- **Status:** accepted
+- **Context:** Target execution venue is Binance Futures USDT-M (`fapi.binance.com`), not Spot. ADR-039 implemented Spot mainnet smoke (`api.binance.com`), but this does not validate the actual execution path. Need futures-specific port and smoke harness.
+- **Decision:**
+  - **New module:** `src/grinder/execution/binance_futures_port.py`
+    - `BinanceFuturesPortConfig`: Configuration with futures-specific guards
+    - `BinanceFuturesPort`: Exchange port implementing futures API
+    - Base URL: `https://fapi.binance.com` (mainnet), `https://testnet.binancefuture.com` (testnet)
+  - **Futures-specific safety guards:**
+    - Same 7 layers as ADR-039 (allow_mainnet, env var, whitelist, notional, order count)
+    - `target_leverage`: Enforce leverage setting (default: 1x = no leverage)
+    - Position mode logging (hedge vs one-way)
+    - Margin type logging (isolated vs cross)
+  - **Position cleanup on fill:**
+    - After order placement + cancel, check for residual position
+    - If position exists → close with market order (`reduceOnly=True`)
+    - Final verification: position should be 0
+  - **Smoke script:** `scripts/smoke_futures_mainnet.py`
+    - `--confirm FUTURES_MAINNET_TRADE` flag for live mode
+    - 7-step procedure: account info → leverage → position check → order → cancel → cleanup → verify
+    - Clear output: leverage, position mode, order details, cleanup status
+  - **API endpoints:**
+    - `POST /fapi/v1/order` (place order)
+    - `DELETE /fapi/v1/order` (cancel order)
+    - `POST /fapi/v1/leverage` (set leverage)
+    - `GET /fapi/v2/positionRisk` (check position)
+    - `GET /fapi/v2/account` (account info)
+    - `GET /fapi/v1/positionSide/dual` (position mode)
+- **Test coverage:**
+  - `tests/unit/test_binance_futures_port.py` (30 tests)
+  - Dry-run tests (0 HTTP calls)
+  - SafeMode enforcement tests
+  - Mainnet guard tests
+  - Notional/order count limit tests
+  - Leverage validation tests
+- **Consequences:**
+  - Futures USDT-M execution path now validated
+  - Same guardrails as Spot (ADR-039)
+  - Leverage enforced at 1x by default (no margin amplification)
+  - Position cleanup ensures no residual exposure
+- **Runbook:** `docs/runbooks/10_FUTURES_MAINNET_TRADE_SMOKE.md`
+- **Spot vs Futures:**
+  - ADR-039 (LC-08b): Spot mainnet smoke → validates Spot path
+  - ADR-040 (LC-08b-F): Futures mainnet smoke → validates Futures USDT-M path
+  - Target production venue: Futures USDT-M
+
 ---
 
 ## ADR-037 — LiveFeed: Live Read-Path Pipeline (LC-06)
