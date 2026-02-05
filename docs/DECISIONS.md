@@ -1892,3 +1892,88 @@
   - Multi-venue / COIN-M support
   - HA orchestration for remediation loop
   - ML-based decision making
+
+---
+
+## ADR-044 — Remediation Wiring + Routing Policy (LC-11)
+- **Date:** 2026-02-05
+- **Status:** accepted
+- **Context:** ADR-043 introduced RemediationExecutor with 9 safety gates, but it operates on individual orders/positions. Need an orchestration layer to wire ReconcileEngine (detects mismatches) → RemediationExecutor (takes actions), with clear routing policy (mismatch type → action mapping).
+- **Decision:**
+  - **ReconcileRunner** (`src/grinder/reconcile/runner.py`): Orchestrates reconciliation flow:
+    1. Call `engine.reconcile()` → `list[Mismatch]`
+    2. Route each mismatch via ROUTING_POLICY to action
+    3. Execute via `executor.remediate_cancel/flatten()`
+    4. Return `ReconcileRunReport` with full audit trail
+  - **Routing Policy (SSOT):**
+    | Mismatch Type | Action | Notes |
+    |---------------|--------|-------|
+    | `ORDER_EXISTS_UNEXPECTED` | CANCEL | grinder_ prefix required (Gate 8) |
+    | `ORDER_STATUS_DIVERGENCE` | CANCEL | Only if not terminal status |
+    | `POSITION_NONZERO_UNEXPECTED` | FLATTEN | Notional cap applies (Gate 9) |
+    | `ORDER_MISSING_ON_EXCHANGE` | NO ACTION | v0.1: alert only, no retry |
+  - **Terminal statuses (skip cancel):** FILLED, CANCELLED, REJECTED, EXPIRED
+  - **Actionable statuses (allow cancel):** OPEN, PARTIALLY_FILLED
+  - **Bounded execution:**
+    - One action type per run (cancel OR flatten, determined by priority)
+    - Respects executor's max_orders_per_action / max_symbols_per_action
+  - **Deterministic ordering:**
+    - Mismatches are sorted before processing for predictable action-type selection
+    - Sort key: priority → symbol → client_order_id
+    - Priority (lower = processed first): ORDER_EXISTS=10, ORDER_STATUS_DIVERGENCE=20, ORDER_MISSING=90, POSITION_NONZERO=100
+    - Cancel always wins over flatten when both exist (cancel has lower priority numbers)
+    - Ensures same result regardless of ReconcileEngine's detection order
+  - **Routing constants (frozenset for performance):**
+    ```python
+    ORDER_MISMATCHES_FOR_CANCEL = frozenset({
+        MismatchType.ORDER_EXISTS_UNEXPECTED,
+        MismatchType.ORDER_STATUS_DIVERGENCE,
+    })
+    POSITION_MISMATCHES_FOR_FLATTEN = frozenset({
+        MismatchType.POSITION_NONZERO_UNEXPECTED,
+    })
+    NO_ACTION_MISMATCHES = frozenset({
+        MismatchType.ORDER_MISSING_ON_EXCHANGE,
+    })
+    TERMINAL_STATUSES = frozenset({
+        OrderState.FILLED, OrderState.CANCELLED,
+        OrderState.REJECTED, OrderState.EXPIRED,
+    })
+    ACTIONABLE_STATUSES = frozenset({
+        OrderState.OPEN, OrderState.PARTIALLY_FILLED,
+    })
+    ```
+  - **ReconcileRunReport:** Frozen dataclass with:
+    - `ts_start`, `ts_end`: Run timestamps
+    - `mismatches_detected`: Total from engine
+    - `cancel_results`, `flatten_results`: Tuples of RemediationResult
+    - `skipped_terminal`, `skipped_no_action`: Skip counts
+    - Properties: `total_actions`, `executed_count`, `planned_count`, `blocked_count`
+  - **New metrics:**
+    - `grinder_reconcile_runs_with_mismatch_total`: Counter for runs that detected mismatches
+    - `grinder_reconcile_runs_with_remediation_total{action}`: Counter for runs with executed actions
+    - `grinder_reconcile_last_remediation_ts_ms`: Gauge for last remediation timestamp
+  - **Audit logging:**
+    - `RECONCILE_RUN`: Run completion with summary stats
+    - `REMEDIATE_SKIP`: Skipped mismatch with reason
+- **Test coverage:**
+  - `tests/unit/test_reconcile_runner.py` (39 tests):
+    - Routing policy constants tests
+    - Routing behavior tests (4 mismatch types)
+    - One action type per run tests
+    - Terminal status skip tests
+    - Metrics tests
+    - ReconcileRunReport tests
+    - Determinism tests (4 tests for priority-based ordering)
+    - Edge cases
+- **Consequences:**
+  - Full wiring: ReconcileEngine → ReconcileRunner → RemediationExecutor
+  - Routing policy is explicit SSOT (constants at module level)
+  - One action type per run prevents mixed cancel/flatten in same cycle
+  - Terminal orders are not attempted to cancel
+  - Audit trail via structured logs + metrics
+- **Runbook:** `docs/runbooks/13_OPERATOR_CEREMONY.md`
+- **Out of Scope:**
+  - Multi-action-type per run (cancel AND flatten)
+  - Smart retry for ORDER_MISSING_ON_EXCHANGE
+  - Integration with LiveEngineV0 event loop (separate task)

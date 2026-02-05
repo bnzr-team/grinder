@@ -652,6 +652,41 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - No HA leader election for remediation
     - No automatic strategy recovery
   - See ADR-043 for design decisions
+- **Remediation Wiring v0.1** (`src/grinder/reconcile/runner.py`):
+  - Orchestrates: ReconcileEngine → ReconcileRunner → RemediationExecutor (LC-11)
+  - **ReconcileRunner:**
+    - `run()` → `ReconcileRunReport` with full audit trail
+    - Routes mismatches via ROUTING_POLICY (SSOT constants)
+  - **Routing Policy (frozenset constants):**
+    - `ORDER_EXISTS_UNEXPECTED` → CANCEL
+    - `ORDER_STATUS_DIVERGENCE` → CANCEL (if not terminal)
+    - `POSITION_NONZERO_UNEXPECTED` → FLATTEN
+    - `ORDER_MISSING_ON_EXCHANGE` → NO ACTION (v0.1)
+  - **Terminal statuses (skip cancel):** FILLED, CANCELLED, REJECTED, EXPIRED
+  - **Actionable statuses (allow cancel):** OPEN, PARTIALLY_FILLED
+  - **Bounded execution:**
+    - One action type per run (cancel OR flatten, whichever comes first)
+    - Respects executor's max_orders_per_action / max_symbols_per_action
+  - **New types:**
+    - `ReconcileRunReport`: Frozen dataclass (ts_start, ts_end, cancel_results, flatten_results, skipped_*)
+  - **New metrics:**
+    - `grinder_reconcile_runs_with_mismatch_total`: Counter for runs with mismatches
+    - `grinder_reconcile_runs_with_remediation_total{action}`: Counter for runs with executed actions
+    - `grinder_reconcile_last_remediation_ts_ms`: Gauge for last remediation timestamp
+  - **Audit logging:**
+    - `RECONCILE_RUN`: Run completion with summary stats
+    - `REMEDIATE_SKIP`: Skipped mismatch with reason
+  - **How to verify:**
+    ```bash
+    PYTHONPATH=src pytest tests/unit/test_reconcile_runner.py -v
+    ```
+  - **Unit tests:** `tests/unit/test_reconcile_runner.py` (34 tests)
+  - **Limitations (v0.1):**
+    - One action type per run (no mixed cancel/flatten)
+    - ORDER_MISSING_ON_EXCHANGE → alert only, no retry
+    - Not integrated with LiveEngineV0 event loop
+  - **Runbook:** `docs/runbooks/13_OPERATOR_CEREMONY.md`
+  - See ADR-044 for design decisions
 - **Live Smoke Harness** (`scripts/smoke_live_testnet.py`):
   - Smoke test harness for Binance (testnet or mainnet): place micro order → cancel (LC-07, LC-08b)
   - **Safe-by-construction guards:**
