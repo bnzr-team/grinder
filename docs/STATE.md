@@ -445,7 +445,7 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - `symbol_whitelist` REQUIRED for mainnet (non-empty)
     - `max_notional_per_order` REQUIRED for mainnet
     - `max_orders_per_run=1` default (single order per run)
-    - `target_leverage=1` default (no margin amplification)
+    - `target_leverage=3` default (reduces margin req; safe: far-from-market, cancelled)
   - **Futures-specific features:**
     - `set_leverage()`: Set leverage for symbol (1-125x)
     - `get_leverage()`: Get current leverage
@@ -586,9 +586,9 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - Requires `ARMED=1` env var
     - Requires `ALLOW_MAINNET_TRADE=1` env var
     - `symbol_whitelist` required (non-empty)
-    - `max_notional_per_order` required (default: $50)
+    - `max_notional_per_order` required (default: $125, above Binance $100 min)
     - `max_orders_per_run=1` (single order per run)
-    - `target_leverage=1` (no margin amplification)
+    - `target_leverage=3` (reduces margin req; safe: far-from-market, cancelled)
     - Position cleanup on fill
   - **7-step procedure:**
     1. Get account info (position mode)
