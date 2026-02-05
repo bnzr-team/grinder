@@ -1523,9 +1523,66 @@
   - Mainnet protection hardcoded at BinanceExchangePort level
   - Kill-switch behavior documented and testable
 - **Out of Scope (v0.1):**
-  - Mainnet trading (FORBIDDEN)
+  - Mainnet trading (superseded by ADR-039)
   - Automated CI execution of real testnet orders (no credentials in CI)
   - Fill verification (order is far-from-market, should not fill)
+
+---
+
+## ADR-039 — Mainnet Trade Smoke v0.1 (LC-08b)
+- **Date:** 2026-02-05
+- **Status:** accepted
+- **Context:** Testnet unavailable due to KYC requirements. Mainnet trading is available with a dedicated test budget. Need safe-by-construction guards to enable mainnet smoke testing without risk of accidental large trades.
+- **Decision:**
+  - **Multi-layer safety guards:**
+    1. `allow_mainnet=False` by default (must explicitly opt-in in config)
+    2. `ALLOW_MAINNET_TRADE=1` env var required (prevents accidental mainnet)
+    3. `symbol_whitelist` REQUIRED for mainnet (no wildcard trading)
+    4. `max_notional_per_order` REQUIRED for mainnet (caps each order notional)
+    5. `max_orders_per_run=1` default (single order per script run)
+    6. `max_open_orders=1` default (single concurrent order)
+    7. `ARMED=1` env var required (same as testnet)
+  - **BinanceExchangePort changes:**
+    - Conditional mainnet allow (was: unconditional block)
+    - `is_mainnet()` method for URL detection
+    - `_validate_notional()` enforces notional limit
+    - `_validate_order_count()` enforces order count limit
+    - `reset()` clears order count for new runs
+  - **Smoke script changes:**
+    - `--confirm MAINNET_TRADE` flag for mainnet mode
+    - `--max-notional` argument (default: $50)
+    - Clear banner: `*** LIVE MAINNET MODE ***`
+    - Output shows `is_mainnet: True`, `base_url: api.binance.com`
+  - **Guard validation order (fail-fast):**
+    1. Config validation (allow_mainnet, env var, whitelist, max_notional)
+    2. Per-order validation (notional limit, order count)
+  - **Runbook:** `docs/runbooks/09_MAINNET_TRADE_SMOKE.md`
+    - Prerequisites (credentials, test budget, env vars)
+    - Step-by-step procedure
+    - Verification checklist
+    - Emergency procedures
+- **Test coverage:**
+  - `TestMainnetGuards` class (7 tests) in `tests/unit/test_binance_port.py`
+  - Tests: env var required, whitelist required, max_notional required, limit enforcement
+- **Verification:**
+  ```bash
+  # Dry-run (default)
+  PYTHONPATH=src python3 -m scripts.smoke_live_testnet
+
+  # Real mainnet order (budgeted)
+  BINANCE_API_KEY=xxx BINANCE_API_SECRET=yyy ARMED=1 ALLOW_MAINNET_TRADE=1 \
+      PYTHONPATH=src python3 -m scripts.smoke_live_testnet --confirm MAINNET_TRADE
+  ```
+- **Consequences:**
+  - Mainnet smoke testing enabled with strict guardrails
+  - 7+ layers of safety prevent accidental large trades
+  - Order count limits prevent runaway scripts
+  - Notional limits cap worst-case per-order loss
+  - All guards verified by unit tests
+- **Out of Scope (v0.1):**
+  - Multi-symbol mainnet trading (single symbol per run)
+  - Automated mainnet E2E in CI (manual operator runs only)
+  - Fill verification (order placed far from market)
 
 ---
 

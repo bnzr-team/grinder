@@ -1,17 +1,19 @@
 #!/usr/bin/env python3
-"""Smoke test for Binance Testnet live trading.
+"""Smoke test for Binance live trading (testnet or mainnet).
 
-This script performs a minimal E2E smoke test on Binance Testnet:
-1. Connect to testnet
+This script performs a minimal E2E smoke test:
+1. Connect to exchange
 2. Place 1 micro limit order
 3. Cancel the order (or record fill if executed)
 
 SAFE-BY-CONSTRUCTION GUARDS:
 - --dry-run by default (no real orders, only logging)
-- Requires explicit --confirm TESTNET to place real orders
-- MAINNET IS FORBIDDEN (blocked in BinanceExchangePort)
-- Requires ARMED=1 + ALLOW_TESTNET_TRADE=1 env vars for real trades
+- Requires explicit --confirm TESTNET or --confirm MAINNET_TRADE for real orders
+- Mainnet requires ALLOW_MAINNET_TRADE=1 + additional guards (ADR-039)
+- Requires ARMED=1 env var for any real trades
 - Kill-switch blocks PLACE/REPLACE but allows CANCEL
+- Symbol whitelist enforced
+- Notional limits enforced (mainnet)
 
 Usage:
     # Dry-run (default) - no real orders
@@ -21,13 +23,18 @@ Usage:
     BINANCE_API_KEY=xxx BINANCE_API_SECRET=yyy ARMED=1 ALLOW_TESTNET_TRADE=1 \
         python -m scripts.smoke_live_testnet --confirm TESTNET
 
-Environment variables:
-    BINANCE_API_KEY: Testnet API key (required for real orders)
-    BINANCE_API_SECRET: Testnet API secret (required for real orders)
-    ARMED=1: Enable order execution (default: not set = dry-run)
-    ALLOW_TESTNET_TRADE=1: Explicit testnet trade permission (default: not set)
+    # Real mainnet order (requires additional guards)
+    BINANCE_API_KEY=xxx BINANCE_API_SECRET=yyy ARMED=1 ALLOW_MAINNET_TRADE=1 \
+        python -m scripts.smoke_live_testnet --confirm MAINNET_TRADE
 
-See: docs/runbooks/08_SMOKE_TEST_TESTNET.md
+Environment variables:
+    BINANCE_API_KEY: API key (required for real orders)
+    BINANCE_API_SECRET: API secret (required for real orders)
+    ARMED=1: Enable order execution (default: not set = dry-run)
+    ALLOW_TESTNET_TRADE=1: Explicit testnet trade permission
+    ALLOW_MAINNET_TRADE=1: Explicit mainnet trade permission (mainnet only)
+
+See: docs/runbooks/08_SMOKE_TEST_TESTNET.md, docs/runbooks/09_MAINNET_TRADE_SMOKE.md
 """
 
 from __future__ import annotations
@@ -54,11 +61,17 @@ from grinder.connectors.errors import (
 from grinder.connectors.live_connector import SafeMode
 from grinder.core import OrderSide
 from grinder.execution.binance_port import (
+    BINANCE_SPOT_MAINNET_URL,
     BINANCE_SPOT_TESTNET_URL,
     BinanceExchangePort,
     BinanceExchangePortConfig,
     HttpResponse,
 )
+
+# --- Default safety limits ---
+DEFAULT_MAX_NOTIONAL_MAINNET = Decimal("50.00")  # $50 max per order on mainnet
+DEFAULT_MAX_ORDERS_PER_RUN = 1  # Single order per run
+
 
 # --- Simple Requests-based HTTP Client ---
 
@@ -109,7 +122,7 @@ class SmokeResult:
     """Result of smoke test."""
 
     success: bool
-    mode: str  # "dry-run" or "live-testnet"
+    mode: str  # "dry-run", "live-testnet", or "live-mainnet"
     simulated: bool = False  # True if dry-run (no real HTTP calls)
     order_placed: bool = False  # Only True for REAL orders
     order_id: str | None = None
@@ -155,14 +168,16 @@ class SmokeResult:
 # --- Smoke Test Logic ---
 
 
-def check_env_guards() -> tuple[bool, str]:
+def check_env_guards(is_mainnet: bool) -> tuple[bool, str]:
     """Check environment variable guards.
+
+    Args:
+        is_mainnet: True if checking for mainnet, False for testnet
 
     Returns:
         (can_trade, reason): Whether real trading is allowed and why/why not.
     """
     armed = os.environ.get("ARMED", "").lower() in ("1", "true", "yes")
-    allow_testnet = os.environ.get("ALLOW_TESTNET_TRADE", "").lower() in ("1", "true", "yes")
     has_key = bool(os.environ.get("BINANCE_API_KEY"))
     has_secret = bool(os.environ.get("BINANCE_API_SECRET"))
 
@@ -172,8 +187,23 @@ def check_env_guards() -> tuple[bool, str]:
         return False, "BINANCE_API_SECRET not set"
     if not armed:
         return False, "ARMED=1 not set"
-    if not allow_testnet:
-        return False, "ALLOW_TESTNET_TRADE=1 not set"
+
+    if is_mainnet:
+        allow_mainnet = os.environ.get("ALLOW_MAINNET_TRADE", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        if not allow_mainnet:
+            return False, "ALLOW_MAINNET_TRADE=1 not set (required for mainnet)"
+    else:
+        allow_testnet = os.environ.get("ALLOW_TESTNET_TRADE", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        if not allow_testnet:
+            return False, "ALLOW_TESTNET_TRADE=1 not set"
 
     return True, "All guards passed"
 
@@ -184,26 +214,40 @@ def run_smoke_test(
     quantity: Decimal = Decimal("0.001"),  # Micro lot
     dry_run: bool = True,
     kill_switch: bool = False,
+    is_mainnet: bool = False,
+    max_notional: Decimal | None = None,
 ) -> SmokeResult:
     """Run the smoke test.
 
     Args:
-        symbol: Symbol to trade (must be on testnet)
+        symbol: Symbol to trade
         price: Limit price (should be far from market to avoid fill)
         quantity: Order quantity (micro lot)
         dry_run: If True, use dry-run mode (no real HTTP calls)
         kill_switch: If True, simulate kill-switch active
+        is_mainnet: If True, use mainnet instead of testnet
+        max_notional: Maximum notional per order (required for mainnet)
 
     Returns:
         SmokeResult with test outcome
     """
-    mode = "dry-run" if dry_run else "live-testnet"
+    if is_mainnet:
+        mode = "dry-run" if dry_run else "live-mainnet"
+        base_url = BINANCE_SPOT_MAINNET_URL
+    else:
+        mode = "dry-run" if dry_run else "live-testnet"
+        base_url = BINANCE_SPOT_TESTNET_URL
+
     print(f"\nStarting smoke test (mode={mode}, symbol={symbol})")
     print(f"  Price: {price}, Quantity: {quantity}")
+    print(f"  Notional: ${price * quantity:.2f}")
+    if is_mainnet:
+        print(f"  Max notional: ${max_notional:.2f}" if max_notional else "  Max notional: NONE")
+        print(f"  Base URL: {base_url}")
 
     # Check env guards for live mode
     if not dry_run:
-        can_trade, reason = check_env_guards()
+        can_trade, reason = check_env_guards(is_mainnet)
         if not can_trade:
             return SmokeResult(
                 success=False,
@@ -218,11 +262,16 @@ def run_smoke_test(
     try:
         config = BinanceExchangePortConfig(
             mode=SafeMode.LIVE_TRADE,
-            base_url=BINANCE_SPOT_TESTNET_URL,
+            base_url=base_url,
             api_key=os.environ.get("BINANCE_API_KEY", ""),
             api_secret=os.environ.get("BINANCE_API_SECRET", ""),
             symbol_whitelist=[symbol],
             dry_run=dry_run,
+            # Mainnet guards
+            allow_mainnet=is_mainnet,
+            max_notional_per_order=max_notional if is_mainnet else None,
+            max_orders_per_run=DEFAULT_MAX_ORDERS_PER_RUN,
+            max_open_orders=1,
         )
     except ConnectorNonRetryableError as e:
         return SmokeResult(
@@ -296,7 +345,9 @@ def run_smoke_test(
             "symbol": symbol,
             "price": str(price),
             "quantity": str(quantity),
-            "testnet_url": BINANCE_SPOT_TESTNET_URL,
+            "notional": str(price * quantity),
+            "base_url": base_url,
+            "is_mainnet": is_mainnet,
             "simulated": dry_run,
         },
     )
@@ -305,7 +356,7 @@ def run_smoke_test(
 def main() -> int:
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="Smoke test for Binance Testnet live trading",
+        description="Smoke test for Binance live trading (testnet or mainnet)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
@@ -316,14 +367,18 @@ Examples:
     BINANCE_API_KEY=xxx BINANCE_API_SECRET=yyy ARMED=1 ALLOW_TESTNET_TRADE=1 \\
         python -m scripts.smoke_live_testnet --confirm TESTNET
 
+    # Real mainnet order (budgeted, micro lot)
+    BINANCE_API_KEY=xxx BINANCE_API_SECRET=yyy ARMED=1 ALLOW_MAINNET_TRADE=1 \\
+        python -m scripts.smoke_live_testnet --confirm MAINNET_TRADE
+
     # Test kill-switch behavior
     python -m scripts.smoke_live_testnet --kill-switch
 """,
     )
     parser.add_argument(
         "--confirm",
-        choices=["TESTNET"],
-        help="Confirm live trading on TESTNET (required for real orders)",
+        choices=["TESTNET", "MAINNET_TRADE"],
+        help="Confirm live trading (TESTNET or MAINNET_TRADE)",
     )
     parser.add_argument(
         "--symbol",
@@ -343,6 +398,12 @@ Examples:
         help="Order quantity (default: 0.001, micro lot)",
     )
     parser.add_argument(
+        "--max-notional",
+        type=Decimal,
+        default=DEFAULT_MAX_NOTIONAL_MAINNET,
+        help=f"Max notional per order for mainnet (default: ${DEFAULT_MAX_NOTIONAL_MAINNET})",
+    )
+    parser.add_argument(
         "--kill-switch",
         action="store_true",
         help="Simulate kill-switch active (blocks PLACE, allows CANCEL)",
@@ -351,12 +412,22 @@ Examples:
     args = parser.parse_args()
 
     # Determine mode
-    dry_run = args.confirm != "TESTNET"
+    dry_run = args.confirm not in ("TESTNET", "MAINNET_TRADE")
+    is_mainnet = args.confirm == "MAINNET_TRADE"
 
     if dry_run:
         print("=" * 60)
         print("DRY-RUN MODE (no real orders)")
-        print("To place real orders on testnet, use: --confirm TESTNET")
+        print("To place real orders:")
+        print("  Testnet: --confirm TESTNET")
+        print("  Mainnet: --confirm MAINNET_TRADE")
+        print("=" * 60)
+    elif is_mainnet:
+        print("=" * 60)
+        print("*** LIVE MAINNET MODE ***")
+        print("Real orders will be placed on Binance MAINNET")
+        print(f"Symbol whitelist: [{args.symbol}]")
+        print(f"Max notional per order: ${args.max_notional}")
         print("=" * 60)
     else:
         print("=" * 60)
@@ -371,6 +442,8 @@ Examples:
         quantity=args.quantity,
         dry_run=dry_run,
         kill_switch=args.kill_switch,
+        is_mainnet=is_mainnet,
+        max_notional=args.max_notional if is_mainnet else None,
     )
 
     # Print summary

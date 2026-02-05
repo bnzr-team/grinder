@@ -383,13 +383,19 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - **Unit tests:** `tests/unit/test_paper_execution.py` (21 tests)
   - **Integration tests:** `tests/integration/test_paper_write_path.py` (17 tests)
   - See ADR-030 for design decisions
-- **BinanceExchangePort v0.1** (`src/grinder/execution/binance_port.py`):
-  - Live exchange port implementing ExchangePort protocol for Binance Spot Testnet (LC-04)
+- **BinanceExchangePort v0.2** (`src/grinder/execution/binance_port.py`):
+  - Live exchange port implementing ExchangePort protocol for Binance Spot (LC-04, LC-08b)
   - **Safety by design:**
     - `SafeMode.READ_ONLY` (default): blocks ALL write operations → 0 risk
     - `SafeMode.LIVE_TRADE` required for real API calls (explicit opt-in)
-    - Mainnet URLs (`api.binance.com`) forbidden in v0.1 (raises `ConnectorNonRetryableError`)
-    - Default URL: `https://testnet.binance.vision` (testnet only)
+    - Default URL: `https://testnet.binance.vision` (testnet)
+  - **Mainnet guards (ADR-039, LC-08b):**
+    - `allow_mainnet=False` by default (must explicitly opt-in)
+    - `ALLOW_MAINNET_TRADE=1` env var REQUIRED for mainnet
+    - `symbol_whitelist` REQUIRED for mainnet (non-empty)
+    - `max_notional_per_order` REQUIRED for mainnet
+    - `max_orders_per_run=1` default (single order per run)
+    - `max_open_orders=1` default (single concurrent order)
   - **Injectable HTTP client:**
     - `HttpClient` protocol for HTTP operations
     - `NoopHttpClient` for mock transport testing (records calls but no real HTTP)
@@ -397,7 +403,7 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - Enables deterministic testing without external dependencies
   - **Symbol whitelist:**
     - `symbol_whitelist` config parameter
-    - Blocks trades for unlisted symbols (empty = all allowed)
+    - Blocks trades for unlisted symbols (empty = all allowed for testnet, REQUIRED for mainnet)
   - **Error mapping:**
     - 5xx → `ConnectorTransientError` (retryable)
     - 429 → `ConnectorTransientError` (rate limit)
@@ -407,7 +413,7 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - Wrap with `IdempotentExchangePort` for idempotency + circuit breaker
     - Replace = cancel + place with shared idempotency key (safe under retries)
   - **Operations:**
-    - `place_order()`: POST /api/v3/order
+    - `place_order()`: POST /api/v3/order (validates notional + order count)
     - `cancel_order()`: DELETE /api/v3/order
     - `replace_order()`: cancel + place
     - `fetch_open_orders()`: GET /api/v3/openOrders
@@ -415,18 +421,17 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     ```bash
     PYTHONPATH=src pytest tests/unit/test_binance_port.py -v
     ```
-  - **Unit tests:** `tests/unit/test_binance_port.py` (28 tests)
+  - **Unit tests:** `tests/unit/test_binance_port.py` (42 tests)
     - Dry-run tests prove NoopHttpClient makes 0 HTTP calls
     - SafeMode tests prove READ_ONLY blocks writes
-    - Mainnet tests prove api.binance.com is rejected
+    - Mainnet guard tests prove env var, whitelist, notional limits enforced
     - Error mapping tests prove correct classification
     - Idempotency integration tests prove caching works
-  - **Limitations (v0.1):**
-    - Testnet only (mainnet forbidden)
+  - **Limitations (v0.2):**
     - HTTP REST only (no WebSocket streaming)
     - Spot only (no futures/margin)
     - Real AiohttpClient not implemented (only protocol)
-  - See ADR-035 for design decisions
+  - See ADR-035, ADR-039 for design decisions
 - **LiveEngineV0** (`src/grinder/live/engine.py`):
   - Live write-path wiring from PaperEngine to ExchangePort (LC-05)
   - **Arming model (two-layer safety):**
@@ -492,24 +497,30 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - Golden output tests prove determinism
   - **Fixtures:** `tests/fixtures/ws/bookticker_btcusdt.json`
   - See ADR-037 for design decisions
-- **Testnet Smoke Harness** (`scripts/smoke_live_testnet.py`):
-  - Smoke test harness for Binance Testnet: place micro order → cancel (LC-07)
+- **Live Smoke Harness** (`scripts/smoke_live_testnet.py`):
+  - Smoke test harness for Binance (testnet or mainnet): place micro order → cancel (LC-07, LC-08b)
   - **Safe-by-construction guards:**
     - `--dry-run` by default (no real HTTP calls)
-    - Requires `--confirm TESTNET` for real orders
-    - Mainnet FORBIDDEN (blocked in BinanceExchangePort)
-    - Requires `ARMED=1` + `ALLOW_TESTNET_TRADE=1` env vars
+    - Requires `--confirm TESTNET` for testnet orders
+    - Requires `--confirm MAINNET_TRADE` for mainnet orders (LC-08b)
+    - Requires `ARMED=1` env var for any real trades
+    - Testnet: requires `ALLOW_TESTNET_TRADE=1` env var
+    - Mainnet: requires `ALLOW_MAINNET_TRADE=1` env var + guards (ADR-039)
     - Kill-switch blocks PLACE/REPLACE, allows CANCEL
+  - **Mainnet guards (ADR-039):**
+    - `--max-notional` argument (default: $50) caps each order
+    - `symbol_whitelist` required (non-empty)
+    - `max_orders_per_run=1` (single order per run)
+    - All guards enforced at config validation time
   - **E2E execution status:**
     - Harness is READY and tested in dry-run + kill-switch modes
-    - Real E2E run is OPERATOR-DEPENDENT (requires Binance testnet credentials)
-    - Binance testnet may require KYC for API key generation
-    - Real E2E run NOT executed as part of LC-07 PR
+    - Real E2E run is OPERATOR-DEPENDENT (requires API credentials)
   - **Failure paths:**
     - Missing keys → clear exit 1 + message
-    - Empty whitelist → blocks at port level
+    - Missing env var → clear error message
+    - Notional exceeds limit → clear error message
     - Kill-switch active → PLACE blocked (expected), CANCEL allowed
-  - **How to verify (dry-run):**
+  - **How to verify:**
     ```bash
     # Dry-run (default) — no credentials needed
     PYTHONPATH=src python -m scripts.smoke_live_testnet
@@ -517,12 +528,18 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     # Kill-switch test — no credentials needed
     PYTHONPATH=src python -m scripts.smoke_live_testnet --kill-switch
 
-    # Real testnet order (operator-dependent)
+    # Real testnet order
     BINANCE_API_KEY=xxx BINANCE_API_SECRET=yyy ARMED=1 ALLOW_TESTNET_TRADE=1 \
         PYTHONPATH=src python -m scripts.smoke_live_testnet --confirm TESTNET
+
+    # Real mainnet order (budgeted)
+    BINANCE_API_KEY=xxx BINANCE_API_SECRET=yyy ARMED=1 ALLOW_MAINNET_TRADE=1 \
+        PYTHONPATH=src python -m scripts.smoke_live_testnet --confirm MAINNET_TRADE
     ```
-  - **Runbook:** `docs/runbooks/08_SMOKE_TEST_TESTNET.md`
-  - See ADR-038 for design decisions
+  - **Runbooks:**
+    - `docs/runbooks/08_SMOKE_TEST_TESTNET.md` — testnet procedure
+    - `docs/runbooks/09_MAINNET_TRADE_SMOKE.md` — mainnet procedure (LC-08b)
+  - See ADR-038, ADR-039 for design decisions
 - **DrawdownGuard v0** (`src/grinder/risk/drawdown.py`):
   - Tracks equity high-water mark (HWM)
   - Computes drawdown: `(HWM - equity) / HWM`

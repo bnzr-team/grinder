@@ -57,6 +57,8 @@ def live_trade_config() -> BinanceExchangePortConfig:
         api_key="test_key",
         api_secret="test_secret",
         symbol_whitelist=["BTCUSDT", "ETHUSDT"],
+        # Higher limit for tests that place multiple orders
+        max_orders_per_run=100,
     )
 
 
@@ -359,32 +361,198 @@ class TestSafeModeEnforcement:
 # --- Mainnet Forbidden Tests ---
 
 
-class TestMainnetForbidden:
-    """Tests for mainnet URL rejection in v0.1."""
+class TestMainnetGuards:
+    """Tests for mainnet safety guards (ADR-039)."""
 
-    def test_mainnet_url_rejected(self) -> None:
-        """Mainnet URL is rejected in config."""
-        with pytest.raises(ConnectorNonRetryableError, match="Mainnet is forbidden"):
+    def test_mainnet_url_rejected_without_allow_flag(self) -> None:
+        """Mainnet URL is rejected without allow_mainnet=True."""
+        with pytest.raises(ConnectorNonRetryableError, match="allow_mainnet=True"):
             BinanceExchangePortConfig(
                 mode=SafeMode.LIVE_TRADE,
                 base_url="https://api.binance.com",
             )
 
-    def test_mainnet_partial_url_rejected(self) -> None:
-        """Any URL containing api.binance.com is rejected."""
-        with pytest.raises(ConnectorNonRetryableError, match=r"Mainnet.*forbidden"):
+    def test_mainnet_partial_url_rejected_without_allow_flag(self) -> None:
+        """Any URL containing api.binance.com is rejected without allow_mainnet."""
+        with pytest.raises(ConnectorNonRetryableError, match="allow_mainnet=True"):
             BinanceExchangePortConfig(
                 mode=SafeMode.LIVE_TRADE,
                 base_url="https://api.binance.com/api/v3",
             )
 
+    def test_mainnet_rejected_without_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Mainnet requires ALLOW_MAINNET_TRADE=1 env var."""
+        # Clear the env var
+        monkeypatch.delenv("ALLOW_MAINNET_TRADE", raising=False)
+
+        with pytest.raises(ConnectorNonRetryableError, match="ALLOW_MAINNET_TRADE=1"):
+            BinanceExchangePortConfig(
+                mode=SafeMode.LIVE_TRADE,
+                base_url="https://api.binance.com",
+                allow_mainnet=True,
+                symbol_whitelist=["BTCUSDT"],
+                max_notional_per_order=Decimal("50"),
+            )
+
+    def test_mainnet_rejected_without_symbol_whitelist(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Mainnet requires non-empty symbol_whitelist."""
+        monkeypatch.setenv("ALLOW_MAINNET_TRADE", "1")
+
+        with pytest.raises(ConnectorNonRetryableError, match="symbol_whitelist"):
+            BinanceExchangePortConfig(
+                mode=SafeMode.LIVE_TRADE,
+                base_url="https://api.binance.com",
+                allow_mainnet=True,
+                symbol_whitelist=[],  # Empty!
+                max_notional_per_order=Decimal("50"),
+            )
+
+    def test_mainnet_rejected_without_max_notional(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Mainnet requires max_notional_per_order to be set."""
+        monkeypatch.setenv("ALLOW_MAINNET_TRADE", "1")
+
+        with pytest.raises(ConnectorNonRetryableError, match="max_notional_per_order"):
+            BinanceExchangePortConfig(
+                mode=SafeMode.LIVE_TRADE,
+                base_url="https://api.binance.com",
+                allow_mainnet=True,
+                symbol_whitelist=["BTCUSDT"],
+                max_notional_per_order=None,  # Not set!
+            )
+
+    def test_mainnet_allowed_with_all_guards(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Mainnet is allowed when all guards are satisfied."""
+        monkeypatch.setenv("ALLOW_MAINNET_TRADE", "1")
+
+        config = BinanceExchangePortConfig(
+            mode=SafeMode.LIVE_TRADE,
+            base_url="https://api.binance.com",
+            allow_mainnet=True,
+            symbol_whitelist=["BTCUSDT"],
+            max_notional_per_order=Decimal("50"),
+        )
+        assert config.is_mainnet() is True
+        assert config.max_notional_per_order == Decimal("50")
+
     def test_testnet_url_allowed(self) -> None:
-        """Testnet URL is allowed."""
+        """Testnet URL is allowed without mainnet guards."""
         config = BinanceExchangePortConfig(
             mode=SafeMode.LIVE_TRADE,
             base_url="https://testnet.binance.vision",
         )
         assert "testnet" in config.base_url
+        assert config.is_mainnet() is False
+
+    def test_notional_limit_enforced(
+        self, noop_client: NoopHttpClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Notional limit blocks orders exceeding max_notional_per_order."""
+        monkeypatch.setenv("ALLOW_MAINNET_TRADE", "1")
+
+        config = BinanceExchangePortConfig(
+            mode=SafeMode.LIVE_TRADE,
+            base_url="https://api.binance.com",
+            allow_mainnet=True,
+            api_key="test",
+            api_secret="test",
+            symbol_whitelist=["BTCUSDT"],
+            max_notional_per_order=Decimal("50"),  # $50 max
+            max_orders_per_run=10,
+        )
+        port = BinanceExchangePort(http_client=noop_client, config=config)
+
+        # $100 notional exceeds $50 limit
+        with pytest.raises(ConnectorNonRetryableError, match="exceeds max_notional"):
+            port.place_order(
+                symbol="BTCUSDT",
+                side=OrderSide.BUY,
+                price=Decimal("50000"),
+                quantity=Decimal("0.002"),  # 50000 * 0.002 = $100
+                level_id=1,
+                ts=1000000,
+            )
+
+    def test_order_count_limit_enforced(
+        self, noop_client: NoopHttpClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Order count limit blocks orders exceeding max_orders_per_run."""
+        monkeypatch.setenv("ALLOW_MAINNET_TRADE", "1")
+
+        config = BinanceExchangePortConfig(
+            mode=SafeMode.LIVE_TRADE,
+            base_url="https://api.binance.com",
+            allow_mainnet=True,
+            api_key="test",
+            api_secret="test",
+            symbol_whitelist=["BTCUSDT"],
+            max_notional_per_order=Decimal("100"),
+            max_orders_per_run=1,  # Only 1 order allowed
+        )
+        port = BinanceExchangePort(http_client=noop_client, config=config)
+
+        # First order succeeds
+        port.place_order(
+            symbol="BTCUSDT",
+            side=OrderSide.BUY,
+            price=Decimal("50000"),
+            quantity=Decimal("0.001"),
+            level_id=1,
+            ts=1000000,
+        )
+
+        # Second order blocked
+        with pytest.raises(ConnectorNonRetryableError, match="Order count limit"):
+            port.place_order(
+                symbol="BTCUSDT",
+                side=OrderSide.BUY,
+                price=Decimal("50000"),
+                quantity=Decimal("0.001"),
+                level_id=2,
+                ts=1000001,
+            )
+
+    def test_reset_clears_order_count(
+        self, noop_client: NoopHttpClient, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """reset() clears order count, allowing more orders."""
+        monkeypatch.setenv("ALLOW_MAINNET_TRADE", "1")
+
+        config = BinanceExchangePortConfig(
+            mode=SafeMode.LIVE_TRADE,
+            base_url="https://api.binance.com",
+            allow_mainnet=True,
+            api_key="test",
+            api_secret="test",
+            symbol_whitelist=["BTCUSDT"],
+            max_notional_per_order=Decimal("100"),
+            max_orders_per_run=1,
+        )
+        port = BinanceExchangePort(http_client=noop_client, config=config)
+
+        # First order
+        port.place_order(
+            symbol="BTCUSDT",
+            side=OrderSide.BUY,
+            price=Decimal("50000"),
+            quantity=Decimal("0.001"),
+            level_id=1,
+            ts=1000000,
+        )
+
+        # Reset allows more orders
+        port.reset()
+
+        # Now we can place another order
+        port.place_order(
+            symbol="BTCUSDT",
+            side=OrderSide.BUY,
+            price=Decimal("50000"),
+            quantity=Decimal("0.001"),
+            level_id=2,
+            ts=1000001,
+        )
 
 
 # --- Symbol Whitelist Tests ---

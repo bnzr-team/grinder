@@ -81,7 +81,8 @@ Where to find information:
   - `06_ALERT_RESPONSE.md` — responding to alerts
   - `07_HA_OPERATIONS.md` — HA deployment, failover, rolling restart
   - `08_SMOKE_TEST_TESTNET.md` — testnet smoke test procedure
-- `scripts/smoke_live_testnet.py` — testnet smoke test script (safe-by-construction)
+  - `09_MAINNET_TRADE_SMOKE.md` — mainnet smoke test procedure (LC-08b)
+- `scripts/smoke_live_testnet.py` — live smoke test script (testnet/mainnet, safe-by-construction)
 
 ---
 
