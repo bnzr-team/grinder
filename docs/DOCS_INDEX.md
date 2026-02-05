@@ -80,6 +80,8 @@ Where to find information:
   - `05_SOAK_GATE.md` — running soak tests
   - `06_ALERT_RESPONSE.md` — responding to alerts
   - `07_HA_OPERATIONS.md` — HA deployment, failover, rolling restart
+  - `08_SMOKE_TEST_TESTNET.md` — testnet smoke test procedure
+- `scripts/smoke_live_testnet.py` — testnet smoke test script (safe-by-construction)
 
 ---
 
