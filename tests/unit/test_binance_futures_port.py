@@ -119,7 +119,8 @@ class TestTrueDryRunMode:
         )
 
         assert order_id is not None
-        assert "grinder_BTCUSDT_1_1000000" in order_id
+        # v1 format: grinder_{strategy}_{symbol}_{level}_{ts}_{seq}
+        assert "grinder_default_BTCUSDT_1_1000000" in order_id
         assert len(noop_client.calls) == 0
 
     def test_cancel_order_dry_run_zero_http_calls(

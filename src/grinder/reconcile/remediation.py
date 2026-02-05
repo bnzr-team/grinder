@@ -1,11 +1,12 @@
 """Active remediation executor for reconciliation mismatches.
 
 See ADR-043 for design decisions.
+See ADR-045 for configurable order identity (LC-12).
 
 Key safety guarantees:
 - 9 safety gates must ALL pass for real execution
 - Default: dry-run only (plan but don't execute)
-- grinder_ prefix required for cancel (protects manual orders)
+- Order identity check required for cancel (protects manual/other orders)
 - Notional cap required for flatten (limits exposure)
 - Kill-switch ALLOWS remediation (reduces risk)
 """
@@ -21,6 +22,11 @@ from typing import TYPE_CHECKING
 
 from grinder.core import OrderSide
 from grinder.reconcile.config import ReconcileConfig, RemediationAction
+from grinder.reconcile.identity import (
+    OrderIdentityConfig,
+    get_default_identity_config,
+    is_ours,
+)
 from grinder.reconcile.metrics import get_reconcile_metrics
 from grinder.reconcile.types import MismatchType, ObservedOrder, ObservedPosition
 
@@ -31,7 +37,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Prefix required for cancel operations (hardcoded for safety)
+# Legacy prefix constant - kept for backward compatibility
+# LC-12: Actual prefix is now configurable via OrderIdentityConfig
 GRINDER_PREFIX = "grinder_"
 
 
@@ -118,6 +125,7 @@ class RemediationExecutor:
     armed: bool = False
     symbol_whitelist: list[str] = field(default_factory=list)
     kill_switch_active: bool = False
+    identity_config: OrderIdentityConfig | None = None
 
     # Internal state
     _last_action_ts: int = field(default=0, repr=False)
@@ -157,7 +165,7 @@ class RemediationExecutor:
             return True  # Already counting this symbol
         return len(self._symbols_this_run) < self.config.max_symbols_per_action
 
-    def can_execute(  # noqa: PLR0911 - 9 gates require many returns/branches
+    def can_execute(  # noqa: PLR0911, PLR0912 - 9 gates require many returns/branches
         self,
         symbol: str,
         is_cancel: bool,
@@ -223,9 +231,12 @@ class RemediationExecutor:
         if self.symbol_whitelist and not self._check_symbol_whitelist(symbol):
             return (False, RemediationBlockReason.SYMBOL_NOT_IN_WHITELIST)
 
-        # Gate 8: grinder_ prefix (cancel only)
-        if is_cancel and client_order_id and not client_order_id.startswith(GRINDER_PREFIX):
-            return (False, RemediationBlockReason.NO_GRINDER_PREFIX)
+        # Gate 8: Order identity check (cancel only)
+        # LC-12: Check prefix + strategy allowlist, not just hardcoded prefix
+        if is_cancel and client_order_id:
+            identity = self.identity_config or get_default_identity_config()
+            if not is_ours(client_order_id, identity):
+                return (False, RemediationBlockReason.NO_GRINDER_PREFIX)
 
         # Gate 9: notional <= limit (flatten only)
         if (

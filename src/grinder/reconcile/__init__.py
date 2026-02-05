@@ -3,11 +3,25 @@
 See ADR-042 for passive reconciliation design decisions.
 See ADR-043 for active remediation design decisions.
 See ADR-044 for runner wiring and routing policy.
+See ADR-045 for order identity design decisions.
 """
 
 from grinder.reconcile.config import ReconcileConfig, RemediationAction
 from grinder.reconcile.engine import ReconcileEngine
 from grinder.reconcile.expected_state import ExpectedStateStore
+from grinder.reconcile.identity import (
+    DEFAULT_PREFIX,
+    DEFAULT_STRATEGY_ID,
+    LEGACY_STRATEGY_ID,
+    OrderIdentityConfig,
+    ParsedOrderId,
+    generate_client_order_id,
+    get_default_identity_config,
+    is_ours,
+    parse_client_order_id,
+    reset_default_identity_config,
+    set_default_identity_config,
+)
 from grinder.reconcile.metrics import (
     ReconcileMetrics,
     get_reconcile_metrics,
@@ -31,7 +45,9 @@ from grinder.reconcile.runner import (
     ReconcileRunner,
     ReconcileRunReport,
 )
-from grinder.reconcile.snapshot_client import SnapshotClient, SnapshotClientConfig
+
+# NOTE: SnapshotClient is NOT exported here to avoid circular import with execution.binance_port.
+# Import directly: from grinder.reconcile.snapshot_client import SnapshotClient, SnapshotClientConfig
 from grinder.reconcile.types import (
     ExpectedOrder,
     ExpectedPosition,
@@ -42,13 +58,18 @@ from grinder.reconcile.types import (
 )
 
 __all__ = [
+    # Constants
     "ACTIONABLE_STATUSES",
+    "DEFAULT_PREFIX",
+    "DEFAULT_STRATEGY_ID",
     "GRINDER_PREFIX",
+    "LEGACY_STRATEGY_ID",
     "MISMATCH_PRIORITY",
     "NO_ACTION_MISMATCHES",
     "ORDER_MISMATCHES_FOR_CANCEL",
     "POSITION_MISMATCHES_FOR_FLATTEN",
     "TERMINAL_STATUSES",
+    # Types
     "ExpectedOrder",
     "ExpectedPosition",
     "ExpectedStateStore",
@@ -57,6 +78,8 @@ __all__ = [
     "ObservedOrder",
     "ObservedPosition",
     "ObservedStateStore",
+    "OrderIdentityConfig",
+    "ParsedOrderId",
     "ReconcileConfig",
     "ReconcileEngine",
     "ReconcileMetrics",
@@ -67,8 +90,14 @@ __all__ = [
     "RemediationExecutor",
     "RemediationResult",
     "RemediationStatus",
-    "SnapshotClient",
-    "SnapshotClientConfig",
+    # NOTE: SnapshotClient/Config not exported here - import from grinder.reconcile.snapshot_client
+    # Functions
+    "generate_client_order_id",
+    "get_default_identity_config",
     "get_reconcile_metrics",
+    "is_ours",
+    "parse_client_order_id",
+    "reset_default_identity_config",
     "reset_reconcile_metrics",
+    "set_default_identity_config",
 ]

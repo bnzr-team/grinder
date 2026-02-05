@@ -68,6 +68,11 @@ from grinder.connectors.errors import (
 from grinder.connectors.live_connector import SafeMode
 from grinder.core import OrderSide, OrderState
 from grinder.execution.types import OrderRecord
+from grinder.reconcile.identity import (
+    OrderIdentityConfig,
+    generate_client_order_id,
+    get_default_identity_config,
+)
 
 # --- HTTP Client Protocol ---
 
@@ -286,6 +291,9 @@ class BinanceExchangePortConfig:
     max_orders_per_run: int = 1
     max_open_orders: int = 1
 
+    # Order identity (LC-12): configurable prefix and strategy
+    identity_config: OrderIdentityConfig | None = None
+
     # Internal counter for order limit enforcement
     _orders_this_run: int = field(default=0, repr=False)
 
@@ -468,9 +476,16 @@ class BinanceExchangePort:
         self._validate_notional(price, quantity)
         self._validate_order_count()
 
-        # Generate deterministic client order ID
+        # Generate deterministic client order ID (LC-12: configurable identity)
         self._order_counter += 1
-        client_order_id = f"grinder_{symbol}_{level_id}_{ts}_{self._order_counter}"
+        identity = self.config.identity_config or get_default_identity_config()
+        client_order_id = generate_client_order_id(
+            config=identity,
+            symbol=symbol,
+            level_id=level_id,
+            ts=ts,
+            seq=self._order_counter,
+        )
 
         # Track order count (even for dry-run to maintain consistency)
         # Use object.__setattr__ since config is a dataclass
