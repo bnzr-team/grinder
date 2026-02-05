@@ -64,6 +64,8 @@ api_keys.json
 artifacts/
 *.log
 *.jsonl
+# But track test fixture JSONL files
+!tests/fixtures/**/*.jsonl
 
 # Data files (may be large)
 data/
