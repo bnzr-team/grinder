@@ -16,6 +16,8 @@ This runbook documents the procedure for running a smoke test on Binance Testnet
 2. Generate API keys (testnet keys, NOT mainnet)
 3. Note your API key and secret
 
+**Important:** Binance testnet may require KYC verification for API key generation. If you cannot obtain testnet credentials, run the smoke test in dry-run mode only (see Step 1 below).
+
 ### 2. Environment Setup
 
 ```bash

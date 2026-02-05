@@ -1484,6 +1484,51 @@
   - Real E2E testnet testing (requires LC-07 runbook)
   - Engine-level metrics (H5) beyond existing port metrics
 
+## ADR-038 — Testnet Smoke Harness (LC-07)
+- **Date:** 2026-02-05
+- **Status:** accepted
+- **Context:** Need an E2E smoke test for Binance Testnet to verify live trading connectivity and order flow. Must be safe-by-construction: cannot accidentally trade on mainnet or place real orders without explicit opt-in.
+- **Decision:**
+  - **Safe-by-construction guards:**
+    - `--dry-run` by default (no real HTTP calls, simulated place/cancel)
+    - Requires `--confirm TESTNET` for real orders
+    - Mainnet FORBIDDEN (blocked in BinanceExchangePort)
+    - Requires `ARMED=1` + `ALLOW_TESTNET_TRADE=1` env vars for real trades
+    - Kill-switch blocks PLACE/REPLACE, allows CANCEL
+  - **Script:** `scripts/smoke_live_testnet.py`
+    - `RequestsHttpClient`: Real HTTP via requests library
+    - `SmokeResult`: Tracks simulated vs real outcomes
+    - Clear output: `** SIMULATED - No real HTTP calls made **` in dry-run
+    - Order ID prefixed with `SIM_` in dry-run mode
+  - **Runbook:** `docs/runbooks/08_SMOKE_TEST_TESTNET.md`
+    - Step-by-step procedure for testnet smoke test
+    - Failure scenarios and resolution
+    - Operator checklist
+  - **Kill-switch extension:** `docs/runbooks/04_KILL_SWITCH.md`
+    - Added kill-switch behavior table (PLACE blocked, CANCEL allowed)
+    - Testnet verification procedure
+- **E2E Run Status:**
+  - Smoke harness is READY and tested in dry-run mode
+  - Real E2E run is OPERATOR-DEPENDENT (requires Binance testnet credentials)
+  - Binance testnet may require KYC verification for API key generation
+  - Real E2E run NOT executed as part of this PR
+- **Verification (dry-run):**
+  ```bash
+  PYTHONPATH=src python -m scripts.smoke_live_testnet  # dry-run
+  PYTHONPATH=src python -m scripts.smoke_live_testnet --kill-switch  # kill-switch test
+  ```
+- **Consequences:**
+  - Operators can verify testnet connectivity when they have credentials
+  - Dry-run mode proves script logic works without external dependencies
+  - Mainnet protection hardcoded at BinanceExchangePort level
+  - Kill-switch behavior documented and testable
+- **Out of Scope (v0.1):**
+  - Mainnet trading (FORBIDDEN)
+  - Automated CI execution of real testnet orders (no credentials in CI)
+  - Fill verification (order is far-from-market, should not fill)
+
+---
+
 ## ADR-037 — LiveFeed: Live Read-Path Pipeline (LC-06)
 - **Date:** 2026-02-05
 - **Status:** accepted

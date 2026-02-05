@@ -492,28 +492,37 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - Golden output tests prove determinism
   - **Fixtures:** `tests/fixtures/ws/bookticker_btcusdt.json`
   - See ADR-037 for design decisions
-- **Testnet Smoke Test** (`scripts/smoke_live_testnet.py`):
-  - E2E smoke test for Binance Testnet: place micro order → cancel (LC-07)
+- **Testnet Smoke Harness** (`scripts/smoke_live_testnet.py`):
+  - Smoke test harness for Binance Testnet: place micro order → cancel (LC-07)
   - **Safe-by-construction guards:**
     - `--dry-run` by default (no real HTTP calls)
     - Requires `--confirm TESTNET` for real orders
     - Mainnet FORBIDDEN (blocked in BinanceExchangePort)
     - Requires `ARMED=1` + `ALLOW_TESTNET_TRADE=1` env vars
     - Kill-switch blocks PLACE/REPLACE, allows CANCEL
+  - **E2E execution status:**
+    - Harness is READY and tested in dry-run + kill-switch modes
+    - Real E2E run is OPERATOR-DEPENDENT (requires Binance testnet credentials)
+    - Binance testnet may require KYC for API key generation
+    - Real E2E run NOT executed as part of LC-07 PR
   - **Failure paths:**
     - Missing keys → clear exit 1 + message
     - Empty whitelist → blocks at port level
     - Kill-switch active → PLACE blocked (expected), CANCEL allowed
-  - **How to verify:**
+  - **How to verify (dry-run):**
     ```bash
-    # Dry-run (default)
+    # Dry-run (default) — no credentials needed
     PYTHONPATH=src python -m scripts.smoke_live_testnet
 
-    # Real testnet order
+    # Kill-switch test — no credentials needed
+    PYTHONPATH=src python -m scripts.smoke_live_testnet --kill-switch
+
+    # Real testnet order (operator-dependent)
     BINANCE_API_KEY=xxx BINANCE_API_SECRET=yyy ARMED=1 ALLOW_TESTNET_TRADE=1 \
         PYTHONPATH=src python -m scripts.smoke_live_testnet --confirm TESTNET
     ```
   - **Runbook:** `docs/runbooks/08_SMOKE_TEST_TESTNET.md`
+  - See ADR-038 for design decisions
 - **DrawdownGuard v0** (`src/grinder/risk/drawdown.py`):
   - Tracks equity high-water mark (HWM)
   - Computes drawdown: `(HWM - equity) / HWM`
