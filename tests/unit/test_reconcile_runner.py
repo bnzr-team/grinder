@@ -337,19 +337,23 @@ class TestOneActionTypePerRun:
         mock_executor.remediate_cancel.assert_called_once()
         mock_executor.remediate_flatten.assert_not_called()
 
-    def test_flatten_locks_action_type(
+    def test_cancel_has_priority_over_flatten(
         self,
         mock_engine: MagicMock,
         mock_executor: MagicMock,
         mock_observed: MagicMock,
     ) -> None:
-        """Once flatten is chosen, cancel mismatches are skipped."""
+        """With deterministic ordering, cancel always wins over flatten.
+
+        Cancel mismatches have priority 10-20, flatten has priority 100.
+        This ensures predictable behavior regardless of input order.
+        """
         flatten_mismatch = _make_mismatch(
             MismatchType.POSITION_NONZERO_UNEXPECTED,
             client_order_id=None,
         )
         cancel_mismatch = _make_mismatch(MismatchType.ORDER_EXISTS_UNEXPECTED)
-        # Flatten first
+        # Pass flatten first (input order doesn't matter due to sorting)
         mock_engine.reconcile.return_value = [flatten_mismatch, cancel_mismatch]
 
         runner = ReconcileRunner(
@@ -359,9 +363,36 @@ class TestOneActionTypePerRun:
         )
         report = runner.run()
 
-        # Flatten was processed
+        # Cancel was processed (higher priority)
+        assert len(report.cancel_results) == 1
+        # Flatten was skipped due to action_type_locked to cancel
+        assert len(report.flatten_results) == 0
+        mock_executor.remediate_cancel.assert_called_once()
+        mock_executor.remediate_flatten.assert_not_called()
+
+    def test_flatten_only_when_no_cancel_mismatches(
+        self,
+        mock_engine: MagicMock,
+        mock_executor: MagicMock,
+        mock_observed: MagicMock,
+    ) -> None:
+        """Flatten is processed when there are no cancel mismatches."""
+        flatten_mismatch = _make_mismatch(
+            MismatchType.POSITION_NONZERO_UNEXPECTED,
+            client_order_id=None,
+        )
+        # Only flatten mismatches
+        mock_engine.reconcile.return_value = [flatten_mismatch]
+
+        runner = ReconcileRunner(
+            engine=mock_engine,
+            executor=mock_executor,
+            observed=mock_observed,
+        )
+        report = runner.run()
+
+        # Flatten is processed
         assert len(report.flatten_results) == 1
-        # Cancel was skipped due to action_type_locked
         assert len(report.cancel_results) == 0
         mock_executor.remediate_flatten.assert_called_once()
         mock_executor.remediate_cancel.assert_not_called()
@@ -1034,3 +1065,196 @@ class TestEdgeCases:
 
         assert len(report.flatten_results) == 0
         mock_executor.remediate_flatten.assert_not_called()
+
+
+# =============================================================================
+# DETERMINISM TESTS (Priority-based ordering)
+# =============================================================================
+
+
+class TestMismatchDeterminism:
+    """Tests for deterministic mismatch ordering.
+
+    Verifies that mismatches are processed in a consistent order
+    based on priority (cancel before flatten), then symbol, then client_order_id.
+    """
+
+    def test_shuffled_mismatches_produce_same_action_type(
+        self,
+        mock_engine: MagicMock,
+        mock_executor: MagicMock,
+        mock_observed: MagicMock,
+    ) -> None:
+        """Mismatches in shuffled order still produce cancel (higher priority)."""
+        # Create mismatches in "wrong" order: flatten first, then cancel
+        position_mismatch = _make_mismatch(
+            MismatchType.POSITION_NONZERO_UNEXPECTED,
+            symbol="ETHUSDT",
+            client_order_id=None,
+        )
+        order_mismatch = _make_mismatch(
+            MismatchType.ORDER_EXISTS_UNEXPECTED,
+            symbol="BTCUSDT",
+            client_order_id="grinder_BTCUSDT_1_1_1",
+        )
+
+        # Pass them in "wrong" order: position first
+        mock_engine.reconcile.return_value = [position_mismatch, order_mismatch]
+
+        runner = ReconcileRunner(
+            engine=mock_engine,
+            executor=mock_executor,
+            observed=mock_observed,
+        )
+        report = runner.run()
+
+        # Should process cancel (ORDER_EXISTS_UNEXPECTED has priority 10)
+        # not flatten (POSITION_NONZERO_UNEXPECTED has priority 100)
+        assert len(report.cancel_results) == 1
+        assert len(report.flatten_results) == 0
+
+    def test_reverse_order_produces_same_result(
+        self,
+        mock_engine: MagicMock,
+        mock_executor: MagicMock,
+        mock_observed: MagicMock,
+    ) -> None:
+        """Same mismatches in reverse order produce identical result."""
+        order_mismatch = _make_mismatch(
+            MismatchType.ORDER_EXISTS_UNEXPECTED,
+            symbol="BTCUSDT",
+            client_order_id="grinder_BTCUSDT_1_1_1",
+        )
+        position_mismatch = _make_mismatch(
+            MismatchType.POSITION_NONZERO_UNEXPECTED,
+            symbol="ETHUSDT",
+            client_order_id=None,
+        )
+
+        # Run 1: order first
+        mock_engine.reconcile.return_value = [order_mismatch, position_mismatch]
+        runner = ReconcileRunner(
+            engine=mock_engine,
+            executor=mock_executor,
+            observed=mock_observed,
+        )
+        report1 = runner.run()
+
+        # Reset for run 2
+        mock_executor.reset_mock()
+
+        # Run 2: position first (reversed)
+        mock_engine.reconcile.return_value = [position_mismatch, order_mismatch]
+        report2 = runner.run()
+
+        # Both runs should produce identical results
+        assert len(report1.cancel_results) == len(report2.cancel_results)
+        assert len(report1.flatten_results) == len(report2.flatten_results)
+        assert len(report1.cancel_results) == 1
+        assert len(report1.flatten_results) == 0
+
+    def test_same_type_sorted_by_symbol(
+        self,
+        mock_engine: MagicMock,
+        mock_executor: MagicMock,
+        mock_observed: MagicMock,
+    ) -> None:
+        """Mismatches of same type are sorted by symbol."""
+        mismatch_eth = _make_mismatch(
+            MismatchType.ORDER_EXISTS_UNEXPECTED,
+            symbol="ETHUSDT",
+            client_order_id="grinder_ETHUSDT_1_1_1",
+        )
+        mismatch_btc = _make_mismatch(
+            MismatchType.ORDER_EXISTS_UNEXPECTED,
+            symbol="BTCUSDT",
+            client_order_id="grinder_BTCUSDT_1_1_1",
+        )
+
+        # Configure observed store to return appropriate orders
+        def get_order_by_id(client_order_id: str) -> ObservedOrder:
+            symbol = "BTCUSDT" if "BTCUSDT" in client_order_id else "ETHUSDT"
+            return ObservedOrder(
+                client_order_id=client_order_id,
+                symbol=symbol,
+                order_id=12345,
+                side=OrderSide.BUY,
+                status=OrderState.OPEN,
+                price=Decimal("42500"),
+                orig_qty=Decimal("0.01"),
+                executed_qty=Decimal("0"),
+                avg_price=Decimal("0"),
+                ts_observed=1000,
+            )
+
+        mock_observed.get_order.side_effect = get_order_by_id
+
+        # Pass in "wrong" order: ETH first
+        mock_engine.reconcile.return_value = [mismatch_eth, mismatch_btc]
+
+        runner = ReconcileRunner(
+            engine=mock_engine,
+            executor=mock_executor,
+            observed=mock_observed,
+        )
+        report = runner.run()
+
+        # Both should be processed (same action type)
+        assert len(report.cancel_results) == 2
+
+        # Verify first call was for BTCUSDT (alphabetically first)
+        calls = mock_executor.remediate_cancel.call_args_list
+        first_call_order = calls[0][0][0]  # First positional arg of first call
+        assert first_call_order.symbol == "BTCUSDT"
+
+    def test_same_type_same_symbol_sorted_by_client_order_id(
+        self,
+        mock_engine: MagicMock,
+        mock_executor: MagicMock,
+        mock_observed: MagicMock,
+    ) -> None:
+        """Mismatches with same type and symbol sorted by client_order_id."""
+        mismatch_2 = _make_mismatch(
+            MismatchType.ORDER_EXISTS_UNEXPECTED,
+            symbol="BTCUSDT",
+            client_order_id="grinder_BTCUSDT_2_1_1",
+        )
+        mismatch_1 = _make_mismatch(
+            MismatchType.ORDER_EXISTS_UNEXPECTED,
+            symbol="BTCUSDT",
+            client_order_id="grinder_BTCUSDT_1_1_1",
+        )
+
+        def get_order_by_id(client_order_id: str) -> ObservedOrder:
+            return ObservedOrder(
+                client_order_id=client_order_id,
+                symbol="BTCUSDT",
+                order_id=12345,
+                side=OrderSide.BUY,
+                status=OrderState.OPEN,
+                price=Decimal("42500"),
+                orig_qty=Decimal("0.01"),
+                executed_qty=Decimal("0"),
+                avg_price=Decimal("0"),
+                ts_observed=1000,
+            )
+
+        mock_observed.get_order.side_effect = get_order_by_id
+
+        # Pass in "wrong" order: _2 first
+        mock_engine.reconcile.return_value = [mismatch_2, mismatch_1]
+
+        runner = ReconcileRunner(
+            engine=mock_engine,
+            executor=mock_executor,
+            observed=mock_observed,
+        )
+        report = runner.run()
+
+        # Both processed
+        assert len(report.cancel_results) == 2
+
+        # Verify first call was for _1 (alphabetically first)
+        calls = mock_executor.remediate_cancel.call_args_list
+        first_call_order = calls[0][0][0]
+        assert first_call_order.client_order_id == "grinder_BTCUSDT_1_1_1"

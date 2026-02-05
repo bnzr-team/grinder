@@ -1915,8 +1915,14 @@
   - **Terminal statuses (skip cancel):** FILLED, CANCELLED, REJECTED, EXPIRED
   - **Actionable statuses (allow cancel):** OPEN, PARTIALLY_FILLED
   - **Bounded execution:**
-    - One action type per run (cancel OR flatten, whichever comes first)
+    - One action type per run (cancel OR flatten, determined by priority)
     - Respects executor's max_orders_per_action / max_symbols_per_action
+  - **Deterministic ordering:**
+    - Mismatches are sorted before processing for predictable action-type selection
+    - Sort key: priority → symbol → client_order_id
+    - Priority (lower = processed first): ORDER_EXISTS=10, ORDER_STATUS_DIVERGENCE=20, ORDER_MISSING=90, POSITION_NONZERO=100
+    - Cancel always wins over flatten when both exist (cancel has lower priority numbers)
+    - Ensures same result regardless of ReconcileEngine's detection order
   - **Routing constants (frozenset for performance):**
     ```python
     ORDER_MISMATCHES_FOR_CANCEL = frozenset({
@@ -1951,13 +1957,14 @@
     - `RECONCILE_RUN`: Run completion with summary stats
     - `REMEDIATE_SKIP`: Skipped mismatch with reason
 - **Test coverage:**
-  - `tests/unit/test_reconcile_runner.py` (35+ tests):
+  - `tests/unit/test_reconcile_runner.py` (39 tests):
     - Routing policy constants tests
     - Routing behavior tests (4 mismatch types)
     - One action type per run tests
     - Terminal status skip tests
     - Metrics tests
     - ReconcileRunReport tests
+    - Determinism tests (4 tests for priority-based ordering)
     - Edge cases
 - **Consequences:**
   - Full wiring: ReconcileEngine → ReconcileRunner → RemediationExecutor

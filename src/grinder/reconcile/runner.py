@@ -79,6 +79,24 @@ ACTIONABLE_STATUSES: frozenset[OrderState] = frozenset(
     }
 )
 
+# Priority for deterministic mismatch ordering (lower = higher priority)
+# Cancel actions (order mismatches) have higher priority than flatten (position)
+MISMATCH_PRIORITY: dict[MismatchType, int] = {
+    MismatchType.ORDER_EXISTS_UNEXPECTED: 10,
+    MismatchType.ORDER_STATUS_DIVERGENCE: 20,
+    MismatchType.ORDER_MISSING_ON_EXCHANGE: 90,
+    MismatchType.POSITION_NONZERO_UNEXPECTED: 100,
+}
+
+
+def _mismatch_sort_key(m: Mismatch) -> tuple[int, str, str]:
+    """Generate sort key for deterministic mismatch ordering.
+
+    Order: priority (lower first) → symbol → client_order_id
+    """
+    priority = MISMATCH_PRIORITY.get(m.mismatch_type, 999)
+    return (priority, m.symbol, m.client_order_id or "")
+
 
 # =============================================================================
 # RUN REPORT
@@ -212,6 +230,10 @@ class ReconcileRunner:
         if mismatches_detected > 0:
             metrics.record_run_with_mismatch()
 
+        # Step 1.5: Sort for deterministic action-type locking
+        # Lower priority = processed first (cancel before flatten)
+        mismatches_sorted = sorted(mismatches, key=_mismatch_sort_key)
+
         # Step 2: Route and execute
         cancel_results: list[RemediationResult] = []
         flatten_results: list[RemediationResult] = []
@@ -219,7 +241,7 @@ class ReconcileRunner:
         skipped_no_action = 0
         action_type_locked: str | None = None  # "cancel" or "flatten"
 
-        for mismatch in mismatches:
+        for mismatch in mismatches_sorted:
             # Determine action type
             if mismatch.mismatch_type in NO_ACTION_MISMATCHES:
                 skipped_no_action += 1

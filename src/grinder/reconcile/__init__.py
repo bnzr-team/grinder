@@ -23,6 +23,7 @@ from grinder.reconcile.remediation import (
 )
 from grinder.reconcile.runner import (
     ACTIONABLE_STATUSES,
+    MISMATCH_PRIORITY,
     NO_ACTION_MISMATCHES,
     ORDER_MISMATCHES_FOR_CANCEL,
     POSITION_MISMATCHES_FOR_FLATTEN,
@@ -43,6 +44,7 @@ from grinder.reconcile.types import (
 __all__ = [
     "ACTIONABLE_STATUSES",
     "GRINDER_PREFIX",
+    "MISMATCH_PRIORITY",
     "NO_ACTION_MISMATCHES",
     "ORDER_MISMATCHES_FOR_CANCEL",
     "POSITION_MISMATCHES_FOR_FLATTEN",
