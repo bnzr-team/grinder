@@ -45,6 +45,10 @@ GET /metrics:
         - grinder_reconcile_runs_with_mismatch_total (counter, LC-11)
         - grinder_reconcile_runs_with_remediation_total (counter, LC-11)
         - grinder_reconcile_last_remediation_ts_ms (gauge, LC-11)
+        - grinder_reconcile_budget_calls_used_day (gauge, LC-18)
+        - grinder_reconcile_budget_notional_used_day (gauge, LC-18)
+        - grinder_reconcile_budget_calls_remaining_day (gauge, LC-18)
+        - grinder_reconcile_budget_notional_remaining_day (gauge, LC-18)
 """
 
 from __future__ import annotations
@@ -210,6 +214,19 @@ REQUIRED_METRICS_PATTERNS = [
     "grinder_reconcile_action_planned_total{action=",
     "grinder_reconcile_action_executed_total{action=",
     "grinder_reconcile_runs_with_remediation_total{action=",
+    # LC-18: Budget metrics
+    "# HELP grinder_reconcile_budget_calls_used_day",
+    "# TYPE grinder_reconcile_budget_calls_used_day",
+    "grinder_reconcile_budget_calls_used_day",
+    "# HELP grinder_reconcile_budget_notional_used_day",
+    "# TYPE grinder_reconcile_budget_notional_used_day",
+    "grinder_reconcile_budget_notional_used_day",
+    "# HELP grinder_reconcile_budget_calls_remaining_day",
+    "# TYPE grinder_reconcile_budget_calls_remaining_day",
+    "grinder_reconcile_budget_calls_remaining_day",
+    "# HELP grinder_reconcile_budget_notional_remaining_day",
+    "# TYPE grinder_reconcile_budget_notional_remaining_day",
+    "grinder_reconcile_budget_notional_remaining_day",
 ]
 
 # Forbidden high-cardinality labels (H5-02 contract tightening)

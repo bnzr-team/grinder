@@ -5,6 +5,7 @@ See ADR-043 for active remediation design decisions.
 See ADR-044 for runner wiring and routing policy.
 See ADR-045 for order identity design decisions.
 See ADR-046 for audit trail design decisions.
+See ADR-047 for remediation safety extensions (LC-18).
 """
 
 from grinder.reconcile.audit import (
@@ -16,7 +17,8 @@ from grinder.reconcile.audit import (
     create_remediate_attempt_event,
     create_remediate_result_event,
 )
-from grinder.reconcile.config import ReconcileConfig, RemediationAction
+from grinder.reconcile.budget import BudgetState, BudgetTracker
+from grinder.reconcile.config import ReconcileConfig, RemediationAction, RemediationMode
 from grinder.reconcile.engine import ReconcileEngine
 from grinder.reconcile.expected_state import ExpectedStateStore
 from grinder.reconcile.identity import (
@@ -84,6 +86,9 @@ __all__ = [
     "AuditEvent",
     "AuditEventType",
     "AuditWriter",
+    # -- Budget (LC-18) --
+    "BudgetState",
+    "BudgetTracker",
     # Types
     "ExpectedOrder",
     "ExpectedPosition",
@@ -103,6 +108,7 @@ __all__ = [
     "RemediationAction",
     "RemediationBlockReason",
     "RemediationExecutor",
+    "RemediationMode",
     "RemediationResult",
     "RemediationStatus",
     # NOTE: SnapshotClient/Config not exported here - import from grinder.reconcile.snapshot_client

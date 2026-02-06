@@ -16,7 +16,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from grinder.core import OrderSide, OrderState
-from grinder.reconcile.config import ReconcileConfig, RemediationAction
+from grinder.reconcile.config import ReconcileConfig, RemediationAction, RemediationMode
 from grinder.reconcile.metrics import get_reconcile_metrics, reset_reconcile_metrics
 from grinder.reconcile.remediation import (
     GRINDER_PREFIX,
@@ -123,6 +123,15 @@ def _make_executor(
     max_notional: Decimal = Decimal("500"),
     require_whitelist: bool = True,
     kill_switch: bool = False,
+    # LC-18 parameters
+    remediation_mode: RemediationMode = RemediationMode.DETECT_ONLY,
+    strategy_allowlist: set[str] | None = None,
+    symbol_remediation_allowlist: set[str] | None = None,
+    # LC-18 budget parameters (high defaults to not interfere with LC-10 tests)
+    max_calls_per_run: int = 1000,
+    max_notional_per_run: Decimal = Decimal("1000000"),
+    max_calls_per_day: int = 10000,
+    max_notional_per_day: Decimal = Decimal("10000000"),
 ) -> RemediationExecutor:
     """Helper to create RemediationExecutor with specific config."""
     config = ReconcileConfig(
@@ -134,6 +143,15 @@ def _make_executor(
         max_symbols_per_action=max_symbols,
         max_flatten_notional_usdt=max_notional,
         require_whitelist=require_whitelist,
+        # LC-18 config
+        remediation_mode=remediation_mode,
+        remediation_strategy_allowlist=strategy_allowlist or set(),
+        remediation_symbol_allowlist=symbol_remediation_allowlist or set(),
+        # LC-18 budget config
+        max_calls_per_run=max_calls_per_run,
+        max_notional_per_run=max_notional_per_run,
+        max_calls_per_day=max_calls_per_day,
+        max_notional_per_day=max_notional_per_day,
     )
     return RemediationExecutor(
         config=config,
@@ -156,7 +174,12 @@ class TestRemediationSafetyGates:
         self, mock_port: MagicMock, observed_order: ObservedOrder
     ) -> None:
         """Gate 1: action=NONE → PLANNED (dry-run behavior)."""
-        executor = _make_executor(mock_port, action=RemediationAction.NONE)
+        executor = _make_executor(
+            mock_port,
+            action=RemediationAction.NONE,
+            remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
+            strategy_allowlist={"default"},
+        )
 
         result = executor.remediate_cancel(observed_order)
 
@@ -175,6 +198,8 @@ class TestRemediationSafetyGates:
             allow_active=True,
             armed=True,
             whitelist=["BTCUSDT"],
+            remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
+            strategy_allowlist={"default"},
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -195,6 +220,8 @@ class TestRemediationSafetyGates:
             allow_active=False,  # Gate fails here
             armed=True,
             whitelist=["BTCUSDT"],
+            remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
+            strategy_allowlist={"default"},
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -215,6 +242,8 @@ class TestRemediationSafetyGates:
             allow_active=True,
             armed=False,  # Gate fails here
             whitelist=["BTCUSDT"],
+            remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
+            strategy_allowlist={"default"},
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -236,6 +265,8 @@ class TestRemediationSafetyGates:
             allow_active=True,
             armed=True,
             whitelist=["BTCUSDT"],
+            remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
+            strategy_allowlist={"default"},
         )
 
         result = executor.remediate_cancel(observed_order)
@@ -256,6 +287,8 @@ class TestRemediationSafetyGates:
             armed=True,
             whitelist=["BTCUSDT"],
             cooldown_seconds=3600,  # 1 hour cooldown
+            remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
+            strategy_allowlist={"default"},
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -279,6 +312,8 @@ class TestRemediationSafetyGates:
             allow_active=True,
             armed=True,
             whitelist=["ETHUSDT"],  # BTCUSDT not whitelisted
+            remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
+            strategy_allowlist={"default"},
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -299,6 +334,8 @@ class TestRemediationSafetyGates:
             allow_active=True,
             armed=True,
             whitelist=["BTCUSDT"],
+            remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
+            # No strategy_allowlist needed - order doesn't have grinder_ prefix
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -320,6 +357,7 @@ class TestRemediationSafetyGates:
             armed=True,
             whitelist=["BTCUSDT"],
             max_notional=Decimal("500"),  # 1 BTC @ 42500 = $42500 >> $500
+            remediation_mode=RemediationMode.EXECUTE_FLATTEN,
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -352,6 +390,8 @@ class TestRemediationExecution:
             allow_active=True,
             armed=True,
             whitelist=["BTCUSDT"],
+            remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
+            strategy_allowlist={"default"},
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -374,6 +414,7 @@ class TestRemediationExecution:
             armed=True,
             whitelist=["BTCUSDT"],
             max_notional=Decimal("1000"),  # 0.01 BTC @ 42500 = $425 < $1000
+            remediation_mode=RemediationMode.EXECUTE_FLATTEN,
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -403,6 +444,8 @@ class TestRemediationExecution:
             whitelist=["BTCUSDT"],
             max_orders=2,
             cooldown_seconds=0,  # Disable cooldown for this test
+            remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
+            strategy_allowlist={"default"},
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -427,6 +470,8 @@ class TestRemediationExecution:
             whitelist=["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"],
             max_symbols=2,
             cooldown_seconds=0,  # Disable cooldown for this test
+            remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
+            strategy_allowlist={"default"},
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -498,6 +543,8 @@ class TestRemediationKillSwitch:
             armed=True,
             whitelist=["BTCUSDT"],
             kill_switch=True,  # Kill-switch active
+            remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
+            strategy_allowlist={"default"},
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -520,6 +567,7 @@ class TestRemediationKillSwitch:
             whitelist=["BTCUSDT"],
             max_notional=Decimal("1000"),
             kill_switch=True,  # Kill-switch active
+            remediation_mode=RemediationMode.EXECUTE_FLATTEN,
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -546,6 +594,8 @@ class TestRemediationMetrics:
             mock_port,
             action=RemediationAction.CANCEL_ALL,
             dry_run=True,  # Dry-run mode
+            remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
+            strategy_allowlist={"default"},
         )
 
         executor.remediate_cancel(observed_order)
@@ -566,6 +616,8 @@ class TestRemediationMetrics:
             allow_active=True,
             armed=True,
             whitelist=["BTCUSDT"],
+            remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
+            strategy_allowlist={"default"},
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -584,6 +636,8 @@ class TestRemediationMetrics:
             action=RemediationAction.CANCEL_ALL,
             dry_run=False,
             allow_active=False,  # This will cause block
+            remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
+            strategy_allowlist={"default"},
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -674,6 +728,7 @@ class TestRemediationBlockReasonValues:
     def test_block_reason_values_are_stable(self) -> None:
         """Block reason values are as expected (contract test)."""
         expected = {
+            # LC-10: Original safety gates
             "action_is_none",
             "dry_run",
             "allow_active_remediation_false",
@@ -687,6 +742,20 @@ class TestRemediationBlockReasonValues:
             "max_symbols_reached",
             "whitelist_required",
             "port_error",
+            # LC-18: Mode-based reasons
+            "mode_detect_only",
+            "mode_plan_only",
+            "mode_blocked",
+            "mode_cancel_only",
+            "mode_flatten_only",
+            # LC-18: Budget reasons
+            "max_calls_per_run",
+            "max_notional_per_run",
+            "max_calls_per_day",
+            "max_notional_per_day",
+            # LC-18: Allowlist reasons
+            "strategy_not_allowed",
+            "symbol_not_in_remediation_allowlist",
         }
 
         actual = {r.value for r in RemediationBlockReason}
@@ -727,6 +796,8 @@ class TestWhitelistRequired:
             armed=True,
             whitelist=[],  # Empty whitelist
             require_whitelist=True,
+            remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
+            strategy_allowlist={"default"},
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -747,6 +818,8 @@ class TestWhitelistRequired:
             armed=True,
             whitelist=[],
             require_whitelist=False,  # Not required
+            remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
+            strategy_allowlist={"default"},
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -777,6 +850,7 @@ class TestFlattenShortPosition:
             armed=True,
             whitelist=["BTCUSDT"],
             max_notional=Decimal("1000"),
+            remediation_mode=RemediationMode.EXECUTE_FLATTEN,
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -789,3 +863,326 @@ class TestFlattenShortPosition:
             quantity=Decimal("0.010"),  # abs() of position
             reduce_only=True,
         )
+
+
+# =============================================================================
+# LC-18: Mode Semantics Tests
+# =============================================================================
+
+
+class TestRemediationModeSemantics:
+    """Tests for LC-18 remediation mode behavior."""
+
+    def test_detect_only_returns_planned_with_mode_reason(
+        self, mock_port: MagicMock, observed_order: ObservedOrder
+    ) -> None:
+        """DETECT_ONLY mode → PLANNED with MODE_DETECT_ONLY reason."""
+        executor = _make_executor(
+            mock_port,
+            action=RemediationAction.CANCEL_ALL,
+            dry_run=False,
+            allow_active=True,
+            armed=True,
+            whitelist=["BTCUSDT"],
+            remediation_mode=RemediationMode.DETECT_ONLY,  # Default, explicit here
+            strategy_allowlist={"default"},
+        )
+        os.environ["ALLOW_MAINNET_TRADE"] = "1"
+
+        result = executor.remediate_cancel(observed_order)
+
+        assert result.status == RemediationStatus.PLANNED
+        assert result.block_reason == RemediationBlockReason.MODE_DETECT_ONLY
+        mock_port.cancel_order.assert_not_called()
+
+    def test_plan_only_returns_planned_with_mode_reason(
+        self, mock_port: MagicMock, observed_order: ObservedOrder
+    ) -> None:
+        """PLAN_ONLY mode → PLANNED with MODE_PLAN_ONLY reason."""
+        executor = _make_executor(
+            mock_port,
+            action=RemediationAction.CANCEL_ALL,
+            dry_run=False,
+            allow_active=True,
+            armed=True,
+            whitelist=["BTCUSDT"],
+            remediation_mode=RemediationMode.PLAN_ONLY,
+            strategy_allowlist={"default"},
+        )
+        os.environ["ALLOW_MAINNET_TRADE"] = "1"
+
+        result = executor.remediate_cancel(observed_order)
+
+        assert result.status == RemediationStatus.PLANNED
+        assert result.block_reason == RemediationBlockReason.MODE_PLAN_ONLY
+        mock_port.cancel_order.assert_not_called()
+
+    def test_blocked_mode_returns_planned_with_mode_reason(
+        self, mock_port: MagicMock, observed_order: ObservedOrder
+    ) -> None:
+        """BLOCKED mode → PLANNED with MODE_BLOCKED reason (no execution, but planned metrics increment)."""
+        executor = _make_executor(
+            mock_port,
+            action=RemediationAction.CANCEL_ALL,
+            dry_run=False,
+            allow_active=True,
+            armed=True,
+            whitelist=["BTCUSDT"],
+            remediation_mode=RemediationMode.BLOCKED,
+            strategy_allowlist={"default"},
+        )
+        os.environ["ALLOW_MAINNET_TRADE"] = "1"
+
+        result = executor.remediate_cancel(observed_order)
+
+        # BLOCKED mode returns PLANNED (increments planned metrics, not blocked metrics)
+        assert result.status == RemediationStatus.PLANNED
+        assert result.block_reason == RemediationBlockReason.MODE_BLOCKED
+        mock_port.cancel_order.assert_not_called()
+
+    def test_execute_cancel_all_allows_cancel(
+        self, mock_port: MagicMock, observed_order: ObservedOrder
+    ) -> None:
+        """EXECUTE_CANCEL_ALL mode allows cancel_all actions."""
+        executor = _make_executor(
+            mock_port,
+            action=RemediationAction.CANCEL_ALL,
+            dry_run=False,
+            allow_active=True,
+            armed=True,
+            whitelist=["BTCUSDT"],
+            remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
+            strategy_allowlist={"default"},
+        )
+        os.environ["ALLOW_MAINNET_TRADE"] = "1"
+
+        result = executor.remediate_cancel(observed_order)
+
+        assert result.status == RemediationStatus.EXECUTED
+        mock_port.cancel_order.assert_called_once()
+
+    def test_execute_cancel_all_blocks_flatten(
+        self, mock_port: MagicMock, observed_position: ObservedPosition
+    ) -> None:
+        """EXECUTE_CANCEL_ALL mode blocks flatten actions."""
+        executor = _make_executor(
+            mock_port,
+            action=RemediationAction.FLATTEN,
+            dry_run=False,
+            allow_active=True,
+            armed=True,
+            whitelist=["BTCUSDT"],
+            max_notional=Decimal("1000"),
+            remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,  # Only allows cancel
+        )
+        os.environ["ALLOW_MAINNET_TRADE"] = "1"
+
+        result = executor.remediate_flatten(observed_position, current_price=Decimal("42500.00"))
+
+        assert result.status == RemediationStatus.BLOCKED
+        assert result.block_reason == RemediationBlockReason.MODE_CANCEL_ONLY
+        mock_port.place_market_order.assert_not_called()
+
+    def test_execute_flatten_allows_flatten(
+        self, mock_port: MagicMock, observed_position: ObservedPosition
+    ) -> None:
+        """EXECUTE_FLATTEN mode allows flatten actions."""
+        executor = _make_executor(
+            mock_port,
+            action=RemediationAction.FLATTEN,
+            dry_run=False,
+            allow_active=True,
+            armed=True,
+            whitelist=["BTCUSDT"],
+            max_notional=Decimal("1000"),
+            remediation_mode=RemediationMode.EXECUTE_FLATTEN,
+        )
+        os.environ["ALLOW_MAINNET_TRADE"] = "1"
+
+        result = executor.remediate_flatten(observed_position, current_price=Decimal("42500.00"))
+
+        assert result.status == RemediationStatus.EXECUTED
+        mock_port.place_market_order.assert_called_once()
+
+    def test_execute_flatten_blocks_cancel(
+        self, mock_port: MagicMock, observed_order: ObservedOrder
+    ) -> None:
+        """EXECUTE_FLATTEN mode blocks cancel_all actions (strict separation)."""
+        executor = _make_executor(
+            mock_port,
+            action=RemediationAction.CANCEL_ALL,
+            dry_run=False,
+            allow_active=True,
+            armed=True,
+            whitelist=["BTCUSDT"],
+            remediation_mode=RemediationMode.EXECUTE_FLATTEN,
+            strategy_allowlist={"default"},
+        )
+        os.environ["ALLOW_MAINNET_TRADE"] = "1"
+
+        result = executor.remediate_cancel(observed_order)
+
+        # EXECUTE_FLATTEN is strictly for flatten, not cancel
+        assert result.status == RemediationStatus.BLOCKED
+        assert result.block_reason == RemediationBlockReason.MODE_FLATTEN_ONLY
+        mock_port.cancel_order.assert_not_called()
+
+
+# =============================================================================
+# LC-18: Strategy Allowlist Tests
+# =============================================================================
+
+
+class TestStrategyAllowlist:
+    """Tests for LC-18 strategy allowlist enforcement."""
+
+    def test_strategy_in_allowlist_allowed(
+        self, mock_port: MagicMock, observed_order: ObservedOrder
+    ) -> None:
+        """Strategy in allowlist → allowed."""
+        executor = _make_executor(
+            mock_port,
+            action=RemediationAction.CANCEL_ALL,
+            dry_run=False,
+            allow_active=True,
+            armed=True,
+            whitelist=["BTCUSDT"],
+            remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
+            strategy_allowlist={"default"},  # Order uses "default" strategy
+        )
+        os.environ["ALLOW_MAINNET_TRADE"] = "1"
+
+        result = executor.remediate_cancel(observed_order)
+
+        assert result.status == RemediationStatus.EXECUTED
+
+    def test_strategy_not_in_allowlist_blocked(
+        self, mock_port: MagicMock, observed_order: ObservedOrder
+    ) -> None:
+        """Strategy not in allowlist → blocked."""
+        executor = _make_executor(
+            mock_port,
+            action=RemediationAction.CANCEL_ALL,
+            dry_run=False,
+            allow_active=True,
+            armed=True,
+            whitelist=["BTCUSDT"],
+            remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
+            strategy_allowlist={"other_strategy"},  # Order uses "default", not allowed
+        )
+        os.environ["ALLOW_MAINNET_TRADE"] = "1"
+
+        result = executor.remediate_cancel(observed_order)
+
+        assert result.status == RemediationStatus.BLOCKED
+        assert result.block_reason == RemediationBlockReason.STRATEGY_NOT_ALLOWED
+
+    def test_empty_strategy_allowlist_allows_all(
+        self, mock_port: MagicMock, observed_order: ObservedOrder
+    ) -> None:
+        """Empty strategy allowlist → allows all strategies."""
+        executor = _make_executor(
+            mock_port,
+            action=RemediationAction.CANCEL_ALL,
+            dry_run=False,
+            allow_active=True,
+            armed=True,
+            whitelist=["BTCUSDT"],
+            remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
+            strategy_allowlist=set(),  # Empty = allow all
+        )
+        os.environ["ALLOW_MAINNET_TRADE"] = "1"
+
+        result = executor.remediate_cancel(observed_order)
+
+        assert result.status == RemediationStatus.EXECUTED
+
+
+# =============================================================================
+# LC-18: Budget Gate Tests
+# =============================================================================
+
+
+class TestBudgetGates:
+    """Tests for LC-18 budget enforcement."""
+
+    def test_max_calls_per_run_exceeded_blocks(
+        self, mock_port: MagicMock, observed_order: ObservedOrder
+    ) -> None:
+        """Exceeding max_calls_per_run → BLOCKED."""
+        executor = _make_executor(
+            mock_port,
+            action=RemediationAction.CANCEL_ALL,
+            dry_run=False,
+            allow_active=True,
+            armed=True,
+            whitelist=["BTCUSDT"],
+            remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
+            strategy_allowlist={"default"},
+            max_calls_per_run=2,  # Only 2 calls allowed per run
+            cooldown_seconds=0,
+        )
+        os.environ["ALLOW_MAINNET_TRADE"] = "1"
+
+        # Execute 2 calls (should succeed)
+        executor.remediate_cancel(observed_order)
+        executor.remediate_cancel(observed_order)
+
+        # Third call should be blocked
+        result = executor.remediate_cancel(observed_order)
+
+        assert result.status == RemediationStatus.BLOCKED
+        assert result.block_reason == RemediationBlockReason.MAX_CALLS_PER_RUN
+
+    def test_max_notional_per_run_exceeded_blocks_flatten(
+        self, mock_port: MagicMock, observed_position: ObservedPosition
+    ) -> None:
+        """Exceeding max_notional_per_run → BLOCKED for flatten."""
+        # Position is 0.01 BTC @ $42500 = $425 notional
+        executor = _make_executor(
+            mock_port,
+            action=RemediationAction.FLATTEN,
+            dry_run=False,
+            allow_active=True,
+            armed=True,
+            whitelist=["BTCUSDT"],
+            max_notional=Decimal("1000"),  # Per-call limit
+            remediation_mode=RemediationMode.EXECUTE_FLATTEN,
+            max_notional_per_run=Decimal("400"),  # Per-run budget < single position
+        )
+        os.environ["ALLOW_MAINNET_TRADE"] = "1"
+
+        result = executor.remediate_flatten(observed_position, current_price=Decimal("42500.00"))
+
+        # Should be blocked by per-run budget before per-call check
+        assert result.status == RemediationStatus.BLOCKED
+        assert result.block_reason == RemediationBlockReason.MAX_NOTIONAL_PER_RUN
+
+    def test_budget_resets_between_runs(
+        self, mock_port: MagicMock, observed_order: ObservedOrder
+    ) -> None:
+        """Budget counters reset with reset_run_counters()."""
+        executor = _make_executor(
+            mock_port,
+            action=RemediationAction.CANCEL_ALL,
+            dry_run=False,
+            allow_active=True,
+            armed=True,
+            whitelist=["BTCUSDT"],
+            remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
+            strategy_allowlist={"default"},
+            max_calls_per_run=2,
+            cooldown_seconds=0,
+        )
+        os.environ["ALLOW_MAINNET_TRADE"] = "1"
+
+        # Execute 2 calls (hits limit)
+        executor.remediate_cancel(observed_order)
+        executor.remediate_cancel(observed_order)
+
+        # Reset run counters (simulates new reconcile run)
+        executor.reset_run_counters()
+
+        # Should be able to execute again
+        result = executor.remediate_cancel(observed_order)
+        assert result.status == RemediationStatus.EXECUTED

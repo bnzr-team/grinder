@@ -3,11 +3,13 @@
 See ADR-042 for design decisions.
 See ADR-043 for active remediation metrics.
 See ADR-044 for runner wiring metrics.
+See ADR-046 for budget metrics (LC-18).
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from decimal import Decimal
 
 from grinder.reconcile.types import MismatchType
 
@@ -25,6 +27,12 @@ METRIC_ACTION_BLOCKED = "grinder_reconcile_action_blocked_total"
 METRIC_RUNS_WITH_MISMATCH = "grinder_reconcile_runs_with_mismatch_total"
 METRIC_RUNS_WITH_REMEDIATION = "grinder_reconcile_runs_with_remediation_total"
 METRIC_LAST_REMEDIATION_TS = "grinder_reconcile_last_remediation_ts_ms"
+
+# LC-18: Budget metrics
+METRIC_BUDGET_CALLS_USED_DAY = "grinder_reconcile_budget_calls_used_day"
+METRIC_BUDGET_NOTIONAL_USED_DAY = "grinder_reconcile_budget_notional_used_day"
+METRIC_BUDGET_CALLS_REMAINING_DAY = "grinder_reconcile_budget_calls_remaining_day"
+METRIC_BUDGET_NOTIONAL_REMAINING_DAY = "grinder_reconcile_budget_notional_remaining_day"
 
 # Label keys
 LABEL_TYPE = "type"
@@ -56,6 +64,12 @@ class ReconcileMetrics:
         runs_with_mismatch: Total runs that detected at least one mismatch
         runs_with_remediation_counts: {action: count} - runs with executed actions
         last_remediation_ts_ms: Timestamp of last remediation action
+
+    Budget (LC-18):
+        budget_calls_used_day: Remediation calls used today
+        budget_notional_used_day: Notional USDT used today
+        budget_calls_remaining_day: Remaining calls for today
+        budget_notional_remaining_day: Remaining notional for today
     """
 
     # Passive reconciliation (LC-09b)
@@ -72,6 +86,12 @@ class ReconcileMetrics:
     runs_with_mismatch: int = 0
     runs_with_remediation_counts: dict[str, int] = field(default_factory=dict)
     last_remediation_ts_ms: int = 0
+
+    # -- Budget (LC-18) --
+    budget_calls_used_day: int = 0
+    budget_notional_used_day: Decimal = field(default_factory=lambda: Decimal("0"))
+    budget_calls_remaining_day: int = 0
+    budget_notional_remaining_day: Decimal = field(default_factory=lambda: Decimal("0"))
 
     def record_mismatch(self, mismatch_type: MismatchType) -> None:
         """Record a mismatch event."""
@@ -111,6 +131,19 @@ class ReconcileMetrics:
     def set_last_remediation_ts(self, ts_ms: int) -> None:
         """Set timestamp of last remediation action."""
         self.last_remediation_ts_ms = ts_ms
+
+    def set_budget_metrics(
+        self,
+        calls_used: int,
+        notional_used: Decimal,
+        calls_remaining: int,
+        notional_remaining: Decimal,
+    ) -> None:
+        """Set budget metrics from BudgetTracker state (LC-18)."""
+        self.budget_calls_used_day = calls_used
+        self.budget_notional_used_day = notional_used
+        self.budget_calls_remaining_day = calls_remaining
+        self.budget_notional_remaining_day = notional_remaining
 
     def to_prometheus_lines(self) -> list[str]:
         """Generate Prometheus text format lines."""
@@ -208,6 +241,39 @@ class ReconcileMetrics:
             ]
         )
 
+        # LC-18: Budget metrics
+        lines.extend(
+            [
+                f"# HELP {METRIC_BUDGET_CALLS_USED_DAY} Remediation calls used today",
+                f"# TYPE {METRIC_BUDGET_CALLS_USED_DAY} gauge",
+                f"{METRIC_BUDGET_CALLS_USED_DAY} {self.budget_calls_used_day}",
+            ]
+        )
+
+        lines.extend(
+            [
+                f"# HELP {METRIC_BUDGET_NOTIONAL_USED_DAY} Notional USDT used today",
+                f"# TYPE {METRIC_BUDGET_NOTIONAL_USED_DAY} gauge",
+                f"{METRIC_BUDGET_NOTIONAL_USED_DAY} {float(self.budget_notional_used_day):.2f}",
+            ]
+        )
+
+        lines.extend(
+            [
+                f"# HELP {METRIC_BUDGET_CALLS_REMAINING_DAY} Remediation calls remaining today",
+                f"# TYPE {METRIC_BUDGET_CALLS_REMAINING_DAY} gauge",
+                f"{METRIC_BUDGET_CALLS_REMAINING_DAY} {self.budget_calls_remaining_day}",
+            ]
+        )
+
+        lines.extend(
+            [
+                f"# HELP {METRIC_BUDGET_NOTIONAL_REMAINING_DAY} Notional USDT remaining today",
+                f"# TYPE {METRIC_BUDGET_NOTIONAL_REMAINING_DAY} gauge",
+                f"{METRIC_BUDGET_NOTIONAL_REMAINING_DAY} {float(self.budget_notional_remaining_day):.2f}",
+            ]
+        )
+
         return lines
 
     def reset(self) -> None:
@@ -221,6 +287,11 @@ class ReconcileMetrics:
         self.runs_with_mismatch = 0
         self.runs_with_remediation_counts.clear()
         self.last_remediation_ts_ms = 0
+        # -- LC-18: Budget metrics --
+        self.budget_calls_used_day = 0
+        self.budget_notional_used_day = Decimal("0")
+        self.budget_calls_remaining_day = 0
+        self.budget_notional_remaining_day = Decimal("0")
 
 
 # Global singleton

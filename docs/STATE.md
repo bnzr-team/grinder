@@ -616,42 +616,63 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - No integration with LiveEngineV0 event loop
     - No HA leader election for reconcile loop
   - See ADR-042 for design decisions
-- **Active Remediation v0.1** (`src/grinder/reconcile/remediation.py`):
+- **Active Remediation v0.2** (`src/grinder/reconcile/remediation.py`):
   - Extends passive reconciliation (LC-09b) with active actions (LC-10)
   - **Actions:**
     - `cancel_all`: Cancel unexpected grinder_ prefixed orders via `port.cancel_order()`
     - `flatten`: Close unexpected positions via `port.place_market_order(reduce_only=True)`
-  - **9 Safety Gates (ALL must pass for real execution):**
-    1. `action != NONE` (config)
-    2. `dry_run == False` (config)
-    3. `allow_active_remediation == True` (config)
-    4. `armed == True` (from LiveEngine)
-    5. `ALLOW_MAINNET_TRADE=1` (env var)
-    6. Cooldown elapsed since last action
-    7. Symbol in whitelist
-    8. grinder_ prefix for cancel (protects manual orders)
-    9. Notional <= cap for flatten (limits exposure)
+  - **Staged Rollout Modes (LC-18):**
+    - `DETECT_ONLY`: Detect mismatches, no planning (0 port calls) — **default**
+    - `PLAN_ONLY`: Plan remediation, increment planned metrics (0 port calls)
+    - `BLOCKED`: Plan + block by gates, increment blocked metrics (0 port calls)
+    - `EXECUTE_CANCEL_ALL`: Execute only cancel_all actions
+    - `EXECUTE_FLATTEN`: Execute only flatten actions (includes cancel budget check)
+  - **Safety Gates (LC-10 + LC-18):**
+    1. Mode check (DETECT_ONLY/PLAN_ONLY/BLOCKED → early exit)
+    2. Strategy allowlist (uses LC-12 `parse_client_order_id()`)
+    3. Symbol remediation allowlist (optional)
+    4. Budget: `max_calls_per_run`, `max_notional_per_run`
+    5. Budget: `max_calls_per_day`, `max_notional_per_day`
+    6. `action != NONE` (config)
+    7. `dry_run == False` (config)
+    8. `allow_active_remediation == True` (config)
+    9. `armed == True` (from LiveEngine)
+    10. `ALLOW_MAINNET_TRADE=1` (env var)
+    11. Cooldown elapsed since last action
+    12. Symbol in whitelist
+    13. grinder_ prefix for cancel (protects manual orders)
+    14. Notional <= cap for flatten (limits exposure)
+  - **Budget Tracking (LC-18):** (`src/grinder/reconcile/budget.py`)
+    - `BudgetState`: Tracks calls/notional today + this run
+    - `BudgetTracker`: Enforces limits, daily reset at midnight UTC
+    - JSON persistence (optional): `budget_state_path` config field
   - **Kill-switch semantics:** Remediation ALLOWED (reduces risk)
-  - **Default behavior:** dry-run only (plans but doesn't execute)
+  - **Default behavior:** DETECT_ONLY mode (no planning, no execution)
   - **New types:**
-    - `RemediationBlockReason`: Enum (13 values for why blocked)
+    - `RemediationMode`: Enum (5 modes for staged rollout)
+    - `RemediationBlockReason`: Enum (26 values for why blocked)
     - `RemediationStatus`: Enum (PLANNED, EXECUTED, BLOCKED, FAILED)
     - `RemediationResult`: Frozen dataclass for remediation outcome
     - `RemediationExecutor`: Class with `can_execute()`, `remediate_cancel()`, `remediate_flatten()`
+    - `BudgetState`, `BudgetTracker`: Budget enforcement (LC-18)
   - **New metrics:**
     - `grinder_reconcile_action_planned_total{action}`: Dry-run plans
     - `grinder_reconcile_action_executed_total{action}`: Real executions
     - `grinder_reconcile_action_blocked_total{reason}`: Blocked actions
+    - `grinder_reconcile_budget_calls_used_day`: Daily call count
+    - `grinder_reconcile_budget_notional_used_day`: Daily notional USDT
+    - `grinder_reconcile_budget_calls_remaining_day`: Remaining daily calls
+    - `grinder_reconcile_budget_notional_remaining_day`: Remaining daily notional
   - **How to verify:**
     ```bash
     PYTHONPATH=src pytest tests/unit/test_remediation.py -v
     ```
-  - **Unit tests:** `tests/unit/test_remediation.py` (28 tests)
-  - **Limitations (v0.1):**
+  - **Unit tests:** `tests/unit/test_remediation.py` (41 tests)
+  - **Limitations (v0.2):**
     - Not integrated with LiveEngineV0 event loop
     - No HA leader election for remediation
     - No automatic strategy recovery
-  - See ADR-043 for design decisions
+  - See ADR-043 (LC-10) and ADR-052 (LC-18) for design decisions
 - **Remediation Wiring v0.1** (`src/grinder/reconcile/runner.py`):
   - Orchestrates: ReconcileEngine → ReconcileRunner → RemediationExecutor (LC-11)
   - **ReconcileRunner:**

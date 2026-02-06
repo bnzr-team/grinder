@@ -2,6 +2,7 @@
 
 See ADR-042 for design decisions.
 See ADR-043 for active remediation design.
+See ADR-046 for remediation safety extensions (LC-18).
 """
 
 from __future__ import annotations
@@ -21,6 +22,27 @@ class RemediationAction(Enum):
     NONE = "none"  # No action (default, passive mode)
     CANCEL_ALL = "cancel_all"  # Cancel unexpected grinder_ orders
     FLATTEN = "flatten"  # Close unexpected positions
+
+
+class RemediationMode(Enum):
+    """Remediation mode for staged rollout (LC-18).
+
+    These values control what remediation can do at each stage:
+    - DETECT_ONLY: Detect mismatches, no remediation planning (0 calls)
+    - PLAN_ONLY: Plan remediation, increment planned metrics (0 calls)
+    - BLOCKED: Plan + block by gates, increment blocked metrics (0 calls)
+    - EXECUTE_CANCEL_ALL: Execute only cancel_all actions (whitelist required)
+    - EXECUTE_FLATTEN: Execute flatten actions (notional cap enforced)
+
+    These values are STABLE and used in config/env vars.
+    DO NOT rename or remove values without migration.
+    """
+
+    DETECT_ONLY = "detect_only"
+    PLAN_ONLY = "plan_only"
+    BLOCKED = "blocked"
+    EXECUTE_CANCEL_ALL = "execute_cancel_all"
+    EXECUTE_FLATTEN = "execute_flatten"
 
 
 @dataclass
@@ -46,6 +68,17 @@ class ReconcileConfig:
         cooldown_seconds: Min time between real actions (default: 60)
         max_flatten_notional_usdt: Max position notional for flatten (default: 500)
         require_whitelist: Require non-empty symbol whitelist (default: True)
+
+    Remediation Safety Extensions (LC-18):
+        remediation_mode: Staged rollout mode (default: DETECT_ONLY)
+        remediation_strategy_allowlist: Allowed strategy IDs for remediation
+        remediation_symbol_allowlist: Allowed symbols for remediation (optional)
+        max_calls_per_day: Max remediation calls per calendar day (default: 100)
+        max_notional_per_day: Max notional USDT per calendar day (default: 5000)
+        max_calls_per_run: Max remediation calls per reconcile run (default: 10)
+        max_notional_per_run: Max notional USDT per reconcile run (default: 1000)
+        flatten_max_notional_per_call: Max notional for a single flatten (default: 500)
+        budget_state_path: Path to persist daily budget state (default: None = in-memory)
     """
 
     # Passive reconciliation (LC-09b)
@@ -67,3 +100,14 @@ class ReconcileConfig:
     cooldown_seconds: int = 60
     max_flatten_notional_usdt: Decimal = field(default_factory=lambda: Decimal("500"))
     require_whitelist: bool = True
+
+    # Remediation safety extensions (LC-18)
+    remediation_mode: RemediationMode = RemediationMode.DETECT_ONLY
+    remediation_strategy_allowlist: set[str] = field(default_factory=set)
+    remediation_symbol_allowlist: set[str] = field(default_factory=set)
+    max_calls_per_day: int = 100
+    max_notional_per_day: Decimal = field(default_factory=lambda: Decimal("5000"))
+    max_calls_per_run: int = 10
+    max_notional_per_run: Decimal = field(default_factory=lambda: Decimal("1000"))
+    flatten_max_notional_per_call: Decimal = field(default_factory=lambda: Decimal("500"))
+    budget_state_path: str | None = None
