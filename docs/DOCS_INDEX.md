@@ -112,6 +112,9 @@ Where to find information:
 - `scripts/smoke_live_reconcile_loop_real_sources.py` — ReconcileLoop real sources smoke test (LC-14b)
 - `scripts/smoke_enablement_ceremony.py` — Enablement ceremony smoke test (LC-15a)
 - `scripts/smoke_real_sources_detect_only.py` — Credentialed real-source smoke test (LC-17)
+- `scripts/smoke_metrics_contract.py` — Metrics contract validation smoke (LC-16)
+- `monitoring/grafana/dashboards/grinder_overview.json` — Grafana dashboard: Overview (LC-16)
+- `monitoring/grafana/dashboards/grinder_reconcile.json` — Grafana dashboard: Reconcile & Remediation (LC-16)
 
 ---
 

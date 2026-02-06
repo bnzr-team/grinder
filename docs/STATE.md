@@ -858,6 +858,25 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
         --duration 60 --audit-out /tmp/audit.jsonl
     ```
 
+- **Observability Hardening v0.1** (LC-16):
+  - Production-grade observability with automated validation
+  - **Grafana Dashboards:**
+    - `monitoring/grafana/dashboards/grinder_overview.json` — System health, HA, gating, risk
+    - `monitoring/grafana/dashboards/grinder_reconcile.json` — Reconcile loop, mismatches, remediation
+  - **Promtool CI:** Alert rules validated in `.github/workflows/promtool.yml`
+  - **Metrics Contract Smoke:** `scripts/smoke_metrics_contract.py`
+    - Validates /metrics against `REQUIRED_METRICS_PATTERNS` (60+ patterns)
+    - Checks for `FORBIDDEN_METRIC_LABELS` (high-cardinality labels)
+    - Exit codes: 0=valid, 1=validation failed, 2=connection error
+  - **Usage:**
+    ```bash
+    # Validate against live service
+    python scripts/smoke_metrics_contract.py --url http://localhost:9090/metrics
+
+    # Validate from file
+    python scripts/smoke_metrics_contract.py --file /tmp/metrics.txt -v
+    ```
+
 - **Live Smoke Harness** (`scripts/smoke_live_testnet.py`):
   - Smoke test harness for Binance (testnet or mainnet): place micro order → cancel (LC-07, LC-08b)
   - **Safe-by-construction guards:**
