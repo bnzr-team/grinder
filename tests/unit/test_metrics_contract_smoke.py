@@ -45,9 +45,7 @@ class TestPatternValidation:
         assert unique_pattern in REQUIRED_METRICS_PATTERNS
 
         # Build metrics text without this unique pattern
-        patterns_except_unique = [
-            p for p in REQUIRED_METRICS_PATTERNS if p != unique_pattern
-        ]
+        patterns_except_unique = [p for p in REQUIRED_METRICS_PATTERNS if p != unique_pattern]
         metrics_text = "\n".join(patterns_except_unique)
 
         missing, found = validate_patterns(metrics_text)
