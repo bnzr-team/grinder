@@ -818,6 +818,7 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - Reconcile metrics added to `REQUIRED_METRICS_PATTERNS` in `live_contract.py`
     - MetricsBuilder includes reconcile metrics via `_build_reconcile_metrics()`
     - Contract tests in `tests/unit/test_live_contracts.py::TestReconcileMetricsContract`
+    - **Scope:** LC-15b added **26 reconcile-specific patterns** (subset of 71 total patterns in contract)
   - **Prometheus alert rules (`monitoring/alert_rules.yml`):**
     - `ReconcileLoopDown`: warning — Loop not running when expected
     - `ReconcileSnapshotStale`: warning — Snapshot age > 120s
@@ -826,6 +827,7 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - `ReconcileRemediationPlanned`: info — Dry-run action planned
     - `ReconcileRemediationBlocked`: info — Action blocked by gates
     - `ReconcileMismatchNoBlocks`: warning — Mismatches but no remediation
+    - **Scope:** LC-15b added **7 reconcile alerts** in `grinder_reconcile` group (subset of 16 total alerts)
   - **Service Level Objectives:**
     - Loop Availability: 99.9% (runs_total > 0 per 5-min window)
     - Snapshot Freshness: 99% (age < 120s)
