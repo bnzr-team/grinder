@@ -19,6 +19,7 @@ Operational runbooks for GRINDER trading system.
 | [11_RECONCILIATION_TRIAGE](11_RECONCILIATION_TRIAGE.md) | Reconciliation mismatch triage (LC-09b) |
 | [12_ACTIVE_REMEDIATION](12_ACTIVE_REMEDIATION.md) | Active remediation operations (LC-10) |
 | [13_OPERATOR_CEREMONY](13_OPERATOR_CEREMONY.md) | Operator ceremony for safe enablement (LC-11) |
+| [14_RECONCILE_E2E_SMOKE](14_RECONCILE_E2E_SMOKE.md) | E2E reconcile→remediate smoke test (LC-13) |
 
 ## Quick Reference
 

@@ -67,7 +67,7 @@ Where to find information:
 - `src/grinder/connectors/binance_ws.py` — BinanceWsConnector (bookTicker stream)
 - `src/grinder/connectors/binance_user_data_ws.py` — FuturesUserDataWsConnector (user-data stream)
 - `src/grinder/execution/futures_events.py` — FuturesOrderEvent, FuturesPositionEvent, UserDataEvent
-- `src/grinder/reconcile/` — Reconciliation module (LC-09b, LC-10, LC-11)
+- `src/grinder/reconcile/` — Reconciliation module (LC-09b, LC-10, LC-11, LC-12, LC-13)
   - `types.py` — ExpectedOrder, ObservedOrder, Mismatch, MismatchType
   - `expected_state.py` — ExpectedStateStore (ring buffer + TTL)
   - `observed_state.py` — ObservedStateStore (stream + REST)
@@ -77,7 +77,9 @@ Where to find information:
   - `config.py` — ReconcileConfig, RemediationAction
   - `remediation.py` — RemediationExecutor (active remediation, LC-10)
   - `runner.py` — ReconcileRunner (wiring + routing policy, LC-11)
-- See: `docs/STATE.md` §Live Trading, `docs/DECISIONS.md` ADR-036/ADR-037/ADR-041/ADR-042/ADR-043/ADR-044
+  - `identity.py` — OrderIdentityConfig, generate/parse client_order_id (LC-12)
+  - `audit.py` — AuditWriter, AuditEvent (JSONL audit trail, LC-11b)
+- See: `docs/STATE.md` §Live Trading, `docs/DECISIONS.md` ADR-036/ADR-037/ADR-041-047
 
 ---
 
@@ -98,8 +100,10 @@ Where to find information:
   - `11_RECONCILIATION_TRIAGE.md` — Reconciliation mismatch triage (LC-09b)
   - `12_ACTIVE_REMEDIATION.md` — Active remediation operations (LC-10)
   - `13_OPERATOR_CEREMONY.md` — Operator ceremony for safe enablement (LC-11)
+  - `14_RECONCILE_E2E_SMOKE.md` — E2E reconcile→remediate smoke test (LC-13)
 - `scripts/smoke_live_testnet.py` — Spot smoke test script (testnet/mainnet)
 - `scripts/smoke_futures_mainnet.py` — Futures USDT-M smoke test script (mainnet)
+- `scripts/smoke_reconcile_e2e.py` — E2E reconcile→remediate smoke harness (LC-13)
 
 ---
 
