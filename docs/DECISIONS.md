@@ -2396,3 +2396,61 @@
   - WS user-data stream integration (FuturesUserDataWsConnector wiring)
   - REST snapshot fallback (SnapshotClient wiring to ObservedStateStore)
   - WebSocket price streaming (using REST for simplicity)
+
+## ADR-050 — Operator Ceremony: Staged Enablement + Rollback (LC-15a)
+
+- **Date:** 2026-02-06
+- **Status:** accepted
+- **Context:** ReconcileLoop with remediation is production-ready but enabling it requires careful staged rollout. Operators need:
+  1. Clear step-by-step procedure with verification at each stage
+  2. Explicit rollback steps that work immediately
+  3. Documented failure modes and expected behavior
+  4. Proof that each stage doesn't execute until explicitly enabled
+
+- **Decision:**
+
+  - **5-stage enablement ceremony:**
+    | Stage | Name | Execution | Verification |
+    |-------|------|-----------|--------------|
+    | 0 | Baseline | Disabled | Loop not running |
+    | 1 | Detect-only | None | Port calls = 0, runs increasing |
+    | 2 | Plan-only | Planned | action_planned > 0, executed = 0 |
+    | 3 | Blocked | Blocked | action_blocked > 0 with reason |
+    | 4 | Live | Executed | action_executed > 0 when mismatch |
+
+  - **Each stage has explicit pass criteria** before proceeding:
+    - Minimum runtime (10 minutes for stages 1-2)
+    - Metrics verification
+    - Log/audit verification
+    - Zero unexpected execution calls
+
+  - **Rollback is single-command:**
+    ```bash
+    # Any of these stops execution immediately:
+    export RECONCILE_ENABLED=0    # Disable loop entirely
+    export RECONCILE_ACTION=none  # Disable remediation
+    export ARMED=0                # Block at armed gate
+    ```
+
+  - **Kill-switch semantics:** Remediation ALLOWED under kill-switch (ADR-043):
+    - Cancel/flatten reduce risk
+    - New trades blocked, cleanup allowed
+    - Documented in ceremony runbook
+
+  - **Smoke script for ceremony:** `scripts/smoke_enablement_ceremony.py`
+    - Runs mini-stages A/B/C/D locally
+    - Default: 0 execution calls
+    - Verifies stage transitions work correctly
+    - Optional `--inject-mismatch` for testing
+
+- **Consequences:**
+  - Operators have reproducible, auditable enablement procedure
+  - Each stage can be verified before proceeding
+  - Rollback is instant and reliable
+  - Smoke script proves ceremony works without live execution
+
+- **Related:**
+  - Runbook: `docs/runbooks/15_ENABLEMENT_CEREMONY.md`
+  - ADR-048: ReconcileLoop Wiring
+  - ADR-049: Real Sources Wiring
+  - ADR-043: Active Remediation (kill-switch semantics)
