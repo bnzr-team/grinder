@@ -833,6 +833,31 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - **Runbook:** `docs/runbooks/16_RECONCILE_ALERTS_SLOS.md`
   - See ADR-051 for design decisions
 
+- **Credentialed Real-Source Smoke v0.1** (LC-17):
+  - Smoke test with real Binance Futures USDT-M credentials (detect-only)
+  - **Script:** `scripts/smoke_real_sources_detect_only.py`
+  - **Sources tested:**
+    - REST snapshot (orders/positions via SnapshotClient)
+    - Price getter (BTCUSDT price fetch)
+    - User-data WS (listenKey establishment)
+  - **Safety guarantees:**
+    - Uses FakePort (no real order execution ever)
+    - `detect_only=True` enforced at ReconcileLoopConfig
+    - `action=NONE` enforced at ReconcileConfig
+    - `armed=False` enforced at RemediationExecutor
+  - **Audit JSONL output:** `--audit-out` flag for artifact generation
+  - **Exit codes:** 0=success, 1=detect-only violation, 2=config error, 3=connection error
+  - **Usage:**
+    ```bash
+    # Dry-run (no credentials)
+    PYTHONPATH=src python3 -m scripts.smoke_real_sources_detect_only --dry-run
+
+    # With mainnet credentials
+    BINANCE_API_KEY=xxx BINANCE_SECRET=xxx \
+    PYTHONPATH=src python3 -m scripts.smoke_real_sources_detect_only \
+        --duration 60 --audit-out /tmp/audit.jsonl
+    ```
+
 - **Live Smoke Harness** (`scripts/smoke_live_testnet.py`):
   - Smoke test harness for Binance (testnet or mainnet): place micro order → cancel (LC-07, LC-08b)
   - **Safe-by-construction guards:**
