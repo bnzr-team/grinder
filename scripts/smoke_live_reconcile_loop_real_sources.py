@@ -271,6 +271,7 @@ async def test_ws_connection(
     """Test WS user-data connection (brief)."""
     from grinder.connectors.binance_user_data_ws import (  # noqa: PLC0415
         FuturesUserDataWsConnector,
+        ListenKeyConfig,
         ListenKeyManager,
         UserDataWsConfig,
     )
@@ -282,18 +283,21 @@ async def test_ws_connection(
 
     try:
         base_url = "https://testnet.binancefuture.com" if testnet else "https://fapi.binance.com"
-        # Both testnet and mainnet use the same WS URL
-        ws_url = "wss://stream.binancefuture.com"
 
         config = UserDataWsConfig(
             base_url=base_url,
-            ws_base_url=ws_url,
             api_key=api_key,
-            api_secret=api_secret,
+            use_testnet=testnet,
+        )
+
+        # ListenKeyManager needs ListenKeyConfig
+        listen_key_config = ListenKeyConfig(
+            base_url=base_url,
+            api_key=api_key,
         )
 
         http_client = RequestsHttpClient()
-        listen_key_manager = ListenKeyManager(http_client, config)
+        listen_key_manager = ListenKeyManager(http_client, listen_key_config)
 
         connector = FuturesUserDataWsConnector(
             config=config,
