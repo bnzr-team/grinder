@@ -81,7 +81,7 @@ Where to find information:
   - `audit.py` — AuditWriter, AuditEvent (JSONL audit trail, LC-11b)
   - `price_getter.py` — PriceGetter (REST price fetch, LC-14b)
 - `src/grinder/live/reconcile_loop.py` — ReconcileLoop for periodic reconciliation (LC-14a, LC-14b)
-- See: `docs/STATE.md` §Live Trading, `docs/DECISIONS.md` ADR-036/ADR-037/ADR-041-049
+- See: `docs/STATE.md` §Live Trading, `docs/DECISIONS.md` ADR-036/ADR-037/ADR-041-050
 
 ---
 
@@ -103,11 +103,13 @@ Where to find information:
   - `12_ACTIVE_REMEDIATION.md` — Active remediation operations (LC-10)
   - `13_OPERATOR_CEREMONY.md` — Operator ceremony for safe enablement (LC-11)
   - `14_RECONCILE_E2E_SMOKE.md` — E2E reconcile→remediate smoke test (LC-13)
+  - `15_ENABLEMENT_CEREMONY.md` — Staged enablement ceremony for ReconcileLoop (LC-15a)
 - `scripts/smoke_live_testnet.py` — Spot smoke test script (testnet/mainnet)
 - `scripts/smoke_futures_mainnet.py` — Futures USDT-M smoke test script (mainnet)
 - `scripts/smoke_reconcile_e2e.py` — E2E reconcile→remediate smoke harness (LC-13)
 - `scripts/smoke_live_reconcile_loop.py` — ReconcileLoop wiring smoke test (LC-14a)
 - `scripts/smoke_live_reconcile_loop_real_sources.py` — ReconcileLoop real sources smoke test (LC-14b)
+- `scripts/smoke_enablement_ceremony.py` — Enablement ceremony smoke test (LC-15a)
 
 ---
 

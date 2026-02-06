@@ -804,6 +804,14 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - Returns `Decimal | None` for safe handling
   - **Endpoint:** `GET /fapi/v1/ticker/price`
   - See ADR-049 for design decisions
+- **Enablement Ceremony v0.1** (LC-15a):
+  - 5-stage procedure for safe ReconcileLoop enablement in production
+  - **Stages:** Baseline → Detect-only → Plan-only → Blocked → Live
+  - Each stage has explicit pass criteria and rollback steps
+  - **Runbook:** `docs/runbooks/15_ENABLEMENT_CEREMONY.md`
+  - **Smoke script:** `scripts/smoke_enablement_ceremony.py`
+  - **Rollback:** Single command (`RECONCILE_ENABLED=0` or `RECONCILE_ACTION=none`)
+  - See ADR-050 for design decisions
 
 - **Live Smoke Harness** (`scripts/smoke_live_testnet.py`):
   - Smoke test harness for Binance (testnet or mainnet): place micro order → cancel (LC-07, LC-08b)
