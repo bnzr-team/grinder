@@ -2140,3 +2140,91 @@
   - Centralized storage (S3, Loki)
   - Encryption/signing of audit files
   - Audit metrics (planned for P1)
+
+## ADR-047 — E2E Reconcile→Remediate Smoke Harness (LC-13)
+
+- **Date:** 2026-02-06
+- **Status:** accepted
+- **Context:** Active remediation (LC-10/LC-11) has 9 safety gates but no end-to-end test that exercises the full `detect → route → remediate` flow in a controlled environment. Unit tests validate individual components; we need a higher-level smoke test that:
+  1. Validates the complete flow without real HTTP/WS calls
+  2. Confirms dry-run mode produces zero port calls
+  3. Ensures live mode is protected by 5 explicit gates
+  4. Verifies audit integration when enabled
+
+- **Decision:**
+  - **New script:** `scripts/smoke_reconcile_e2e.py` — E2E smoke harness for reconciliation + remediation
+
+  - **FakePort pattern:** Duck-typed port that records calls without executing:
+    ```python
+    @dataclass
+    class FakePort:
+        calls: list[dict[str, Any]] = field(default_factory=list)
+
+        def cancel_order(self, symbol: str, client_order_id: str) -> dict:
+            self.calls.append({"action": "cancel_order", ...})
+            return {"status": "CANCELED", ...}
+
+        def market_order(self, symbol: str, side: str, quantity: Decimal) -> dict:
+            self.calls.append({"action": "market_order", ...})
+            return {"status": "FILLED", ...}
+    ```
+
+  - **3 P0 scenarios:**
+    - `order`: Unexpected order → CANCEL → validates cancel routing
+    - `position`: Unexpected position → FLATTEN → validates flatten routing
+    - `mixed`: Both mismatches → priority routing (order wins with CANCEL_ALL action)
+
+  - **Default mode: DRY-RUN**
+    - Zero port calls in dry-run mode
+    - Plans recorded via `planned_count`
+    - Safe to run without any env vars
+
+  - **Live mode gating (5 gates):**
+    - `--confirm LIVE_REMEDIATE` — explicit CLI flag
+    - `RECONCILE_DRY_RUN=0` — config override
+    - `RECONCILE_ALLOW_ACTIVE=1` — allow active remediation
+    - `ARMED=1` — executor armed
+    - `ALLOW_MAINNET_TRADE=1` — mainnet trade env var
+
+    All 5 must pass; any failure blocks live mode with explicit error message.
+
+  - **Audit integration:**
+    - When `GRINDER_AUDIT_ENABLED=1`, writes RECONCILE_RUN events to audit file
+    - Default path: `audit/reconcile.jsonl`
+    - Events include mismatch counts, action, mode, symbols
+
+  - **Output format:** Clear tabular output for each scenario:
+    ```
+    --- Scenario: order [PASS] ---
+      Mismatches detected:  1
+      Expected action:      cancel
+      Actual action:        cancel
+      Port calls:           0
+      Planned count:        1
+      Executed count:       0
+    ```
+
+- **Usage:**
+  ```bash
+  # Dry-run (safe, default)
+  PYTHONPATH=src python3 -m scripts.smoke_reconcile_e2e
+
+  # With audit enabled
+  GRINDER_AUDIT_ENABLED=1 PYTHONPATH=src python3 -m scripts.smoke_reconcile_e2e
+
+  # Live mode (requires all 5 gates)
+  RECONCILE_DRY_RUN=0 RECONCILE_ALLOW_ACTIVE=1 ARMED=1 ALLOW_MAINNET_TRADE=1 \
+    PYTHONPATH=src python3 -m scripts.smoke_reconcile_e2e --confirm LIVE_REMEDIATE
+  ```
+
+- **Consequences:**
+  - E2E validation of reconcile→remediate flow without real exchange calls
+  - Dry-run safety verified (zero port calls assertion)
+  - Live mode protected by explicit 5-gate ceremony
+  - Audit integration validated in harness
+
+- **Out of Scope (v0.1):**
+  - Real mainnet execution in smoke test
+  - COIN-M futures support
+  - Concurrent scenario execution
+  - Performance benchmarking

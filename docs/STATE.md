@@ -742,6 +742,31 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     ```
   - **Unit tests:** `tests/unit/test_audit.py` (33 tests)
   - See ADR-046 for design decisions
+- **E2E Reconcile Smoke Harness** (`scripts/smoke_reconcile_e2e.py`):
+  - End-to-end smoke test for reconcile→remediate flow (LC-13)
+  - **3 P0 scenarios:**
+    - `order`: Unexpected order → CANCEL → validates cancel routing
+    - `position`: Unexpected position → FLATTEN → validates flatten routing
+    - `mixed`: Both mismatches → priority routing (order wins)
+  - **Default: DRY-RUN mode**
+    - Zero port calls in dry-run
+    - Safe to run without credentials or env vars
+  - **Live mode gates (all 5 required):**
+    - `--confirm LIVE_REMEDIATE` CLI flag
+    - `RECONCILE_DRY_RUN=0` env var
+    - `RECONCILE_ALLOW_ACTIVE=1` env var
+    - `ARMED=1` env var
+    - `ALLOW_MAINNET_TRADE=1` env var
+  - **Audit integration:** Writes RECONCILE_RUN events when `GRINDER_AUDIT_ENABLED=1`
+  - **How to run:**
+    ```bash
+    # Dry-run (default, safe)
+    PYTHONPATH=src python3 -m scripts.smoke_reconcile_e2e
+
+    # With audit
+    GRINDER_AUDIT_ENABLED=1 PYTHONPATH=src python3 -m scripts.smoke_reconcile_e2e
+    ```
+  - See ADR-047 for design decisions
 - **Live Smoke Harness** (`scripts/smoke_live_testnet.py`):
   - Smoke test harness for Binance (testnet or mainnet): place micro order → cancel (LC-07, LC-08b)
   - **Safe-by-construction guards:**
