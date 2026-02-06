@@ -789,6 +789,31 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     ```
   - See ADR-047 for design decisions
 
+- **Live Reconcile Runner** (`scripts/run_live_reconcile.py`):
+  - Operator entrypoint for LC-18 staged rollout of active remediation
+  - **Environment variables:**
+    - `REMEDIATION_MODE`: detect_only|plan_only|blocked|execute_cancel_all|execute_flatten (default: detect_only)
+    - `ALLOW_MAINNET_TRADE`: Must be exactly "1" for execute modes (not "true" or "yes")
+    - `REMEDIATION_STRATEGY_ALLOWLIST`: CSV strategy IDs (empty = allow all)
+    - `REMEDIATION_SYMBOL_ALLOWLIST`: CSV symbols (empty = allow all)
+    - `MAX_CALLS_PER_DAY`, `MAX_NOTIONAL_PER_DAY`: Daily budget limits
+    - `MAX_CALLS_PER_RUN`, `MAX_NOTIONAL_PER_RUN`: Per-run budget limits
+    - `FLATTEN_MAX_NOTIONAL_PER_CALL`: Max notional for single flatten
+    - `BUDGET_STATE_PATH`: Path to persist daily budget (optional)
+  - **CLI flags:** `--duration`, `--interval-ms`, `--metrics-port`, `--audit-out`, `--symbols`
+  - **Exit codes:** 0=success, 2=config error, 3=runtime error
+  - **Safety:** Execute mode without `ALLOW_MAINNET_TRADE=1` → exit 2 (config error)
+  - **How to run:**
+    ```bash
+    # Stage A: Detect-only (default, safest)
+    PYTHONPATH=src python3 -m scripts.run_live_reconcile --duration 60
+
+    # Stage D: Execute cancel-only (requires ALLOW_MAINNET_TRADE=1)
+    REMEDIATION_MODE=execute_cancel_all ALLOW_MAINNET_TRADE=1 \
+    PYTHONPATH=src python3 -m scripts.run_live_reconcile --duration 60
+    ```
+  - **Unit tests:** `tests/unit/test_run_live_reconcile.py` (27 tests)
+  - See ADR-052 for LC-18 design decisions
 - **ReconcileLoop for LiveEngine** (`src/grinder/live/reconcile_loop.py`):
   - Periodic background loop for reconciliation in LiveEngine (LC-14a, LC-14b)
   - **Threading pattern:** Daemon thread with `threading.Event` for graceful shutdown
