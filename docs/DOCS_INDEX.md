@@ -111,6 +111,7 @@ Where to find information:
 - `scripts/smoke_live_reconcile_loop.py` — ReconcileLoop wiring smoke test (LC-14a)
 - `scripts/smoke_live_reconcile_loop_real_sources.py` — ReconcileLoop real sources smoke test (LC-14b)
 - `scripts/smoke_enablement_ceremony.py` — Enablement ceremony smoke test (LC-15a)
+- `scripts/smoke_real_sources_detect_only.py` — Credentialed real-source smoke test (LC-17)
 
 ---
 
