@@ -9,11 +9,9 @@ Provides:
 - RiskMetricsState: State container for risk metrics (kill-switch, drawdown)
 """
 
+# Contract patterns from SSOT module (no transitive deps like redis)
+# Runtime functions need HA/redis - lazy import or use directly from live_contract
 from grinder.observability.live_contract import (
-    FORBIDDEN_METRIC_LABELS,
-    REQUIRED_HEALTHZ_KEYS,
-    REQUIRED_METRICS_PATTERNS,
-    REQUIRED_READYZ_KEYS,
     build_healthz_body,
     build_metrics_body,
     build_readyz_body,
@@ -28,6 +26,12 @@ from grinder.observability.metrics_builder import (
     get_risk_metrics_state,
     reset_risk_metrics_state,
     set_risk_metrics_state,
+)
+from grinder.observability.metrics_contract import (
+    FORBIDDEN_METRIC_LABELS,
+    REQUIRED_HEALTHZ_KEYS,
+    REQUIRED_METRICS_PATTERNS,
+    REQUIRED_READYZ_KEYS,
 )
 
 __all__ = [
