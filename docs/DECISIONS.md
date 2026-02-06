@@ -2454,3 +2454,62 @@
   - ADR-048: ReconcileLoop Wiring
   - ADR-049: Real Sources Wiring
   - ADR-043: Active Remediation (kill-switch semantics)
+
+## ADR-051 — Reconcile Alerts, Metrics Contract, and SLOs (LC-15b)
+
+- **Date:** 2026-02-06
+- **Status:** accepted
+- **Context:** ReconcileLoop and remediation are production-ready but lack observability primitives:
+  1. Metrics are exported but not integrated into `/metrics` endpoint contract
+  2. No Prometheus alert rules for reconcile-specific failure modes
+  3. No defined SLOs for loop availability, snapshot freshness, execution budget
+
+- **Decision:**
+
+  - **Metrics contract integration:**
+    - Added reconcile metrics to `REQUIRED_METRICS_PATTERNS` in `live_contract.py`
+    - MetricsBuilder now includes reconcile metrics via `_build_reconcile_metrics()`
+    - Contract tests verify all reconcile metrics are present with correct labels
+    ```python
+    # Series-level patterns (enforce label schema)
+    'grinder_reconcile_mismatch_total{type=',
+    'grinder_reconcile_action_planned_total{action=',
+    'grinder_reconcile_action_executed_total{action=',
+    'grinder_reconcile_runs_with_remediation_total{action=',
+    ```
+
+  - **Prometheus alert rules (`monitoring/alert_rules.yml`):**
+    | Alert | Severity | Condition |
+    |-------|----------|-----------|
+    | ReconcileLoopDown | warning | No runs for 5 min while grinder_up=1 |
+    | ReconcileSnapshotStale | warning | last_snapshot_age > 120s for 2 min |
+    | ReconcileMismatchSpike | warning | Mismatch rate > 0.1/sec for 3 min |
+    | ReconcileRemediationExecuted | critical | Any real execution (increase > 0) |
+    | ReconcileRemediationPlanned | info | Dry-run action planned |
+    | ReconcileRemediationBlocked | info | Action blocked by gates |
+    | ReconcileMismatchNoBlocks | warning | Mismatches but no remediation |
+
+  - **Service Level Objectives:**
+    | SLO | Target | Metric |
+    |-----|--------|--------|
+    | Loop Availability | 99.9% | runs_total > 0 per 5-min window |
+    | Snapshot Freshness | 99% | age < 120s |
+    | Execution Budget | < 10/day | action_executed_total daily increase |
+
+  - **Runbook:** `docs/runbooks/16_RECONCILE_ALERTS_SLOS.md`
+    - Triage procedures for each alert
+    - Grafana dashboard queries
+    - Emergency rollback steps
+    - SLO burn rate monitoring
+
+- **Consequences:**
+  - Reconcile metrics are now part of the enforced `/metrics` contract
+  - Prometheus alerts catch reconcile-specific failure modes
+  - SLOs enable data-driven operational decisions
+  - Operators have clear triage procedures for each alert
+
+- **Related:**
+  - ADR-048: ReconcileLoop Wiring
+  - ADR-049: Real Sources Wiring
+  - ADR-050: Operator Ceremony
+  - Runbook: `docs/runbooks/16_RECONCILE_ALERTS_SLOS.md`

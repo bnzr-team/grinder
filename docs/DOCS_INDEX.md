@@ -104,6 +104,7 @@ Where to find information:
   - `13_OPERATOR_CEREMONY.md` — Operator ceremony for safe enablement (LC-11)
   - `14_RECONCILE_E2E_SMOKE.md` — E2E reconcile→remediate smoke test (LC-13)
   - `15_ENABLEMENT_CEREMONY.md` — Staged enablement ceremony for ReconcileLoop (LC-15a)
+  - `16_RECONCILE_ALERTS_SLOS.md` — Reconcile alerts, SLOs, and triage (LC-15b)
 - `scripts/smoke_live_testnet.py` — Spot smoke test script (testnet/mainnet)
 - `scripts/smoke_futures_mainnet.py` — Futures USDT-M smoke test script (mainnet)
 - `scripts/smoke_reconcile_e2e.py` — E2E reconcile→remediate smoke harness (LC-13)

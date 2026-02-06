@@ -17,6 +17,7 @@ from decimal import Decimal
 from grinder.connectors.metrics import get_connector_metrics
 from grinder.gating import get_gating_metrics
 from grinder.ha.role import HARole, get_ha_state
+from grinder.reconcile.metrics import get_reconcile_metrics
 
 
 @dataclass
@@ -87,6 +88,9 @@ class MetricsBuilder:
 
         # Connector metrics (H2/H3/H4)
         lines.extend(self._build_connector_metrics())
+
+        # Reconcile metrics (LC-09b/LC-10/LC-11/LC-15b)
+        lines.extend(self._build_reconcile_metrics())
 
         return "\n".join(lines)
 
@@ -175,6 +179,11 @@ class MetricsBuilder:
         """Build connector metrics (H2 retries, H3 idempotency, H4 circuit breaker)."""
         connector_metrics = get_connector_metrics()
         return connector_metrics.to_prometheus_lines()
+
+    def _build_reconcile_metrics(self) -> list[str]:
+        """Build reconcile metrics (LC-09b/LC-10/LC-11/LC-15b)."""
+        reconcile_metrics = get_reconcile_metrics()
+        return reconcile_metrics.to_prometheus_lines()
 
 
 class _BuilderHolder:
