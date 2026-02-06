@@ -2,7 +2,7 @@
 """LC-16: Observability Metrics Contract Smoke Test.
 
 Validates that /metrics output contains all required patterns from
-src/grinder/observability/live_contract.py:REQUIRED_METRICS_PATTERNS
+src/grinder/observability/metrics_contract.py:REQUIRED_METRICS_PATTERNS
 and does not contain any FORBIDDEN_METRIC_LABELS.
 
 Usage:
@@ -24,15 +24,21 @@ Exit codes:
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import sys
 from pathlib import Path
 
 import httpx
 
-from grinder.observability.live_contract import (
-    FORBIDDEN_METRIC_LABELS,
-    REQUIRED_METRICS_PATTERNS,
-)
+# Direct import of metrics_contract.py to avoid grinder.observability.__init__.py
+# which transitively imports redis via HA module
+_contract_path = Path(__file__).parent.parent / "src/grinder/observability/metrics_contract.py"
+_spec = importlib.util.spec_from_file_location("metrics_contract", _contract_path)
+assert _spec is not None and _spec.loader is not None
+_metrics_contract = importlib.util.module_from_spec(_spec)
+_spec.loader.exec_module(_metrics_contract)
+FORBIDDEN_METRIC_LABELS: list[str] = _metrics_contract.FORBIDDEN_METRIC_LABELS
+REQUIRED_METRICS_PATTERNS: list[str] = _metrics_contract.REQUIRED_METRICS_PATTERNS
 
 EXIT_SUCCESS = 0
 EXIT_VALIDATION_FAILED = 1
