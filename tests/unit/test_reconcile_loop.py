@@ -25,7 +25,29 @@ from grinder.live.reconcile_loop import (
     ReconcileLoopConfig,
     ReconcileLoopStats,
 )
+from grinder.reconcile.config import ReconcileConfig, RemediationAction
 from grinder.reconcile.runner import ReconcileRunReport
+
+
+def _make_mock_runner(
+    report: ReconcileRunReport | None = None,
+    action: RemediationAction = RemediationAction.NONE,
+    dry_run: bool = True,
+    allow_active: bool = False,
+) -> MagicMock:
+    """Create a mock runner with executor config for detect-only verification."""
+    mock_runner = MagicMock()
+    if report is not None:
+        mock_runner.run.return_value = report
+    # Set up executor.config for detect-only verification
+    mock_config = ReconcileConfig(
+        action=action,
+        dry_run=dry_run,
+        allow_active_remediation=allow_active,
+    )
+    mock_runner.executor.config = mock_config
+    return mock_runner
+
 
 # =============================================================================
 # Mock HA Role
@@ -98,7 +120,7 @@ class TestReconcileLoopLifecycle:
 
     def test_start_when_disabled_does_nothing(self) -> None:
         """Start when disabled doesn't start thread."""
-        mock_runner = MagicMock()
+        mock_runner = _make_mock_runner()
         config = ReconcileLoopConfig(enabled=False, interval_ms=1000)
         loop = ReconcileLoop(runner=mock_runner, config=config)
 
@@ -109,8 +131,7 @@ class TestReconcileLoopLifecycle:
 
     def test_start_stop_lifecycle(self) -> None:
         """Start/stop lifecycle works correctly."""
-        mock_runner = MagicMock()
-        mock_runner.run.return_value = self._make_report()
+        mock_runner = _make_mock_runner(report=self._make_report())
 
         config = ReconcileLoopConfig(
             enabled=True,
@@ -135,8 +156,7 @@ class TestReconcileLoopLifecycle:
 
     def test_start_idempotent(self) -> None:
         """Multiple start() calls are safe."""
-        mock_runner = MagicMock()
-        mock_runner.run.return_value = self._make_report()
+        mock_runner = _make_mock_runner(report=self._make_report())
 
         config = ReconcileLoopConfig(
             enabled=True,
@@ -156,7 +176,7 @@ class TestReconcileLoopLifecycle:
 
     def test_stop_idempotent(self) -> None:
         """Multiple stop() calls are safe."""
-        mock_runner = MagicMock()
+        mock_runner = _make_mock_runner()
         config = ReconcileLoopConfig(enabled=False, interval_ms=1000)
         loop = ReconcileLoop(runner=mock_runner, config=config)
 
@@ -192,7 +212,7 @@ class TestReconcileLoopStats:
 
     def test_stats_initial(self) -> None:
         """Initial stats are zero."""
-        mock_runner = MagicMock()
+        mock_runner = _make_mock_runner()
         config = ReconcileLoopConfig(enabled=False, interval_ms=1000)
         loop = ReconcileLoop(runner=mock_runner, config=config)
 
@@ -206,8 +226,7 @@ class TestReconcileLoopStats:
 
     def test_stats_after_runs(self) -> None:
         """Stats are updated after runs."""
-        mock_runner = MagicMock()
-        mock_runner.run.return_value = ReconcileRunReport(
+        report = ReconcileRunReport(
             ts_start=1000,
             ts_end=1010,
             mismatches_detected=0,
@@ -216,6 +235,7 @@ class TestReconcileLoopStats:
             skipped_terminal=0,
             skipped_no_action=0,
         )
+        mock_runner = _make_mock_runner(report=report)
 
         config = ReconcileLoopConfig(
             enabled=True,
@@ -238,8 +258,7 @@ class TestReconcileLoopStats:
 
     def test_stats_thread_safe(self) -> None:
         """Stats access is thread-safe."""
-        mock_runner = MagicMock()
-        mock_runner.run.return_value = ReconcileRunReport(
+        report = ReconcileRunReport(
             ts_start=1000,
             ts_end=1010,
             mismatches_detected=0,
@@ -248,6 +267,7 @@ class TestReconcileLoopStats:
             skipped_terminal=0,
             skipped_no_action=0,
         )
+        mock_runner = _make_mock_runner(report=report)
 
         config = ReconcileLoopConfig(
             enabled=True,
@@ -288,7 +308,7 @@ class TestReconcileLoopHAIntegration:
 
     def test_skip_when_not_active(self) -> None:
         """Skip reconciliation when not ACTIVE role."""
-        mock_runner = MagicMock()
+        mock_runner = _make_mock_runner()
 
         config = ReconcileLoopConfig(
             enabled=True,
@@ -315,8 +335,7 @@ class TestReconcileLoopHAIntegration:
 
     def test_run_when_active(self) -> None:
         """Run reconciliation when ACTIVE role."""
-        mock_runner = MagicMock()
-        mock_runner.run.return_value = ReconcileRunReport(
+        report = ReconcileRunReport(
             ts_start=1000,
             ts_end=1010,
             mismatches_detected=0,
@@ -325,6 +344,7 @@ class TestReconcileLoopHAIntegration:
             skipped_terminal=0,
             skipped_no_action=0,
         )
+        mock_runner = _make_mock_runner(report=report)
 
         config = ReconcileLoopConfig(
             enabled=True,
@@ -351,8 +371,7 @@ class TestReconcileLoopHAIntegration:
 
     def test_require_active_role_false_always_runs(self) -> None:
         """When require_active_role=False, always runs."""
-        mock_runner = MagicMock()
-        mock_runner.run.return_value = ReconcileRunReport(
+        report = ReconcileRunReport(
             ts_start=1000,
             ts_end=1010,
             mismatches_detected=0,
@@ -361,6 +380,7 @@ class TestReconcileLoopHAIntegration:
             skipped_terminal=0,
             skipped_no_action=0,
         )
+        mock_runner = _make_mock_runner(report=report)
 
         config = ReconcileLoopConfig(
             enabled=True,
@@ -394,8 +414,7 @@ class TestReconcileLoopDetectOnly:
 
     def test_detect_only_records_mismatches(self) -> None:
         """Detect-only mode records mismatches without execution."""
-        mock_runner = MagicMock()
-        mock_runner.run.return_value = ReconcileRunReport(
+        report = ReconcileRunReport(
             ts_start=1000,
             ts_end=1010,
             mismatches_detected=5,  # Some mismatches
@@ -404,6 +423,7 @@ class TestReconcileLoopDetectOnly:
             skipped_terminal=0,
             skipped_no_action=0,
         )
+        mock_runner = _make_mock_runner(report=report)
 
         config = ReconcileLoopConfig(
             enabled=True,
@@ -433,7 +453,7 @@ class TestReconcileLoopErrorHandling:
 
     def test_runner_exception_continues_loop(self) -> None:
         """Exception in runner doesn't stop the loop."""
-        mock_runner = MagicMock()
+        mock_runner = _make_mock_runner()
         mock_runner.run.side_effect = RuntimeError("Simulated error")
 
         config = ReconcileLoopConfig(
@@ -454,3 +474,148 @@ class TestReconcileLoopErrorHandling:
         assert stats.runs_with_error >= 1
         # Runner should have been called at least once
         assert mock_runner.run.call_count >= 1
+
+
+# =============================================================================
+# Detect-Only Enforcement Tests (LC-14b)
+# =============================================================================
+
+
+class TestReconcileLoopDetectOnlyEnforcement:
+    """Tests for detect_only hard enforcer (LC-14b).
+
+    When detect_only=True (default), the loop refuses to start if the runner
+    is configured to execute actions.
+    """
+
+    def test_detect_only_blocks_executor_with_cancel_all(self) -> None:
+        """detect_only=True blocks runner with action=CANCEL_ALL."""
+        mock_runner = _make_mock_runner(
+            action=RemediationAction.CANCEL_ALL,
+            dry_run=False,
+            allow_active=True,
+        )
+
+        config = ReconcileLoopConfig(
+            enabled=True,
+            interval_ms=1000,
+            detect_only=True,
+        )
+        loop = ReconcileLoop(runner=mock_runner, config=config)
+
+        with pytest.raises(RuntimeError, match="detect_only=True but runner can execute"):
+            loop.start()
+
+    def test_detect_only_blocks_executor_with_flatten(self) -> None:
+        """detect_only=True blocks runner with action=FLATTEN."""
+        mock_runner = _make_mock_runner(
+            action=RemediationAction.FLATTEN,
+            dry_run=False,
+            allow_active=True,
+        )
+
+        config = ReconcileLoopConfig(
+            enabled=True,
+            interval_ms=1000,
+            detect_only=True,
+        )
+        loop = ReconcileLoop(runner=mock_runner, config=config)
+
+        with pytest.raises(RuntimeError, match="detect_only=True but runner can execute"):
+            loop.start()
+
+    def test_detect_only_allows_action_none(self) -> None:
+        """detect_only=True allows runner with action=NONE."""
+        report = ReconcileRunReport(
+            ts_start=1000,
+            ts_end=1010,
+            mismatches_detected=0,
+            cancel_results=(),
+            flatten_results=(),
+            skipped_terminal=0,
+            skipped_no_action=0,
+        )
+        mock_runner = _make_mock_runner(
+            report=report,
+            action=RemediationAction.NONE,  # Safe
+            dry_run=False,
+            allow_active=True,
+        )
+
+        config = ReconcileLoopConfig(
+            enabled=True,
+            interval_ms=1000,
+            detect_only=True,
+            require_active_role=False,
+        )
+        loop = ReconcileLoop(runner=mock_runner, config=config)
+
+        loop.start()
+        time.sleep(0.1)
+        loop.stop()
+
+        assert loop.stats.runs_total >= 1
+
+    def test_detect_only_allows_dry_run_mode(self) -> None:
+        """detect_only=True allows runner with dry_run=True and allow_active=False."""
+        report = ReconcileRunReport(
+            ts_start=1000,
+            ts_end=1010,
+            mismatches_detected=0,
+            cancel_results=(),
+            flatten_results=(),
+            skipped_terminal=0,
+            skipped_no_action=0,
+        )
+        mock_runner = _make_mock_runner(
+            report=report,
+            action=RemediationAction.CANCEL_ALL,  # Would execute if not dry_run
+            dry_run=True,
+            allow_active=False,
+        )
+
+        config = ReconcileLoopConfig(
+            enabled=True,
+            interval_ms=1000,
+            detect_only=True,
+            require_active_role=False,
+        )
+        loop = ReconcileLoop(runner=mock_runner, config=config)
+
+        loop.start()
+        time.sleep(0.1)
+        loop.stop()
+
+        assert loop.stats.runs_total >= 1
+
+    def test_detect_only_false_allows_any_config(self) -> None:
+        """detect_only=False allows runner that can execute."""
+        report = ReconcileRunReport(
+            ts_start=1000,
+            ts_end=1010,
+            mismatches_detected=0,
+            cancel_results=(),
+            flatten_results=(),
+            skipped_terminal=0,
+            skipped_no_action=0,
+        )
+        mock_runner = _make_mock_runner(
+            report=report,
+            action=RemediationAction.CANCEL_ALL,
+            dry_run=False,
+            allow_active=True,
+        )
+
+        config = ReconcileLoopConfig(
+            enabled=True,
+            interval_ms=1000,
+            detect_only=False,  # Disable enforcement
+            require_active_role=False,
+        )
+        loop = ReconcileLoop(runner=mock_runner, config=config)
+
+        loop.start()
+        time.sleep(0.1)
+        loop.stop()
+
+        assert loop.stats.runs_total >= 1

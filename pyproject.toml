@@ -188,6 +188,7 @@ module = [
     "optuna.*",
     "shap.*",
     "redis.*",
+    "requests.*",
 ]
 ignore_missing_imports = true
 
