@@ -53,7 +53,7 @@ from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
-import requests
+import httpx
 
 from grinder.connectors.errors import ConnectorNonRetryableError, ConnectorTransientError
 from grinder.execution.binance_port import HttpResponse
@@ -85,13 +85,13 @@ EXIT_CONNECTION_ERROR = 3
 
 
 # =============================================================================
-# HTTP Client (requests-based)
+# HTTP Client (httpx-based)
 # =============================================================================
 
 
 @dataclass
-class RequestsHttpClient:
-    """HTTP client using requests library for real API calls."""
+class HttpxClient:
+    """HTTP client using httpx library for real API calls."""
 
     def request(
         self,
@@ -101,29 +101,22 @@ class RequestsHttpClient:
         headers: dict[str, str] | None = None,
         timeout_ms: int = 5000,
     ) -> HttpResponse:
-        """Execute HTTP request via requests library."""
+        """Execute HTTP request via httpx library."""
         timeout_s = timeout_ms / 1000.0
 
         try:
-            if method == "GET":
-                resp = requests.get(url, params=params, headers=headers, timeout=timeout_s)
-            elif method == "POST":
-                resp = requests.post(url, params=params, headers=headers, timeout=timeout_s)
-            elif method == "DELETE":
-                resp = requests.delete(url, params=params, headers=headers, timeout=timeout_s)
-            else:
-                raise ConnectorNonRetryableError(f"Unsupported method: {method}")
+            with httpx.Client(timeout=timeout_s) as client:
+                resp = client.request(method, url, params=params, headers=headers)
+                return HttpResponse(
+                    status_code=resp.status_code,
+                    json_data=resp.json() if resp.content else {},
+                )
 
-            return HttpResponse(
-                status_code=resp.status_code,
-                json_data=resp.json() if resp.content else {},
-            )
-
-        except requests.exceptions.Timeout as e:
+        except httpx.TimeoutException as e:
             raise ConnectorTransientError(f"Request timeout: {e}") from e
-        except requests.exceptions.ConnectionError as e:
+        except httpx.ConnectError as e:
             raise ConnectorTransientError(f"Connection error: {e}") from e
-        except requests.exceptions.RequestException as e:
+        except httpx.HTTPError as e:
             raise ConnectorNonRetryableError(f"Request error: {e}") from e
 
 
@@ -263,7 +256,7 @@ def test_rest_snapshot(
             timeout_ms=10000,
         )
 
-        http_client = RequestsHttpClient()
+        http_client = HttpxClient()
         observed = ObservedStateStore()
 
         client = SnapshotClient(
@@ -296,7 +289,7 @@ def test_price_getter(testnet: bool, status: SourceStatus) -> None:
     from grinder.reconcile.price_getter import create_price_getter  # noqa: PLC0415
 
     try:
-        http_client = RequestsHttpClient()
+        http_client = HttpxClient()
         price_getter = create_price_getter(http_client, testnet=testnet)
 
         # Fetch price for BTCUSDT
@@ -348,7 +341,7 @@ async def test_ws_connection(
             api_key=api_key,
         )
 
-        http_client = RequestsHttpClient()
+        http_client = HttpxClient()
         listen_key_manager = ListenKeyManager(http_client, listen_key_config)
 
         connector = FuturesUserDataWsConnector(
