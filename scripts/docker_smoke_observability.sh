@@ -160,8 +160,10 @@ main() {
     echo ""
 
     # Print sample metrics
+    # Note: curl exits non-zero due to SIGPIPE when head closes pipe early
+    # This is expected behavior, so we ignore the exit code
     echo "Sample metrics from GRINDER:"
-    curl -sf "http://localhost:9090/metrics" 2>/dev/null | head -15
+    curl -sf "http://localhost:9090/metrics" 2>/dev/null | head -15 || true
     echo ""
 
     log_info "Smoke test completed successfully."
