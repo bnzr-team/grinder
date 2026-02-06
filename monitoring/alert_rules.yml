@@ -1,4 +1,4 @@
-# GRINDER Alert Rules v1
+# GRINDER Alert Rules v2
 # Based on metrics from src/grinder/observability/metrics_builder.py
 #
 # Available metrics:
@@ -10,6 +10,17 @@
 #   - grinder_kill_switch_trips_total{reason} (counter): total trips by reason
 #   - grinder_drawdown_pct (gauge): current drawdown percentage
 #   - grinder_high_water_mark (gauge): current equity HWM
+#
+# Reconcile metrics (LC-09b/LC-10/LC-11/LC-15b):
+#   - grinder_reconcile_runs_total (counter): total loop runs
+#   - grinder_reconcile_runs_with_mismatch_total (counter): runs with detected mismatches
+#   - grinder_reconcile_mismatch_total{type} (counter): mismatch count by type
+#   - grinder_reconcile_last_snapshot_age_seconds (gauge): snapshot freshness
+#   - grinder_reconcile_action_planned_total{action} (counter): planned actions
+#   - grinder_reconcile_action_executed_total{action} (counter): executed actions (REAL!)
+#   - grinder_reconcile_action_blocked_total{reason} (counter): blocked actions by reason
+#   - grinder_reconcile_runs_with_remediation_total{action} (counter): runs with remediation
+#   - grinder_reconcile_last_remediation_ts_ms (gauge): last remediation timestamp
 
 groups:
   - name: grinder_availability
@@ -113,3 +124,91 @@ groups:
         annotations:
           summary: "Kill-switch trip detected"
           description: "Kill-switch trip count increased in the last 5 minutes."
+
+  - name: grinder_reconcile
+    rules:
+      # Warning: ReconcileLoop stopped running
+      - alert: ReconcileLoopDown
+        expr: |
+          increase(grinder_reconcile_runs_total[5m]) == 0
+          and
+          grinder_up == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "ReconcileLoop is not running"
+          description: "No reconcile loop runs detected in 5 minutes while GRINDER is up."
+          runbook_url: "docs/runbooks/16_RECONCILE_ALERTS_SLOS.md#reconcileloopdown"
+
+      # Warning: Snapshot data is stale
+      - alert: ReconcileSnapshotStale
+        expr: grinder_reconcile_last_snapshot_age_seconds > 120
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Reconcile snapshot is stale"
+          description: "Snapshot age is {{ $value | printf \"%.0f\" }} seconds (threshold: 120s). Data may be outdated."
+          runbook_url: "docs/runbooks/16_RECONCILE_ALERTS_SLOS.md#reconcilesnapshotstale"
+
+      # Warning: High rate of mismatches detected
+      - alert: ReconcileMismatchSpike
+        expr: |
+          sum(rate(grinder_reconcile_mismatch_total[5m])) > 0.1
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High rate of reconciliation mismatches"
+          description: "Mismatch rate is {{ $value | printf \"%.3f\" }}/sec. Investigate expected vs observed state."
+          runbook_url: "docs/runbooks/16_RECONCILE_ALERTS_SLOS.md#reconcilemismatchspike"
+
+      # Critical: Remediation action was EXECUTED (real trade!)
+      - alert: ReconcileRemediationExecuted
+        expr: increase(grinder_reconcile_action_executed_total[1m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Reconcile remediation action EXECUTED"
+          description: "A REAL remediation action was executed. Verify it was intended. Action count increased by {{ $value | printf \"%.0f\" }}."
+          runbook_url: "docs/runbooks/16_RECONCILE_ALERTS_SLOS.md#reconcileremediationexecuted"
+
+      # Info: Remediation action was planned (dry-run)
+      - alert: ReconcileRemediationPlanned
+        expr: increase(grinder_reconcile_action_planned_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: info
+        annotations:
+          summary: "Reconcile remediation action planned"
+          description: "A remediation action was planned (dry-run mode). {{ $value | printf \"%.0f\" }} actions planned."
+          runbook_url: "docs/runbooks/16_RECONCILE_ALERTS_SLOS.md#reconcileremediationplanned"
+
+      # Info: Remediation blocked by gates
+      - alert: ReconcileRemediationBlocked
+        expr: increase(grinder_reconcile_action_blocked_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: info
+        annotations:
+          summary: "Reconcile remediation action blocked"
+          description: "Remediation was blocked by safety gates. This is expected behavior during staged rollout."
+          runbook_url: "docs/runbooks/16_RECONCILE_ALERTS_SLOS.md#reconcileremediationblocked"
+
+      # Warning: High mismatch rate but no blocks (gates may be bypassed)
+      - alert: ReconcileMismatchNoBlocks
+        expr: |
+          sum(rate(grinder_reconcile_runs_with_mismatch_total[5m])) > 0
+          and
+          sum(rate(grinder_reconcile_action_blocked_total[5m])) == 0
+          and
+          sum(rate(grinder_reconcile_action_planned_total[5m])) == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Mismatches detected but no remediation planned or blocked"
+          description: "Mismatches are detected but no actions are being planned/blocked. Check RECONCILE_ACTION setting."
+          runbook_url: "docs/runbooks/16_RECONCILE_ALERTS_SLOS.md#reconcilemismatchnoblocks"

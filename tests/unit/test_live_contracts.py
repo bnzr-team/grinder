@@ -41,6 +41,7 @@ from grinder.observability import (
     set_start_time,
 )
 from grinder.observability.metrics_builder import reset_metrics_builder
+from grinder.reconcile.metrics import reset_reconcile_metrics
 
 
 @pytest.fixture(autouse=True)
@@ -51,6 +52,7 @@ def reset_state() -> None:
     reset_metrics_builder()
     reset_ha_state()
     reset_connector_metrics()
+    reset_reconcile_metrics()
 
 
 class TestHealthzContract:
@@ -394,3 +396,101 @@ class TestConnectorMetricsContract:
         assert any("grinder_circuit_state{op=" in p for p in patterns)
         assert any("grinder_circuit_rejected_total{op=" in p for p in patterns)
         assert any("grinder_circuit_trips_total{op=" in p for p in patterns)
+
+
+class TestReconcileMetricsContract:
+    """Tests for reconcile metrics contract (LC-09b/LC-10/LC-11/LC-15b).
+
+    Validates that reconcile metrics are present with correct label schemas.
+    """
+
+    def test_reconcile_mismatch_help_and_type(self) -> None:
+        """Test that grinder_reconcile_mismatch_total has HELP and TYPE lines."""
+        body = build_metrics_body()
+
+        assert "# HELP grinder_reconcile_mismatch_total" in body
+        assert "# TYPE grinder_reconcile_mismatch_total counter" in body
+
+    def test_reconcile_mismatch_has_type_label(self) -> None:
+        """Test that grinder_reconcile_mismatch_total has type label."""
+        body = build_metrics_body()
+
+        # Check series is emitted with type label
+        assert "grinder_reconcile_mismatch_total{type=" in body
+
+    def test_reconcile_runs_total_present(self) -> None:
+        """Test that grinder_reconcile_runs_total is present."""
+        body = build_metrics_body()
+
+        assert "# HELP grinder_reconcile_runs_total" in body
+        assert "# TYPE grinder_reconcile_runs_total counter" in body
+        assert "grinder_reconcile_runs_total " in body  # Space indicates value follows
+
+    def test_reconcile_snapshot_age_present(self) -> None:
+        """Test that grinder_reconcile_last_snapshot_age_seconds is present."""
+        body = build_metrics_body()
+
+        assert "# HELP grinder_reconcile_last_snapshot_age_seconds" in body
+        assert "# TYPE grinder_reconcile_last_snapshot_age_seconds gauge" in body
+        assert "grinder_reconcile_last_snapshot_age_seconds " in body
+
+    def test_reconcile_action_planned_has_action_label(self) -> None:
+        """Test that grinder_reconcile_action_planned_total has action label."""
+        body = build_metrics_body()
+
+        assert "# HELP grinder_reconcile_action_planned_total" in body
+        assert "# TYPE grinder_reconcile_action_planned_total counter" in body
+        assert "grinder_reconcile_action_planned_total{action=" in body
+
+    def test_reconcile_action_executed_has_action_label(self) -> None:
+        """Test that grinder_reconcile_action_executed_total has action label."""
+        body = build_metrics_body()
+
+        assert "# HELP grinder_reconcile_action_executed_total" in body
+        assert "# TYPE grinder_reconcile_action_executed_total counter" in body
+        assert "grinder_reconcile_action_executed_total{action=" in body
+
+    def test_reconcile_action_blocked_has_reason_label(self) -> None:
+        """Test that grinder_reconcile_action_blocked_total has reason label."""
+        body = build_metrics_body()
+
+        assert "# HELP grinder_reconcile_action_blocked_total" in body
+        assert "# TYPE grinder_reconcile_action_blocked_total counter" in body
+        # Blocked may be 0, but should have initialized series
+        lines = [ln for ln in body.split("\n") if "grinder_reconcile_action_blocked_total" in ln]
+        # At minimum HELP and TYPE lines exist
+        assert len(lines) >= 2
+
+    def test_reconcile_runs_with_mismatch_present(self) -> None:
+        """Test that grinder_reconcile_runs_with_mismatch_total is present."""
+        body = build_metrics_body()
+
+        assert "# HELP grinder_reconcile_runs_with_mismatch_total" in body
+        assert "# TYPE grinder_reconcile_runs_with_mismatch_total counter" in body
+        assert "grinder_reconcile_runs_with_mismatch_total " in body
+
+    def test_reconcile_runs_with_remediation_has_action_label(self) -> None:
+        """Test that grinder_reconcile_runs_with_remediation_total has action label."""
+        body = build_metrics_body()
+
+        assert "# HELP grinder_reconcile_runs_with_remediation_total" in body
+        assert "# TYPE grinder_reconcile_runs_with_remediation_total counter" in body
+        assert "grinder_reconcile_runs_with_remediation_total{action=" in body
+
+    def test_reconcile_last_remediation_ts_present(self) -> None:
+        """Test that grinder_reconcile_last_remediation_ts_ms is present."""
+        body = build_metrics_body()
+
+        assert "# HELP grinder_reconcile_last_remediation_ts_ms" in body
+        assert "# TYPE grinder_reconcile_last_remediation_ts_ms gauge" in body
+        assert "grinder_reconcile_last_remediation_ts_ms " in body
+
+    def test_reconcile_metrics_series_patterns_in_contract(self) -> None:
+        """Test that REQUIRED_METRICS_PATTERNS includes reconcile series-level patterns."""
+        patterns = REQUIRED_METRICS_PATTERNS
+
+        # LC-15b: reconcile series-level patterns should be in the contract
+        assert any("grinder_reconcile_mismatch_total{type=" in p for p in patterns)
+        assert any("grinder_reconcile_action_planned_total{action=" in p for p in patterns)
+        assert any("grinder_reconcile_action_executed_total{action=" in p for p in patterns)
+        assert any("grinder_reconcile_runs_with_remediation_total{action=" in p for p in patterns)

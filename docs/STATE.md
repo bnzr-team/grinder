@@ -812,6 +812,26 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - **Smoke script:** `scripts/smoke_enablement_ceremony.py`
   - **Rollback:** Single command (`RECONCILE_ENABLED=0` or `RECONCILE_ACTION=none`)
   - See ADR-050 for design decisions
+- **Reconcile Observability v0.1** (LC-15b):
+  - Metrics contract + alerts + SLOs for reconciliation
+  - **Metrics contract integration:**
+    - Reconcile metrics added to `REQUIRED_METRICS_PATTERNS` in `live_contract.py`
+    - MetricsBuilder includes reconcile metrics via `_build_reconcile_metrics()`
+    - Contract tests in `tests/unit/test_live_contracts.py::TestReconcileMetricsContract`
+  - **Prometheus alert rules (`monitoring/alert_rules.yml`):**
+    - `ReconcileLoopDown`: warning — Loop not running when expected
+    - `ReconcileSnapshotStale`: warning — Snapshot age > 120s
+    - `ReconcileMismatchSpike`: warning — High mismatch rate
+    - `ReconcileRemediationExecuted`: critical — REAL action executed
+    - `ReconcileRemediationPlanned`: info — Dry-run action planned
+    - `ReconcileRemediationBlocked`: info — Action blocked by gates
+    - `ReconcileMismatchNoBlocks`: warning — Mismatches but no remediation
+  - **Service Level Objectives:**
+    - Loop Availability: 99.9% (runs_total > 0 per 5-min window)
+    - Snapshot Freshness: 99% (age < 120s)
+    - Execution Budget: < 10/day (action_executed_total)
+  - **Runbook:** `docs/runbooks/16_RECONCILE_ALERTS_SLOS.md`
+  - See ADR-051 for design decisions
 
 - **Live Smoke Harness** (`scripts/smoke_live_testnet.py`):
   - Smoke test harness for Binance (testnet or mainnet): place micro order → cancel (LC-07, LC-08b)

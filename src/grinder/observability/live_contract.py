@@ -36,6 +36,15 @@ GET /metrics:
         - grinder_circuit_state (gauge, H4)
         - grinder_circuit_rejected_total (counter, H4)
         - grinder_circuit_trips_total (counter, H4)
+        - grinder_reconcile_mismatch_total (counter, LC-09b)
+        - grinder_reconcile_last_snapshot_age_seconds (gauge, LC-09b)
+        - grinder_reconcile_runs_total (counter, LC-09b)
+        - grinder_reconcile_action_planned_total (counter, LC-10)
+        - grinder_reconcile_action_executed_total (counter, LC-10)
+        - grinder_reconcile_action_blocked_total (counter, LC-10)
+        - grinder_reconcile_runs_with_mismatch_total (counter, LC-11)
+        - grinder_reconcile_runs_with_remediation_total (counter, LC-11)
+        - grinder_reconcile_last_remediation_ts_ms (gauge, LC-11)
 """
 
 from __future__ import annotations
@@ -173,6 +182,34 @@ REQUIRED_METRICS_PATTERNS = [
     "grinder_circuit_state{op=",
     "grinder_circuit_rejected_total{op=",
     "grinder_circuit_trips_total{op=",
+    # Reconcile metrics (LC-09b/LC-10/LC-11/LC-15b)
+    "# HELP grinder_reconcile_mismatch_total",
+    "# TYPE grinder_reconcile_mismatch_total",
+    "# HELP grinder_reconcile_last_snapshot_age_seconds",
+    "# TYPE grinder_reconcile_last_snapshot_age_seconds",
+    "grinder_reconcile_last_snapshot_age_seconds",
+    "# HELP grinder_reconcile_runs_total",
+    "# TYPE grinder_reconcile_runs_total",
+    "grinder_reconcile_runs_total",
+    "# HELP grinder_reconcile_action_planned_total",
+    "# TYPE grinder_reconcile_action_planned_total",
+    "# HELP grinder_reconcile_action_executed_total",
+    "# TYPE grinder_reconcile_action_executed_total",
+    "# HELP grinder_reconcile_action_blocked_total",
+    "# TYPE grinder_reconcile_action_blocked_total",
+    "# HELP grinder_reconcile_runs_with_mismatch_total",
+    "# TYPE grinder_reconcile_runs_with_mismatch_total",
+    "grinder_reconcile_runs_with_mismatch_total",
+    "# HELP grinder_reconcile_runs_with_remediation_total",
+    "# TYPE grinder_reconcile_runs_with_remediation_total",
+    "# HELP grinder_reconcile_last_remediation_ts_ms",
+    "# TYPE grinder_reconcile_last_remediation_ts_ms",
+    "grinder_reconcile_last_remediation_ts_ms",
+    # Reconcile series-level patterns (type/action labels)
+    "grinder_reconcile_mismatch_total{type=",
+    "grinder_reconcile_action_planned_total{action=",
+    "grinder_reconcile_action_executed_total{action=",
+    "grinder_reconcile_runs_with_remediation_total{action=",
 ]
 
 # Forbidden high-cardinality labels (H5-02 contract tightening)
