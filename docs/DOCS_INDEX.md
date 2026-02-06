@@ -67,7 +67,7 @@ Where to find information:
 - `src/grinder/connectors/binance_ws.py` — BinanceWsConnector (bookTicker stream)
 - `src/grinder/connectors/binance_user_data_ws.py` — FuturesUserDataWsConnector (user-data stream)
 - `src/grinder/execution/futures_events.py` — FuturesOrderEvent, FuturesPositionEvent, UserDataEvent
-- `src/grinder/reconcile/` — Reconciliation module (LC-09b, LC-10, LC-11, LC-12, LC-13)
+- `src/grinder/reconcile/` — Reconciliation module (LC-09b, LC-10, LC-11, LC-12, LC-13, LC-14a)
   - `types.py` — ExpectedOrder, ObservedOrder, Mismatch, MismatchType
   - `expected_state.py` — ExpectedStateStore (ring buffer + TTL)
   - `observed_state.py` — ObservedStateStore (stream + REST)
@@ -79,7 +79,8 @@ Where to find information:
   - `runner.py` — ReconcileRunner (wiring + routing policy, LC-11)
   - `identity.py` — OrderIdentityConfig, generate/parse client_order_id (LC-12)
   - `audit.py` — AuditWriter, AuditEvent (JSONL audit trail, LC-11b)
-- See: `docs/STATE.md` §Live Trading, `docs/DECISIONS.md` ADR-036/ADR-037/ADR-041-047
+- `src/grinder/live/reconcile_loop.py` — ReconcileLoop for periodic reconciliation (LC-14a)
+- See: `docs/STATE.md` §Live Trading, `docs/DECISIONS.md` ADR-036/ADR-037/ADR-041-048
 
 ---
 
@@ -104,6 +105,7 @@ Where to find information:
 - `scripts/smoke_live_testnet.py` — Spot smoke test script (testnet/mainnet)
 - `scripts/smoke_futures_mainnet.py` — Futures USDT-M smoke test script (mainnet)
 - `scripts/smoke_reconcile_e2e.py` — E2E reconcile→remediate smoke harness (LC-13)
+- `scripts/smoke_live_reconcile_loop.py` — ReconcileLoop wiring smoke test (LC-14a)
 
 ---
 

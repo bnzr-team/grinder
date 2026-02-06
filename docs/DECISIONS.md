@@ -2228,3 +2228,105 @@
   - COIN-M futures support
   - Concurrent scenario execution
   - Performance benchmarking
+
+## ADR-048 — ReconcileLoop Wiring for LiveEngine (LC-14a)
+
+- **Date:** 2026-02-06
+- **Status:** accepted
+- **Context:** ReconcileRunner exists but is not integrated into the live trading loop. We need a periodic background loop that:
+  1. Runs ReconcileRunner on a configurable interval
+  2. Respects HA role (only runs when ACTIVE)
+  3. Operates in detect-only mode by default
+  4. Provides thread-safe statistics for monitoring
+  5. Follows existing threading patterns (LeaderElector)
+
+- **Decision:**
+  - **New module:** `src/grinder/live/reconcile_loop.py` — ReconcileLoop component
+
+  - **Threading pattern (from LeaderElector):**
+    - Daemon thread for background execution
+    - `threading.Event` for graceful shutdown
+    - Interruptible wait via `Event.wait(timeout=interval)`
+
+  - **Configuration (ReconcileLoopConfig):**
+    ```python
+    @dataclass
+    class ReconcileLoopConfig:
+        enabled: bool  # env: RECONCILE_ENABLED (default: False)
+        interval_ms: int  # env: RECONCILE_INTERVAL_MS (default: 30000)
+        require_active_role: bool = True  # Check HA role before running
+    ```
+
+  - **Statistics (ReconcileLoopStats):**
+    ```python
+    @dataclass
+    class ReconcileLoopStats:
+        runs_total: int
+        runs_skipped_role: int
+        runs_with_mismatch: int
+        runs_with_error: int
+        last_run_ts_ms: int
+        last_report: ReconcileRunReport | None
+    ```
+
+  - **HA integration:**
+    - When `require_active_role=True` (default), checks HA role before each run
+    - Skips run if role != ACTIVE, increments `runs_skipped_role`
+    - Optional dependency: works without HA module installed
+
+  - **Error handling:**
+    - Exceptions in runner logged, loop continues
+    - `runs_with_error` counter incremented
+    - Never crashes the loop thread
+
+  - **Safety guarantees:**
+    - Default `enabled=False` — must opt-in via env var
+    - Default interval 30s — prevents rapid-fire reconciliation
+    - Minimum interval 1000ms — enforced by validation
+    - Detect-only by default (via ReconcileConfig)
+
+- **Usage:**
+  ```python
+  # In LiveEngine initialization
+  loop = ReconcileLoop(
+      runner=reconcile_runner,
+      config=ReconcileLoopConfig(enabled=True, interval_ms=30000),
+  )
+  loop.start()  # Starts background thread
+  # ... later
+  loop.stop()   # Graceful shutdown
+  ```
+
+  ```bash
+  # Enable via environment
+  RECONCILE_ENABLED=1 RECONCILE_INTERVAL_MS=30000 python3 -m grinder.live
+
+  # Smoke test
+  PYTHONPATH=src python3 -m scripts.smoke_live_reconcile_loop --duration 15
+  ```
+
+- **Smoke test script:** `scripts/smoke_live_reconcile_loop.py`
+  - Uses FakePort (no real HTTP calls)
+  - Demonstrates loop start/stop lifecycle
+  - Verifies detect-only mode (zero port calls)
+  - Supports `--inject-mismatch` for mismatch detection
+
+- **Unit tests:** `tests/unit/test_reconcile_loop.py` (18 tests)
+  - Config: defaults, env vars, validation
+  - Lifecycle: start/stop, idempotent
+  - Stats: initial, after runs, thread-safe
+  - HA: skip when not ACTIVE, run when ACTIVE
+  - Error handling: exceptions don't crash loop
+
+- **Consequences:**
+  - ReconcileRunner can now run as periodic background task
+  - HA-aware reconciliation prevents split-brain execution
+  - Statistics enable monitoring and alerting
+  - Thread-safe design prevents race conditions
+  - Follows established patterns from LeaderElector
+
+- **Out of Scope (v0.1):**
+  - Dynamic interval adjustment
+  - Backoff on repeated errors
+  - Metrics export (Prometheus)
+  - Integration with LiveEngine start/stop

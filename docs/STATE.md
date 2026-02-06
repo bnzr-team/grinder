@@ -767,6 +767,34 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     GRINDER_AUDIT_ENABLED=1 PYTHONPATH=src python3 -m scripts.smoke_reconcile_e2e
     ```
   - See ADR-047 for design decisions
+
+- **ReconcileLoop for LiveEngine** (`src/grinder/live/reconcile_loop.py`):
+  - Periodic background loop for reconciliation in LiveEngine (LC-14a)
+  - **Threading pattern:** Daemon thread with `threading.Event` for graceful shutdown
+  - **Configuration:**
+    - `RECONCILE_ENABLED` env var (default: False)
+    - `RECONCILE_INTERVAL_MS` env var (default: 30000ms)
+    - `require_active_role` option for HA integration
+  - **Statistics:**
+    - `runs_total`, `runs_skipped_role`, `runs_with_mismatch`, `runs_with_error`
+    - `last_run_ts_ms`, `last_report` (thread-safe access)
+  - **Safety:**
+    - Disabled by default (opt-in via env var)
+    - Minimum interval 1000ms enforced
+    - Errors logged, loop continues
+    - HA-aware (skips when not ACTIVE)
+  - **Smoke script:** `scripts/smoke_live_reconcile_loop.py`
+    - FakePort pattern (zero HTTP calls)
+    - `--duration`, `--interval`, `--inject-mismatch` options
+    - Verifies detect-only mode (zero port calls assertion)
+  - **Unit tests:** `tests/unit/test_reconcile_loop.py` (18 tests)
+  - **How to run:**
+    ```bash
+    PYTHONPATH=src python3 -m scripts.smoke_live_reconcile_loop --duration 15
+    PYTHONPATH=src python3 -m scripts.smoke_live_reconcile_loop --inject-mismatch
+    ```
+  - See ADR-048 for design decisions
+
 - **Live Smoke Harness** (`scripts/smoke_live_testnet.py`):
   - Smoke test harness for Binance (testnet or mainnet): place micro order → cancel (LC-07, LC-08b)
   - **Safe-by-construction guards:**
