@@ -39,14 +39,20 @@ class TestPatternValidation:
 
     def test_missing_pattern_detected(self) -> None:
         """When a pattern is missing, it should be in the missing list."""
-        # Build metrics text with first pattern missing
-        patterns_except_first = REQUIRED_METRICS_PATTERNS[1:]
-        metrics_text = "\n".join(patterns_except_first)
+        # Find a pattern that is NOT a substring of any other pattern
+        # grinder_reconcile_last_remediation_ts_ms is unique
+        unique_pattern = "grinder_reconcile_last_remediation_ts_ms"
+        assert unique_pattern in REQUIRED_METRICS_PATTERNS
+
+        # Build metrics text without this unique pattern
+        patterns_except_unique = [
+            p for p in REQUIRED_METRICS_PATTERNS if p != unique_pattern
+        ]
+        metrics_text = "\n".join(patterns_except_unique)
 
         missing, found = validate_patterns(metrics_text)
 
-        assert len(missing) == 1
-        assert REQUIRED_METRICS_PATTERNS[0] in missing
+        assert unique_pattern in missing
         assert len(found) == len(REQUIRED_METRICS_PATTERNS) - 1
 
     def test_empty_metrics_all_patterns_missing(self) -> None:
