@@ -210,6 +210,7 @@ addopts = [
     "--strict-markers",
     "--strict-config",
     "-p", "no:warnings",
+    "-p", "no:cacheprovider",
 ]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
