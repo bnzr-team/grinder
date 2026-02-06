@@ -2330,3 +2330,69 @@
   - Backoff on repeated errors
   - Metrics export (Prometheus)
   - Integration with LiveEngine start/stop
+
+## ADR-049 — Real Sources Wiring for ReconcileLoop (LC-14b)
+
+- **Date:** 2026-02-06
+- **Status:** accepted
+- **Context:** ReconcileLoop (LC-14a) uses mock data sources. Production deployment requires:
+  1. Real price data from Binance REST API (for notional calculation)
+  2. Hard enforcement of detect-only mode (refuse to start if runner can execute)
+  3. Proof of zero execution side-effects with real sources
+
+- **Decision:**
+
+  - **PriceGetter module:** `src/grinder/reconcile/price_getter.py`
+    - Fetches current market price from Binance Futures REST API (`/fapi/v1/ticker/price`)
+    - Uses HttpClient protocol (same as SnapshotClient)
+    - 1-second cache TTL to reduce API calls
+    - Returns `Decimal | None` for safe handling of unavailable prices
+    ```python
+    @dataclass
+    class PriceGetter:
+        http_client: HttpClient
+        config: PriceGetterConfig
+
+        def get_price(self, symbol: str) -> Decimal | None:
+            # Fetches from REST with caching
+    ```
+
+  - **detect_only enforcer in ReconcileLoopConfig:**
+    ```python
+    @dataclass
+    class ReconcileLoopConfig:
+        # Existing fields...
+        detect_only: bool = True  # LC-14b: Hard enforcer
+    ```
+
+    - Hard check on `start()`: refuses to run if runner can execute actions
+    - Condition for detect-only: `action=NONE OR (dry_run=True AND allow_active_remediation=False)`
+    - Raises `RuntimeError` if detect-only violated
+
+  - **Smoke test with real sources:** `scripts/smoke_live_reconcile_loop_real_sources.py`
+    - Uses RequestsHttpClient for real Binance REST calls
+    - Tests PriceGetter with live market data
+    - FakePort records all execution calls
+    - Verifies zero port calls at end (detect-only proof)
+    ```python
+    # Execution verification
+    if len(fake_port.calls) > 0:
+        raise AssertionError(f"DETECT-ONLY VIOLATED: {fake_port.calls}")
+    print("✓ DETECT-ONLY MODE VERIFIED: Zero port calls")
+    ```
+
+- **Consequences:**
+  - ReconcileLoop enforces detect-only mode at startup
+  - PriceGetter enables notional calculation for flatten safety gate
+  - Smoke test provides reproducible proof of no execution side-effects
+  - Ready for production deployment with real market data
+
+- **Safety Guarantees:**
+  - detect_only=True default refuses to start if runner can execute
+  - FakePort in smoke test catches any execution attempts
+  - No API credentials required for price fetch (public endpoint)
+
+- **Out of Scope (v0.1):**
+  - WS user-data stream integration (FuturesUserDataWsConnector wiring)
+  - REST snapshot fallback (SnapshotClient wiring to ObservedStateStore)
+  - WebSocket price streaming (using REST for simplicity)

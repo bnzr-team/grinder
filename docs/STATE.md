@@ -769,12 +769,13 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
   - See ADR-047 for design decisions
 
 - **ReconcileLoop for LiveEngine** (`src/grinder/live/reconcile_loop.py`):
-  - Periodic background loop for reconciliation in LiveEngine (LC-14a)
+  - Periodic background loop for reconciliation in LiveEngine (LC-14a, LC-14b)
   - **Threading pattern:** Daemon thread with `threading.Event` for graceful shutdown
   - **Configuration:**
     - `RECONCILE_ENABLED` env var (default: False)
     - `RECONCILE_INTERVAL_MS` env var (default: 30000ms)
     - `require_active_role` option for HA integration
+    - `detect_only` option for hard enforcement (LC-14b)
   - **Statistics:**
     - `runs_total`, `runs_skipped_role`, `runs_with_mismatch`, `runs_with_error`
     - `last_run_ts_ms`, `last_report` (thread-safe access)
@@ -783,17 +784,26 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     - Minimum interval 1000ms enforced
     - Errors logged, loop continues
     - HA-aware (skips when not ACTIVE)
-  - **Smoke script:** `scripts/smoke_live_reconcile_loop.py`
-    - FakePort pattern (zero HTTP calls)
-    - `--duration`, `--interval`, `--inject-mismatch` options
-    - Verifies detect-only mode (zero port calls assertion)
-  - **Unit tests:** `tests/unit/test_reconcile_loop.py` (18 tests)
+    - **detect_only enforcer (LC-14b):** Refuses to start if runner can execute actions
+  - **Smoke scripts:**
+    - `scripts/smoke_live_reconcile_loop.py` — FakePort pattern (zero HTTP calls)
+    - `scripts/smoke_live_reconcile_loop_real_sources.py` — Real Binance REST (LC-14b)
+  - **Unit tests:** `tests/unit/test_reconcile_loop.py` (23 tests)
   - **How to run:**
     ```bash
+    # FakePort smoke (no network)
     PYTHONPATH=src python3 -m scripts.smoke_live_reconcile_loop --duration 15
-    PYTHONPATH=src python3 -m scripts.smoke_live_reconcile_loop --inject-mismatch
+    # Real sources smoke (LC-14b)
+    PYTHONPATH=src python3 -m scripts.smoke_live_reconcile_loop_real_sources
     ```
-  - See ADR-048 for design decisions
+  - See ADR-048, ADR-049 for design decisions
+- **PriceGetter** (`src/grinder/reconcile/price_getter.py`):
+  - Fetches current market price from Binance Futures REST API (LC-14b)
+  - Uses HttpClient protocol (same as SnapshotClient)
+  - 1-second cache TTL to reduce API calls
+  - Returns `Decimal | None` for safe handling
+  - **Endpoint:** `GET /fapi/v1/ticker/price`
+  - See ADR-049 for design decisions
 
 - **Live Smoke Harness** (`scripts/smoke_live_testnet.py`):
   - Smoke test harness for Binance (testnet or mainnet): place micro order → cancel (LC-07, LC-08b)

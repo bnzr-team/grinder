@@ -22,6 +22,7 @@ from collections.abc import Callable  # noqa: TC003 - used at runtime in __init_
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from grinder.reconcile.config import RemediationAction
 from grinder.reconcile.runner import ReconcileRunner, ReconcileRunReport  # noqa: TC001
 
 if TYPE_CHECKING:
@@ -67,6 +68,7 @@ class ReconcileLoopConfig:
         enabled: Whether reconcile loop is enabled (env: RECONCILE_ENABLED)
         interval_ms: How often to run reconciliation (env: RECONCILE_INTERVAL_MS)
         require_active_role: Only run when HA role is ACTIVE (default: True)
+        detect_only: Hard enforcer - refuse to start if runner can execute (LC-14b)
     """
 
     enabled: bool = field(
@@ -76,6 +78,7 @@ class ReconcileLoopConfig:
         default_factory=lambda: _get_int_env(ENV_RECONCILE_INTERVAL_MS, DEFAULT_INTERVAL_MS)
     )
     require_active_role: bool = True
+    detect_only: bool = True  # LC-14b: Hard enforcer, refuse to start if can execute
 
     def __post_init__(self) -> None:
         """Validate configuration."""
@@ -171,11 +174,42 @@ class ReconcileLoop:
         """Check if loop is currently running."""
         return self._is_running
 
+    def _is_detect_only_mode(self) -> bool:
+        """Check if runner is in detect-only mode.
+
+        Detect-only means NO execution can happen:
+        - action=NONE, OR
+        - dry_run=True AND allow_active_remediation=False
+
+        Returns:
+            True if detect-only mode is enforced
+        """
+        config = self._runner.executor.config
+        if config.action == RemediationAction.NONE:
+            return True
+        return config.dry_run and not config.allow_active_remediation
+
+    def _verify_detect_only(self) -> None:
+        """Verify runner is in detect-only mode (LC-14b enforcer).
+
+        Raises:
+            RuntimeError: If runner can execute actions
+        """
+        if not self._is_detect_only_mode():
+            config = self._runner.executor.config
+            msg = (
+                f"ReconcileLoop detect_only=True but runner can execute: "
+                f"action={config.action.value}, dry_run={config.dry_run}, "
+                f"allow_active_remediation={config.allow_active_remediation}"
+            )
+            raise RuntimeError(msg)
+
     def start(self) -> None:
         """Start the reconciliation loop.
 
         If not enabled in config, logs info and returns without starting.
         If already running, returns immediately (idempotent).
+        If detect_only=True and runner can execute, raises RuntimeError.
         """
         if self._is_running:
             logger.debug("ReconcileLoop already running")
@@ -187,6 +221,14 @@ class ReconcileLoop:
                 extra={"env": ENV_RECONCILE_ENABLED},
             )
             return
+
+        # LC-14b: Hard enforcer - refuse to start if runner can execute
+        if self._config.detect_only:
+            self._verify_detect_only()
+            logger.info(
+                "ReconcileLoop detect_only mode verified",
+                extra={"detect_only": True},
+            )
 
         self._stop_event.clear()
         self._loop_thread = threading.Thread(
