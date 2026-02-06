@@ -2513,3 +2513,105 @@
   - ADR-049: Real Sources Wiring
   - ADR-050: Operator Ceremony
   - Runbook: `docs/runbooks/16_RECONCILE_ALERTS_SLOS.md`
+
+## ADR-052 — Remediation Safety Extensions (LC-18)
+
+- **Date:** 2026-02-06
+- **Status:** accepted
+- **Context:** Active remediation (LC-10) is functional but requires additional safety layers for production:
+  1. Strategy allowlist: Only remediate orders from specific strategies (uses LC-12 identity)
+  2. Per-run and per-day budget limits: Cap calls and notional exposure
+  3. Staged rollout modes: DETECT_ONLY → PLAN_ONLY → BLOCKED → EXECUTE_CANCEL_ALL → EXECUTE_FLATTEN
+  4. Budget persistence: Track daily usage across restarts
+
+- **Decision:**
+
+  - **RemediationMode enum** (`config.py`):
+    ```python
+    class RemediationMode(Enum):
+        DETECT_ONLY = "detect_only"      # Detect mismatches, no planning (0 calls)
+        PLAN_ONLY = "plan_only"          # Plan remediation, increment planned metrics (0 calls)
+        BLOCKED = "blocked"              # Plan + block by gates, increment blocked metrics (0 calls)
+        EXECUTE_CANCEL_ALL = "execute_cancel_all"  # Execute only cancel_all actions
+        EXECUTE_FLATTEN = "execute_flatten"        # Execute only flatten actions
+    ```
+
+  - **Budget config fields** (`ReconcileConfig`):
+    ```python
+    remediation_mode: RemediationMode = RemediationMode.DETECT_ONLY
+    remediation_strategy_allowlist: set[str] = field(default_factory=set)
+    remediation_symbol_allowlist: set[str] = field(default_factory=set)
+    max_calls_per_day: int = 100
+    max_notional_per_day: Decimal = Decimal("5000")
+    max_calls_per_run: int = 10
+    max_notional_per_run: Decimal = Decimal("1000")
+    flatten_max_notional_per_call: Decimal = Decimal("500")
+    budget_state_path: str | None = None  # JSON persistence
+    ```
+
+  - **BudgetTracker** (`budget.py`):
+    - Tracks calls_today, notional_today with daily reset at midnight UTC
+    - Tracks calls_this_run, notional_this_run with per-run reset
+    - Persists daily state to JSON file (optional)
+    - `can_execute(notional) → (allowed, block_reason)` checks both limits
+    - `record_execution(notional)` updates counters
+
+  - **Extended block reasons** (`RemediationBlockReason`):
+    ```python
+    # Mode-based reasons
+    MODE_DETECT_ONLY = "mode_detect_only"
+    MODE_PLAN_ONLY = "mode_plan_only"
+    MODE_BLOCKED = "mode_blocked"
+    MODE_CANCEL_ONLY = "mode_cancel_only"
+    MODE_FLATTEN_ONLY = "mode_flatten_only"
+
+    # Budget reasons
+    MAX_CALLS_PER_RUN = "max_calls_per_run"
+    MAX_NOTIONAL_PER_RUN = "max_notional_per_run"
+    MAX_CALLS_PER_DAY = "max_calls_per_day"
+    MAX_NOTIONAL_PER_DAY = "max_notional_per_day"
+
+    # Allowlist reasons
+    STRATEGY_NOT_ALLOWED = "strategy_not_allowed"
+    SYMBOL_NOT_IN_REMEDIATION_ALLOWLIST = "symbol_not_in_remediation_allowlist"
+    ```
+
+  - **Budget metrics** (`ReconcileMetrics`):
+    ```python
+    budget_calls_used_day: int
+    budget_notional_used_day: Decimal
+    budget_calls_remaining_day: int
+    budget_notional_remaining_day: Decimal
+    ```
+
+  - **Gate ordering in `can_execute()`:**
+    1. Mode check (DETECT_ONLY/PLAN_ONLY/BLOCKED early exit)
+    2. Strategy allowlist (uses `parse_client_order_id()` from LC-12)
+    3. Symbol remediation allowlist (optional)
+    4. Budget per-run limits
+    5. Budget per-day limits
+    6. Original LC-10 gates (action, dry_run, allow_active, armed, env_var, cooldown, whitelist)
+
+  - **Mode semantics:**
+    - DETECT_ONLY: Returns PLANNED with MODE_DETECT_ONLY (0 port calls)
+    - PLAN_ONLY: Returns PLANNED with MODE_PLAN_ONLY (0 port calls)
+    - BLOCKED: Returns PLANNED with MODE_BLOCKED (0 port calls, but logs as blocked)
+    - EXECUTE_CANCEL_ALL: Allows only cancel_all actions (blocks flatten with MODE_CANCEL_ONLY)
+    - EXECUTE_FLATTEN: Allows only flatten actions (blocks cancel with MODE_FLATTEN_ONLY)
+
+- **Test coverage:**
+  - `tests/unit/test_remediation.py` (41 tests total, 13 new for LC-18):
+    - Mode semantics: detect_only, plan_only, blocked, execute_cancel_all, execute_flatten
+    - Strategy allowlist: allowed, blocked, empty=allow all
+    - Budget gates: max_calls_per_run, max_notional_per_run, reset_between_runs
+
+- **Consequences:**
+  - Staged rollout: Operators can safely progress through modes
+  - Budget enforcement: Daily exposure limited even with bugs
+  - Strategy isolation: Only specified strategies can trigger remediation
+  - No breaking changes: Default mode is DETECT_ONLY (safe)
+
+- **Related:**
+  - ADR-043: Active Remediation v0.1
+  - ADR-045: Configurable Order Identity (LC-12)
+  - Runbook: `docs/runbooks/12_ACTIVE_REMEDIATION.md` (update pending)

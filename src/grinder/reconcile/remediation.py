@@ -17,22 +17,23 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
+from decimal import Decimal
 from enum import Enum
 from typing import TYPE_CHECKING
 
 from grinder.core import OrderSide
-from grinder.reconcile.config import ReconcileConfig, RemediationAction
+from grinder.reconcile.budget import BudgetTracker
+from grinder.reconcile.config import ReconcileConfig, RemediationAction, RemediationMode
 from grinder.reconcile.identity import (
     OrderIdentityConfig,
     get_default_identity_config,
     is_ours,
+    parse_client_order_id,
 )
 from grinder.reconcile.metrics import get_reconcile_metrics
 from grinder.reconcile.types import MismatchType, ObservedOrder, ObservedPosition
 
 if TYPE_CHECKING:
-    from decimal import Decimal
-
     from grinder.execution.binance_futures_port import BinanceFuturesPort
 
 logger = logging.getLogger(__name__)
@@ -49,6 +50,7 @@ class RemediationBlockReason(Enum):
     DO NOT rename or remove values without updating metric contracts.
     """
 
+    # Original LC-10 reasons
     ACTION_IS_NONE = "action_is_none"
     DRY_RUN = "dry_run"
     NOT_ALLOWED = "allow_active_remediation_false"
@@ -62,6 +64,23 @@ class RemediationBlockReason(Enum):
     MAX_SYMBOLS_REACHED = "max_symbols_reached"
     WHITELIST_REQUIRED = "whitelist_required"
     PORT_ERROR = "port_error"
+
+    # LC-18: Mode-based reasons
+    MODE_DETECT_ONLY = "mode_detect_only"
+    MODE_PLAN_ONLY = "mode_plan_only"
+    MODE_BLOCKED = "mode_blocked"
+    MODE_CANCEL_ONLY = "mode_cancel_only"  # flatten not allowed in execute_cancel_all
+    MODE_FLATTEN_ONLY = "mode_flatten_only"  # cancel not allowed in execute_flatten
+
+    # LC-18: Budget reasons
+    MAX_CALLS_PER_RUN = "max_calls_per_run"
+    MAX_NOTIONAL_PER_RUN = "max_notional_per_run"
+    MAX_CALLS_PER_DAY = "max_calls_per_day"
+    MAX_NOTIONAL_PER_DAY = "max_notional_per_day"
+
+    # LC-18: Allowlist reasons
+    STRATEGY_NOT_ALLOWED = "strategy_not_allowed"
+    SYMBOL_NOT_IN_REMEDIATION_ALLOWLIST = "symbol_not_in_remediation_allowlist"
 
 
 class RemediationStatus(Enum):
@@ -112,10 +131,13 @@ class RemediationResult:
 class RemediationExecutor:
     """Executor for active remediation actions.
 
-    Safety architecture:
-    - 9 gates must ALL pass for real execution
+    Safety architecture (LC-10 + LC-18):
+    - Mode gates: DETECT_ONLY/PLAN_ONLY/BLOCKED prevent execution
+    - Budget gates: Per-run and per-day limits
+    - Allowlist gates: Strategy and symbol restrictions
+    - Original 9 gates for backward compatibility
     - Kill-switch ALLOWS remediation (reduces risk exposure)
-    - Default: dry-run only
+    - Default: detect_only mode (no planning, no execution)
 
     Thread-safety: No (use separate instances per thread)
     """
@@ -127,15 +149,31 @@ class RemediationExecutor:
     kill_switch_active: bool = False
     identity_config: OrderIdentityConfig | None = None
 
+    # LC-18: Budget tracker (initialized in __post_init__)
+    budget_tracker: BudgetTracker | None = field(default=None, repr=False)
+
     # Internal state
     _last_action_ts: int = field(default=0, repr=False)
     _orders_this_run: int = field(default=0, repr=False)
     _symbols_this_run: set[str] = field(default_factory=set, repr=False)
 
+    def __post_init__(self) -> None:
+        """Initialize budget tracker from config."""
+        if self.budget_tracker is None:
+            self.budget_tracker = BudgetTracker(
+                max_calls_per_day=self.config.max_calls_per_day,
+                max_notional_per_day=self.config.max_notional_per_day,
+                max_calls_per_run=self.config.max_calls_per_run,
+                max_notional_per_run=self.config.max_notional_per_run,
+                state_path=self.config.budget_state_path,
+            )
+
     def reset_run_counters(self) -> None:
         """Reset per-run counters. Call at start of each reconcile run."""
         self._orders_this_run = 0
         self._symbols_this_run = set()
+        if self.budget_tracker:
+            self.budget_tracker.reset_run_counters()
 
     def _check_env_var(self) -> bool:
         """Check ALLOW_MAINNET_TRADE env var."""
@@ -165,14 +203,99 @@ class RemediationExecutor:
             return True  # Already counting this symbol
         return len(self._symbols_this_run) < self.config.max_symbols_per_action
 
-    def can_execute(  # noqa: PLR0911, PLR0912 - 9 gates require many returns/branches
+    def _check_mode_allows_action(  # noqa: PLR0911 - mode enum requires many returns
+        self, is_cancel: bool
+    ) -> tuple[bool, RemediationBlockReason | None]:
+        """Check if the current mode allows this action type.
+
+        LC-18: Mode-based gating for staged rollout.
+
+        Args:
+            is_cancel: True for cancel, False for flatten
+
+        Returns:
+            (allowed, block_reason): Tuple of result and optional reason
+        """
+        mode = self.config.remediation_mode
+
+        # DETECT_ONLY: No planning or execution
+        if mode == RemediationMode.DETECT_ONLY:
+            return (False, RemediationBlockReason.MODE_DETECT_ONLY)
+
+        # PLAN_ONLY: Planning allowed, execution blocked
+        if mode == RemediationMode.PLAN_ONLY:
+            return (False, RemediationBlockReason.MODE_PLAN_ONLY)
+
+        # BLOCKED: Planning allowed, execution blocked (different metric label)
+        if mode == RemediationMode.BLOCKED:
+            return (False, RemediationBlockReason.MODE_BLOCKED)
+
+        # EXECUTE_CANCEL_ALL: Only cancel_all allowed
+        if mode == RemediationMode.EXECUTE_CANCEL_ALL:
+            if not is_cancel:
+                return (False, RemediationBlockReason.MODE_CANCEL_ONLY)
+            return (True, None)
+
+        # EXECUTE_FLATTEN: Only flatten allowed
+        if mode == RemediationMode.EXECUTE_FLATTEN:
+            if is_cancel:
+                return (False, RemediationBlockReason.MODE_FLATTEN_ONLY)
+            return (True, None)
+
+        # Unknown mode - block
+        return (False, RemediationBlockReason.MODE_BLOCKED)
+
+    def _check_strategy_allowlist(self, client_order_id: str | None) -> bool:
+        """Check if order's strategy is in remediation allowlist.
+
+        LC-18: Strategy-based filtering for staged rollout.
+
+        Args:
+            client_order_id: Order ID to check
+
+        Returns:
+            True if strategy is allowed or no allowlist configured
+        """
+        # If no allowlist configured, allow all
+        if not self.config.remediation_strategy_allowlist:
+            return True
+
+        # If no client_order_id, cannot check - deny
+        if not client_order_id:
+            return False
+
+        # Parse order ID to extract strategy
+        parsed = parse_client_order_id(client_order_id)
+        if parsed is None:
+            return False
+
+        return parsed.strategy_id in self.config.remediation_strategy_allowlist
+
+    def _check_remediation_symbol_allowlist(self, symbol: str) -> bool:
+        """Check if symbol is in remediation allowlist.
+
+        LC-18: Symbol-based filtering for staged rollout.
+
+        Args:
+            symbol: Trading symbol to check
+
+        Returns:
+            True if symbol is allowed or no allowlist configured
+        """
+        # If no allowlist configured, allow all
+        if not self.config.remediation_symbol_allowlist:
+            return True
+
+        return symbol in self.config.remediation_symbol_allowlist
+
+    def can_execute(  # noqa: PLR0911, PLR0912 - many gates require many returns/branches
         self,
         symbol: str,
         is_cancel: bool,
         client_order_id: str | None = None,
         notional_usdt: Decimal | None = None,
     ) -> tuple[bool, RemediationBlockReason | None]:
-        """Check if remediation can execute (all 9 gates).
+        """Check if remediation can execute (LC-10 gates + LC-18 extensions).
 
         Args:
             symbol: Trading symbol
@@ -183,10 +306,15 @@ class RemediationExecutor:
         Returns:
             (can_execute, block_reason): Tuple of result and optional reason
 
-        Gate sequence:
-            1. action != NONE
-            2. dry_run == False
-            3. allow_active_remediation == True
+        Gate sequence (LC-18 additions first):
+            0a. Mode allows this action type
+            0b. Budget limits (per-run and per-day)
+            0c. Strategy in allowlist (if configured)
+            0d. Symbol in remediation allowlist (if configured)
+
+            1. action != NONE (legacy)
+            2. dry_run == False (legacy)
+            3. allow_active_remediation == True (legacy)
             4. armed == True
             5. ALLOW_MAINNET_TRADE env var set
             6. cooldown elapsed
@@ -199,15 +327,45 @@ class RemediationExecutor:
             - max_symbols_per_action
             - require_whitelist
         """
-        # Gate 1: action != NONE
+        # LC-18 Gate 0a: Mode check
+        mode_ok, mode_reason = self._check_mode_allows_action(is_cancel)
+        if not mode_ok:
+            return (False, mode_reason)
+
+        # LC-18 Gate 0b: Budget check
+        if self.budget_tracker:
+            budget_notional = notional_usdt or Decimal("0")
+            budget_ok, budget_reason = self.budget_tracker.can_execute(budget_notional)
+            if not budget_ok:
+                # Map budget reason string to enum
+                reason_map = {
+                    "max_calls_per_run": RemediationBlockReason.MAX_CALLS_PER_RUN,
+                    "max_notional_per_run": RemediationBlockReason.MAX_NOTIONAL_PER_RUN,
+                    "max_calls_per_day": RemediationBlockReason.MAX_CALLS_PER_DAY,
+                    "max_notional_per_day": RemediationBlockReason.MAX_NOTIONAL_PER_DAY,
+                }
+                return (
+                    False,
+                    reason_map.get(budget_reason or "", RemediationBlockReason.MAX_CALLS_PER_DAY),
+                )
+
+        # LC-18 Gate 0c: Strategy allowlist check (cancel only)
+        if is_cancel and not self._check_strategy_allowlist(client_order_id):
+            return (False, RemediationBlockReason.STRATEGY_NOT_ALLOWED)
+
+        # LC-18 Gate 0d: Symbol remediation allowlist check
+        if not self._check_remediation_symbol_allowlist(symbol):
+            return (False, RemediationBlockReason.SYMBOL_NOT_IN_REMEDIATION_ALLOWLIST)
+
+        # Gate 1: action != NONE (legacy - for backward compat)
         if self.config.action == RemediationAction.NONE:
             return (False, RemediationBlockReason.ACTION_IS_NONE)
 
-        # Gate 2: dry_run == False
+        # Gate 2: dry_run == False (legacy - for backward compat)
         if self.config.dry_run:
             return (False, RemediationBlockReason.DRY_RUN)
 
-        # Gate 3: allow_active_remediation == True
+        # Gate 3: allow_active_remediation == True (legacy - for backward compat)
         if not self.config.allow_active_remediation:
             return (False, RemediationBlockReason.NOT_ALLOWED)
 
@@ -242,11 +400,11 @@ class RemediationExecutor:
         if (
             not is_cancel
             and notional_usdt is not None
-            and notional_usdt > self.config.max_flatten_notional_usdt
+            and notional_usdt > self.config.flatten_max_notional_per_call
         ):
             return (False, RemediationBlockReason.NOTIONAL_EXCEEDS_LIMIT)
 
-        # Additional limits
+        # Additional limits (legacy)
         if not self._check_max_orders():
             return (False, RemediationBlockReason.MAX_ORDERS_REACHED)
 
@@ -278,12 +436,30 @@ class RemediationExecutor:
         )
 
         if not can_exec:
-            # Determine if this is a dry-run plan or a real block
-            if block_reason in (
+            # LC-18: Determine if this is a planning scenario or a real block
+            # DETECT_ONLY: No planning at all
+            # PLAN_ONLY, MODE_BLOCKED, DRY_RUN, ACTION_IS_NONE: Record as planned
+            # Everything else: Record as blocked
+            planning_reasons = (
                 RemediationBlockReason.ACTION_IS_NONE,
                 RemediationBlockReason.DRY_RUN,
-            ):
-                # Dry-run: record as planned
+                RemediationBlockReason.MODE_PLAN_ONLY,
+                RemediationBlockReason.MODE_BLOCKED,
+            )
+            detect_only_reasons = (RemediationBlockReason.MODE_DETECT_ONLY,)
+
+            if block_reason in detect_only_reasons:
+                # DETECT_ONLY: No metrics, no logging (pure detection)
+                return RemediationResult(
+                    mismatch_type=mismatch_type,
+                    symbol=symbol,
+                    client_order_id=client_order_id,
+                    status=RemediationStatus.PLANNED,
+                    block_reason=block_reason,
+                    action=action,
+                )
+            elif block_reason in planning_reasons:
+                # Planning mode: record as planned
                 metrics.record_action_planned(action)
                 logger.info(
                     "REMEDIATION_PLANNED",
@@ -331,6 +507,10 @@ class RemediationExecutor:
                 self._orders_this_run += 1
                 self._symbols_this_run.add(symbol)
                 self._last_action_ts = int(time.time() * 1000)
+
+                # LC-18: Record budget usage (cancel has no notional)
+                if self.budget_tracker:
+                    self.budget_tracker.record_execution(Decimal("0"))
 
                 metrics.record_action_executed(action)
                 logger.info(
@@ -412,12 +592,27 @@ class RemediationExecutor:
         )
 
         if not can_exec:
-            # Determine if this is a dry-run plan or a real block
-            if block_reason in (
+            # LC-18: Determine if this is a planning scenario or a real block
+            planning_reasons = (
                 RemediationBlockReason.ACTION_IS_NONE,
                 RemediationBlockReason.DRY_RUN,
-            ):
-                # Dry-run: record as planned
+                RemediationBlockReason.MODE_PLAN_ONLY,
+                RemediationBlockReason.MODE_BLOCKED,
+            )
+            detect_only_reasons = (RemediationBlockReason.MODE_DETECT_ONLY,)
+
+            if block_reason in detect_only_reasons:
+                # DETECT_ONLY: No metrics, no logging (pure detection)
+                return RemediationResult(
+                    mismatch_type=mismatch_type,
+                    symbol=symbol,
+                    client_order_id=None,
+                    status=RemediationStatus.PLANNED,
+                    block_reason=block_reason,
+                    action=action,
+                )
+            elif block_reason in planning_reasons:
+                # Planning mode: record as planned
                 metrics.record_action_planned(action)
                 logger.info(
                     "REMEDIATION_PLANNED",
@@ -478,6 +673,10 @@ class RemediationExecutor:
             self._orders_this_run += 1
             self._symbols_this_run.add(symbol)
             self._last_action_ts = int(time.time() * 1000)
+
+            # LC-18: Record budget usage with notional
+            if self.budget_tracker:
+                self.budget_tracker.record_execution(notional_usdt)
 
             metrics.record_action_executed(action)
             logger.info(
