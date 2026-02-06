@@ -57,6 +57,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from grinder.core import OrderSide
+    from grinder.reconcile.metrics import ReconcileMetrics
 from grinder.live.reconcile_loop import ReconcileLoop, ReconcileLoopConfig
 from grinder.reconcile.config import ReconcileConfig, RemediationAction, RemediationMode
 from grinder.reconcile.engine import ReconcileEngine
@@ -378,6 +379,22 @@ def print_config_error(message: str) -> None:
 # =============================================================================
 
 
+def sync_budget_to_metrics(
+    executor: RemediationExecutor,
+    metrics: ReconcileMetrics,
+) -> None:
+    """Sync budget state from executor to metrics for final summary."""
+    if executor.budget_tracker is not None:
+        used = executor.budget_tracker.get_used()
+        remaining = executor.budget_tracker.get_remaining()
+        metrics.set_budget_metrics(
+            calls_used=used["calls_used_day"],
+            notional_used=used["notional_used_day"],
+            calls_remaining=remaining["calls_remaining_day"],
+            notional_remaining=remaining["notional_remaining_day"],
+        )
+
+
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(
@@ -498,10 +515,16 @@ def main() -> int:
     )
 
     # Loop config
+    # detect_only=False for execute modes (LC-14b safety gate)
+    is_execute_mode = config.remediation_mode in (
+        RemediationMode.EXECUTE_CANCEL_ALL,
+        RemediationMode.EXECUTE_FLATTEN,
+    )
     loop_config = ReconcileLoopConfig(
         enabled=True,
         interval_ms=args.interval_ms,
         require_active_role=False,
+        detect_only=not is_execute_mode,
     )
 
     # Create loop
@@ -537,6 +560,9 @@ def main() -> int:
     # Get stats
     stats = loop.stats
     port_calls = len(port.calls) if hasattr(port, "calls") else 0
+
+    # Sync budget state from executor to metrics
+    sync_budget_to_metrics(executor, metrics)
 
     # Get metrics
     executed_count = sum(metrics.action_executed_counts.values())
