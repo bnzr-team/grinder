@@ -48,7 +48,7 @@ from typing import Any
 
 # Guard: Import errors should fail clearly
 try:
-    import requests  # type: ignore[import-untyped]
+    import requests
 except ImportError:
     print("ERROR: requests library required. Run: pip install requests")
     sys.exit(1)
