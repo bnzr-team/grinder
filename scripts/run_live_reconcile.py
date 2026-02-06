@@ -387,11 +387,12 @@ def sync_budget_to_metrics(
     if executor.budget_tracker is not None:
         used = executor.budget_tracker.get_used()
         remaining = executor.budget_tracker.get_remaining()
+        # Cast to expected types (dict values are int|Decimal union)
         metrics.set_budget_metrics(
-            calls_used=used["calls_used_day"],
-            notional_used=used["notional_used_day"],
-            calls_remaining=remaining["calls_remaining_day"],
-            notional_remaining=remaining["notional_remaining_day"],
+            calls_used=int(used["calls_used_day"]),
+            notional_used=Decimal(str(used["notional_used_day"])),
+            calls_remaining=int(remaining["calls_remaining_day"]),
+            notional_remaining=Decimal(str(remaining["notional_remaining_day"])),
         )
 
 
