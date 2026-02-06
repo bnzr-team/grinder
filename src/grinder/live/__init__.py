@@ -3,6 +3,7 @@
 Provides:
 - LiveEngineV0 for live write-path wiring (ADR-036)
 - LiveFeed for read-only data pipeline (ADR-037)
+- ReconcileLoop for periodic reconciliation (ADR-048)
 
 Write-path (LiveEngineV0):
 - PaperEngine → ExchangePort integration
@@ -13,6 +14,11 @@ Write-path (LiveEngineV0):
 Read-path (LiveFeed):
 - WebSocket → Snapshot → FeatureEngine → features
 - Strictly read-only (no execution imports)
+
+Reconciliation (ReconcileLoop):
+- Periodic mismatch detection
+- HA-aware (only runs when ACTIVE)
+- Default detect-only mode
 """
 
 from grinder.live.config import LiveEngineConfig
@@ -25,6 +31,11 @@ from grinder.live.engine import (
     classify_intent,
 )
 from grinder.live.feed import LiveFeed, LiveFeedConfig, LiveFeedRunner
+from grinder.live.reconcile_loop import (
+    ReconcileLoop,
+    ReconcileLoopConfig,
+    ReconcileLoopStats,
+)
 from grinder.live.types import (
     BookTickerData,
     LiveFeaturesUpdate,
@@ -48,6 +59,10 @@ __all__ = [
     "LiveFeedConfig",
     "LiveFeedRunner",
     "LiveFeedStats",
+    # Reconciliation (LC-14a)
+    "ReconcileLoop",
+    "ReconcileLoopConfig",
+    "ReconcileLoopStats",
     "WsMessage",
     "classify_intent",
 ]
