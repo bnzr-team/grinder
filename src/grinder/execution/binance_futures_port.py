@@ -59,6 +59,7 @@ from grinder.reconcile.identity import (
     OrderIdentityConfig,
     generate_client_order_id,
     get_default_identity_config,
+    parse_client_order_id,
 )
 
 # --- Binance Futures URLs ---
@@ -590,15 +591,15 @@ class BinanceFuturesPort:
         """
         self._validate_mode("cancel_order")
 
-        # Extract symbol from order_id if it's our format
-        parts = order_id.split("_")
-        symbol = parts[1] if len(parts) > 1 and parts[0] == "grinder" else ""
-
-        if not symbol:
+        # LC-12: Use proper identity parsing to extract symbol
+        # Supports both v1 format (grinder_{strategy}_{symbol}_...) and legacy (grinder_{symbol}_...)
+        parsed = parse_client_order_id(order_id)
+        if parsed is None:
             raise ConnectorNonRetryableError(
-                f"Cannot determine symbol from order_id '{order_id}'. "
+                f"Cannot parse order_id '{order_id}'. "
                 "In v0.1, only orders placed via BinanceFuturesPort can be cancelled."
             )
+        symbol = parsed.symbol
 
         self._validate_symbol(symbol)
 
@@ -732,6 +733,33 @@ class BinanceFuturesPort:
             level_id=level_id,
             ts=ts,
         )
+
+    def fetch_open_orders_raw(self, symbol: str) -> list[dict[str, Any]]:
+        """Fetch all open orders for a symbol as raw Binance response.
+
+        Returns raw dicts for ObservedStateStore.update_from_rest_orders().
+        """
+        self._validate_symbol(symbol)
+
+        if self.config.dry_run:
+            return []
+
+        params = {"symbol": symbol}
+        params = self._sign_request(params)
+
+        url = f"{self.config.base_url}/fapi/v1/openOrders"
+        response = self.http_client.request(
+            method="GET",
+            url=url,
+            params=params,
+            headers=self._get_headers(),
+            timeout_ms=self.config.timeout_ms,
+        )
+
+        if response.status_code != 200:
+            map_binance_error(response.status_code, response.json_data)
+
+        return response.json_data if isinstance(response.json_data, list) else []
 
     def fetch_open_orders(self, symbol: str) -> list[OrderRecord]:
         """Fetch all open orders for a symbol."""

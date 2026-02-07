@@ -210,6 +210,7 @@ class ReconcileRunner:
     observed: ObservedStateStore
     price_getter: Callable[[str], Decimal] | None = None
     audit_writer: AuditWriter | None = None
+    pre_run_callback: Callable[[], None] | None = None  # Called before each run
 
     _clock: Callable[[], int] = field(default=lambda: int(time.time() * 1000))
 
@@ -219,6 +220,10 @@ class ReconcileRunner:
         Returns:
             ReconcileRunReport with all results and metrics
         """
+        # Call pre_run_callback if set (e.g., for REST snapshot)
+        if self.pre_run_callback is not None:
+            self.pre_run_callback()
+
         ts_start = self._clock()
         metrics = get_reconcile_metrics()
 
