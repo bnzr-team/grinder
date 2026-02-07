@@ -811,7 +811,21 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
     # Stage D: Execute cancel-only (requires ALLOW_MAINNET_TRADE=1)
     REMEDIATION_MODE=execute_cancel_all ALLOW_MAINNET_TRADE=1 \
     PYTHONPATH=src python3 -m scripts.run_live_reconcile --duration 60
+
+    # Stage E: Execute flatten (requires ALLOW_MAINNET_TRADE=1)
+    REMEDIATION_MODE=execute_flatten ALLOW_MAINNET_TRADE=1 \
+    REMEDIATION_STRATEGY_ALLOWLIST="default" \
+    REMEDIATION_SYMBOL_ALLOWLIST="BTCUSDT" \
+    MAX_CALLS_PER_DAY=1 MAX_CALLS_PER_RUN=1 \
+    MAX_NOTIONAL_PER_DAY=150 MAX_NOTIONAL_PER_RUN=150 \
+    FLATTEN_MAX_NOTIONAL_PER_CALL=150 \
+    PYTHONPATH=src python3 -m scripts.run_live_reconcile --duration 60
     ```
+  - **E2E Validation (Mainnet):**
+    - **Stage D E2E:** Verified on Binance Futures mainnet — grinder_ orders cancelled (PR #102)
+    - **Stage E E2E:** Verified on Binance Futures mainnet — position flattened (PR #103)
+    - **BTCUSDT Limitation:** Binance Futures min notional = $100; `scripts/place_test_position.py` has
+      P0 safety guard that fails if min notional exceeds $20 cap (prevents accidental large positions)
   - **Unit tests:** `tests/unit/test_run_live_reconcile.py` (27 tests)
   - See ADR-052 for LC-18 design decisions
 - **ReconcileLoop for LiveEngine** (`src/grinder/live/reconcile_loop.py`):
