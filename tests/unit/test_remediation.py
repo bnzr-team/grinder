@@ -1,10 +1,11 @@
-"""Tests for active remediation (LC-10).
+"""Tests for active remediation (LC-10 + LC-20).
 
 Tests cover:
 - 9 safety gates (one test per gate)
 - Execution (cancel + flatten + limits)
 - Kill-switch semantics (allows remediation)
 - Metrics (planned, executed, blocked counters)
+- HA leader-only remediation (LC-20)
 """
 
 import os
@@ -16,6 +17,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from grinder.core import OrderSide, OrderState
+from grinder.ha.role import HARole, reset_ha_state, set_ha_state
 from grinder.reconcile.config import ReconcileConfig, RemediationAction, RemediationMode
 from grinder.reconcile.metrics import get_reconcile_metrics, reset_reconcile_metrics
 from grinder.reconcile.remediation import (
@@ -99,6 +101,18 @@ def observed_position_large() -> ObservedPosition:
 def reset_metrics() -> None:
     """Reset metrics before each test."""
     reset_reconcile_metrics()
+
+
+@pytest.fixture(autouse=True)
+def reset_ha() -> Generator[None, None, None]:
+    """Reset HA state before and after each test.
+
+    LC-20: By default, set HA role to ACTIVE so existing tests pass.
+    Tests in TestHALeaderOnlyRemediation explicitly set different roles.
+    """
+    set_ha_state(role=HARole.ACTIVE)
+    yield
+    reset_ha_state()
 
 
 @pytest.fixture(autouse=True)
@@ -756,6 +770,8 @@ class TestRemediationBlockReasonValues:
             # LC-18: Allowlist reasons
             "strategy_not_allowed",
             "symbol_not_in_remediation_allowlist",
+            # LC-20: HA reasons
+            "not_leader",
         }
 
         actual = {r.value for r in RemediationBlockReason}
@@ -1186,3 +1202,187 @@ class TestBudgetGates:
         # Should be able to execute again
         result = executor.remediate_cancel(observed_order)
         assert result.status == RemediationStatus.EXECUTED
+
+
+# =============================================================================
+# LC-20: HA Leader-Only Remediation Tests
+# =============================================================================
+
+
+class TestHALeaderOnlyRemediation:
+    """Tests for LC-20 HA leader-only remediation.
+
+    Only instances with HARole.ACTIVE can execute remediation.
+    Non-leader instances (STANDBY, UNKNOWN) are BLOCKED with reason=not_leader.
+    This appears in action_blocked_total{reason="not_leader"} metric.
+    """
+
+    def test_leader_can_execute_cancel(
+        self, mock_port: MagicMock, observed_order: ObservedOrder
+    ) -> None:
+        """Leader (ACTIVE) can execute cancel remediation."""
+        set_ha_state(role=HARole.ACTIVE)
+
+        executor = _make_executor(
+            mock_port,
+            action=RemediationAction.CANCEL_ALL,
+            dry_run=False,
+            allow_active=True,
+            armed=True,
+            whitelist=["BTCUSDT"],
+            remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
+            strategy_allowlist={"default"},
+        )
+        os.environ["ALLOW_MAINNET_TRADE"] = "1"
+
+        result = executor.remediate_cancel(observed_order)
+
+        assert result.status == RemediationStatus.EXECUTED
+        mock_port.cancel_order.assert_called_once()
+
+    def test_leader_can_execute_flatten(
+        self, mock_port: MagicMock, observed_position: ObservedPosition
+    ) -> None:
+        """Leader (ACTIVE) can execute flatten remediation."""
+        set_ha_state(role=HARole.ACTIVE)
+
+        executor = _make_executor(
+            mock_port,
+            action=RemediationAction.FLATTEN,
+            dry_run=False,
+            allow_active=True,
+            armed=True,
+            whitelist=["BTCUSDT"],
+            remediation_mode=RemediationMode.EXECUTE_FLATTEN,
+        )
+        os.environ["ALLOW_MAINNET_TRADE"] = "1"
+
+        result = executor.remediate_flatten(observed_position, current_price=Decimal("42500.00"))
+
+        assert result.status == RemediationStatus.EXECUTED
+        mock_port.place_market_order.assert_called_once()
+
+    def test_standby_cannot_execute_returns_blocked(
+        self, mock_port: MagicMock, observed_order: ObservedOrder
+    ) -> None:
+        """Standby (non-leader) cannot execute, returns BLOCKED."""
+        set_ha_state(role=HARole.STANDBY)
+
+        executor = _make_executor(
+            mock_port,
+            action=RemediationAction.CANCEL_ALL,
+            dry_run=False,
+            allow_active=True,
+            armed=True,
+            whitelist=["BTCUSDT"],
+            remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
+            strategy_allowlist={"default"},
+        )
+        os.environ["ALLOW_MAINNET_TRADE"] = "1"
+
+        result = executor.remediate_cancel(observed_order)
+
+        assert result.status == RemediationStatus.BLOCKED
+        assert result.block_reason == RemediationBlockReason.NOT_LEADER
+        mock_port.cancel_order.assert_not_called()
+
+    def test_unknown_role_cannot_execute_returns_blocked(
+        self, mock_port: MagicMock, observed_order: ObservedOrder
+    ) -> None:
+        """Unknown role (initial state) cannot execute, returns BLOCKED."""
+        set_ha_state(role=HARole.UNKNOWN)
+
+        executor = _make_executor(
+            mock_port,
+            action=RemediationAction.CANCEL_ALL,
+            dry_run=False,
+            allow_active=True,
+            armed=True,
+            whitelist=["BTCUSDT"],
+            remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
+            strategy_allowlist={"default"},
+        )
+        os.environ["ALLOW_MAINNET_TRADE"] = "1"
+
+        result = executor.remediate_cancel(observed_order)
+
+        assert result.status == RemediationStatus.BLOCKED
+        assert result.block_reason == RemediationBlockReason.NOT_LEADER
+        mock_port.cancel_order.assert_not_called()
+
+    def test_standby_flatten_returns_blocked(
+        self, mock_port: MagicMock, observed_position: ObservedPosition
+    ) -> None:
+        """Standby cannot execute flatten, returns BLOCKED."""
+        set_ha_state(role=HARole.STANDBY)
+
+        executor = _make_executor(
+            mock_port,
+            action=RemediationAction.FLATTEN,
+            dry_run=False,
+            allow_active=True,
+            armed=True,
+            whitelist=["BTCUSDT"],
+            remediation_mode=RemediationMode.EXECUTE_FLATTEN,
+        )
+        os.environ["ALLOW_MAINNET_TRADE"] = "1"
+
+        result = executor.remediate_flatten(observed_position, current_price=Decimal("42500.00"))
+
+        assert result.status == RemediationStatus.BLOCKED
+        assert result.block_reason == RemediationBlockReason.NOT_LEADER
+        mock_port.place_market_order.assert_not_called()
+
+    def test_not_leader_increments_blocked_counter(
+        self, mock_port: MagicMock, observed_order: ObservedOrder
+    ) -> None:
+        """NOT_LEADER should increment blocked counter, not planned."""
+        set_ha_state(role=HARole.STANDBY)
+
+        executor = _make_executor(
+            mock_port,
+            action=RemediationAction.CANCEL_ALL,
+            dry_run=False,
+            allow_active=True,
+            armed=True,
+            whitelist=["BTCUSDT"],
+            remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
+            strategy_allowlist={"default"},
+        )
+        os.environ["ALLOW_MAINNET_TRADE"] = "1"
+
+        executor.remediate_cancel(observed_order)
+
+        metrics = get_reconcile_metrics()
+        # NOT_LEADER is a blocking reason, appears in action_blocked_total
+        assert metrics.action_blocked_counts.get("not_leader", 0) == 1
+        assert metrics.action_planned_counts.get("cancel_all", 0) == 0
+
+    def test_role_check_is_first_gate(self, mock_port: MagicMock) -> None:
+        """HA role check happens before all other gates (Gate 0).
+
+        Even with misconfigured mode/budget, NOT_LEADER is returned first.
+        """
+        set_ha_state(role=HARole.STANDBY)
+
+        # Misconfigure everything - should still get NOT_LEADER first
+        executor = _make_executor(
+            mock_port,
+            action=RemediationAction.NONE,  # Would normally block
+            dry_run=True,  # Would normally block
+            allow_active=False,  # Would normally block
+            armed=False,  # Would normally block
+            whitelist=[],  # Would normally block
+            remediation_mode=RemediationMode.DETECT_ONLY,  # Would normally block
+        )
+        # NOT setting ALLOW_MAINNET_TRADE - would normally block
+
+        # Gate 0 (HA role) should be checked first
+        can_exec, reason = executor.can_execute(
+            symbol="BTCUSDT",
+            is_cancel=True,
+            client_order_id="grinder_default_BTCUSDT_1_1704067200000_1",
+        )
+
+        assert can_exec is False
+        assert reason == RemediationBlockReason.NOT_LEADER

@@ -122,10 +122,28 @@ jobs:
       - name: Check HA metrics
         run: |
           echo "=== Instance 1 HA metrics ==="
-          curl -fsS http://localhost:9090/metrics | grep grinder_ha_role
+          curl -fsS http://localhost:9090/metrics | grep -E "grinder_ha_(role|is_leader)"
           echo ""
           echo "=== Instance 2 HA metrics ==="
-          curl -fsS http://localhost:9091/metrics | grep grinder_ha_role
+          curl -fsS http://localhost:9091/metrics | grep -E "grinder_ha_(role|is_leader)"
+
+          # LC-20: Verify grinder_ha_is_leader metric exists and is correct
+          IS_LEADER_1=$(curl -fsS http://localhost:9090/metrics | grep "^grinder_ha_is_leader " | awk '{print $2}')
+          IS_LEADER_2=$(curl -fsS http://localhost:9091/metrics | grep "^grinder_ha_is_leader " | awk '{print $2}')
+          echo ""
+          echo "=== LC-20: Leader status ==="
+          echo "Instance 1 is_leader: $IS_LEADER_1"
+          echo "Instance 2 is_leader: $IS_LEADER_2"
+
+          # Exactly one should have is_leader=1
+          if [[ "$IS_LEADER_1" == "1" && "$IS_LEADER_2" == "0" ]]; then
+            echo "✓ Instance 1 is leader, Instance 2 is follower"
+          elif [[ "$IS_LEADER_1" == "0" && "$IS_LEADER_2" == "1" ]]; then
+            echo "✓ Instance 2 is leader, Instance 1 is follower"
+          else
+            echo "✗ Unexpected leader state: expected one 1 and one 0"
+            exit 1
+          fi
 
       - name: Stop HA stack
         if: always()

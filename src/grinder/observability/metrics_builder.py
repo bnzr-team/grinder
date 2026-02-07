@@ -164,6 +164,9 @@ class MetricsBuilder:
 
         Outputs all possible roles with 1 for current role, 0 for others.
         This follows Prometheus best practices for enum-like gauges.
+
+        Also outputs grinder_ha_is_leader (LC-20) as a convenience metric:
+        1 if role == ACTIVE, 0 otherwise.
         """
         current_role = get_ha_state().role
         lines = [
@@ -173,6 +176,17 @@ class MetricsBuilder:
         for role in HARole:
             value = 1 if role == current_role else 0
             lines.append(f'grinder_ha_role{{role="{role.value}"}} {value}')
+
+        # LC-20: is_leader convenience metric for remediation gating
+        is_leader = 1 if current_role == HARole.ACTIVE else 0
+        lines.extend(
+            [
+                "# HELP grinder_ha_is_leader Whether this instance is the HA leader (1=yes, 0=no)",
+                "# TYPE grinder_ha_is_leader gauge",
+                f"grinder_ha_is_leader {is_leader}",
+            ]
+        )
+
         return lines
 
     def _build_connector_metrics(self) -> list[str]:

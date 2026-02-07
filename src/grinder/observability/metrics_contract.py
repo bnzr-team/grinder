@@ -44,6 +44,10 @@ REQUIRED_METRICS_PATTERNS = [
     "# HELP grinder_ha_role",
     "# TYPE grinder_ha_role",
     "grinder_ha_role",
+    # LC-20: HA leader metric for remediation gating
+    "# HELP grinder_ha_is_leader",
+    "# TYPE grinder_ha_is_leader",
+    "grinder_ha_is_leader",
     # Connector metrics (H2/H3/H4)
     "# HELP grinder_connector_retries_total",
     "# TYPE grinder_connector_retries_total",

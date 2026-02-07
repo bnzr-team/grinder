@@ -220,6 +220,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - `grinder_high_water_mark` (gauge): current equity high-water mark
   - **HA metrics:**
     - `grinder_ha_role{role}` (gauge): 1 for current role (active/standby/unknown)
+    - `grinder_ha_is_leader` (gauge): 1 if this instance is leader (LC-20), 0 otherwise
   - **Connector metrics (H5 Observability):**
     - `grinder_connector_retries_total{op, reason}` (counter): retry events by operation and reason
     - `grinder_idempotency_hits_total{op}` (counter): idempotency cache hits
@@ -659,7 +660,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - **Default behavior:** DETECT_ONLY mode (no planning, no execution)
   - **New types:**
     - `RemediationMode`: Enum (5 modes for staged rollout)
-    - `RemediationBlockReason`: Enum (26 values for why blocked)
+    - `RemediationBlockReason`: Enum (27 values for why blocked — includes NOT_LEADER for LC-20)
     - `RemediationStatus`: Enum (PLANNED, EXECUTED, BLOCKED, FAILED)
     - `RemediationResult`: Frozen dataclass for remediation outcome
     - `RemediationExecutor`: Class with `can_execute()`, `remediate_cancel()`, `remediate_flatten()`
@@ -676,12 +677,18 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     ```bash
     PYTHONPATH=src pytest tests/unit/test_remediation.py -v
     ```
-  - **Unit tests:** `tests/unit/test_remediation.py` (41 tests)
+  - **Unit tests:** `tests/unit/test_remediation.py` (48 tests, including LC-20 HA tests)
+  - **HA Leader-Only Remediation (LC-20):**
+    - Only `HARole.ACTIVE` instances can execute remediation
+    - Non-leader (STANDBY, UNKNOWN) returns BLOCKED status with `NOT_LEADER` reason
+    - Appears in `action_blocked_total{reason="not_leader"}` metric (NOT planned)
+    - Gate 0 (HA role check) happens before all other gates
+    - `grinder_ha_is_leader` metric: 1=leader, 0=follower
+    - See ADR-054 for design decisions
   - **Limitations (v0.2):**
     - Not integrated with LiveEngineV0 event loop
-    - No HA leader election for remediation
     - No automatic strategy recovery
-  - See ADR-043 (LC-10) and ADR-052 (LC-18) for design decisions
+  - See ADR-043 (LC-10), ADR-052 (LC-18), ADR-054 (LC-20) for design decisions
 - **Remediation Wiring v0.1** (`src/grinder/reconcile/runner.py`):
   - Orchestrates: ReconcileEngine → ReconcileRunner → RemediationExecutor (LC-11)
   - **ReconcileRunner:**
