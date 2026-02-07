@@ -95,8 +95,19 @@ Check what you updated.
 
 - [ ] `docs/STATE.md`
 - [ ] `docs/DECISIONS.md`
+- [ ] `docs/ROADMAP.md`
 - [ ] Other docs (list):
-  - 
+  -
+
+---
+
+## Claims & anchors
+<!-- For any "done/verified/works" claim in this PR, provide explicit anchor -->
+<!-- Example: "Stage E verified" → see STATE.md line 825; PR #103 commit 9572fd7 -->
+
+| Claim | Anchor (file + line/section) | PR/Commit (if E2E) |
+|-------|------------------------------|-------------------|
+|       |                              |                   |
 
 ---
 
