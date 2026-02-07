@@ -148,3 +148,12 @@ jobs:
       - name: Stop HA stack
         if: always()
         run: docker compose -f docker-compose.ha.yml down -v
+
+  ha-mismatch-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run LC-20 HA mismatch smoke test
+        run: bash scripts/docker_smoke_ha_mismatch.sh
