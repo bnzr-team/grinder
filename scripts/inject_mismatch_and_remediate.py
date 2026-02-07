@@ -5,7 +5,7 @@ This script is designed to run inside Docker containers via `docker exec`.
 It injects a fake unexpected order and attempts to cancel it via RemediationExecutor.
 
 The result depends on HA role:
-- ACTIVE (leader): Returns PLANNED (dry_run) or EXECUTED
+- ACTIVE (leader): Returns PLANNED (dry_run=True, armed=False, FakePort — never executes)
 - STANDBY/UNKNOWN (follower): Returns BLOCKED with reason=not_leader
 
 Usage (inside container):
@@ -14,7 +14,7 @@ Usage (inside container):
     python /tmp/inject.py --role unknown
 
 Output (JSON):
-    {"role": "active|standby|unknown", "status": "planned|blocked|executed", "block_reason": "...", "metrics": {...}}
+    {"role": "active|standby|unknown", "status": "planned|blocked", "block_reason": "...", "metrics": {...}}
 """
 
 from __future__ import annotations
