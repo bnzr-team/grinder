@@ -17,6 +17,9 @@
 # Usage:
 #   ./scripts/docker_smoke_ha_mismatch.sh
 #
+# Environment variables:
+#   SMOKE_FORCE_FAIL=1  - Force failure after stack starts (for testing diagnostics)
+#
 # Exit codes:
 #   0 - All assertions pass
 #   1 - Assertion failure
@@ -220,6 +223,13 @@ if [[ "$RUNNING_COUNT" -ne 3 ]]; then
     exit 2
 fi
 echo "All 3 services running"
+
+# Debug hook: force failure to test diagnostics
+if [[ "${SMOKE_FORCE_FAIL:-}" == "1" ]]; then
+    echo "SMOKE_FORCE_FAIL=1: forcing failure to test diagnostics"
+    EXIT_CODE=2
+    exit 2
+fi
 
 # Wait for stable leader election (bounded, require N stable readings)
 echo ""
