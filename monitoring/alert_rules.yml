@@ -11,7 +11,7 @@
 #   - grinder_drawdown_pct (gauge): current drawdown percentage
 #   - grinder_high_water_mark (gauge): current equity HWM
 #
-# Reconcile metrics (LC-09b/LC-10/LC-11/LC-15b):
+# Reconcile metrics (LC-09b/LC-10/LC-11/LC-15b/LC-18):
 #   - grinder_reconcile_runs_total (counter): total loop runs
 #   - grinder_reconcile_runs_with_mismatch_total (counter): runs with detected mismatches
 #   - grinder_reconcile_mismatch_total{type} (counter): mismatch count by type
@@ -21,6 +21,11 @@
 #   - grinder_reconcile_action_blocked_total{reason} (counter): blocked actions by reason
 #   - grinder_reconcile_runs_with_remediation_total{action} (counter): runs with remediation
 #   - grinder_reconcile_last_remediation_ts_ms (gauge): last remediation timestamp
+#   - grinder_reconcile_budget_calls_used_day (gauge): calls used today (LC-18)
+#   - grinder_reconcile_budget_calls_remaining_day (gauge): calls remaining today (LC-18)
+#   - grinder_reconcile_budget_notional_used_day (gauge): notional USDT used today (LC-18)
+#   - grinder_reconcile_budget_notional_remaining_day (gauge): notional USDT remaining (LC-18)
+#   - grinder_reconcile_budget_configured (gauge): 1 if budget tracking active (LC-18)
 
 groups:
   - name: grinder_availability
@@ -212,3 +217,33 @@ groups:
           summary: "Mismatches detected but no remediation planned or blocked"
           description: "Mismatches are detected but no actions are being planned/blocked. Check RECONCILE_ACTION setting."
           runbook_url: "docs/runbooks/16_RECONCILE_ALERTS_SLOS.md#reconcilemismatchnoblocks"
+
+      # Warning: Budget calls exhausted (no more remediation calls allowed today)
+      # Only fires when budget tracking is active (budget_configured=1)
+      - alert: ReconcileBudgetCallsExhausted
+        expr: |
+          grinder_reconcile_budget_configured == 1
+          and
+          grinder_reconcile_budget_calls_remaining_day == 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Reconcile budget calls exhausted"
+          description: "No remediation calls remaining for today. Used: {{ with query \"grinder_reconcile_budget_calls_used_day\" }}{{ . | first | value }}{{ end }} calls."
+          runbook_url: "docs/runbooks/16_RECONCILE_ALERTS_SLOS.md#reconcilebudgetcallsexhausted"
+
+      # Warning: Budget notional exhausted or critically low
+      # Only fires when budget tracking is active (budget_configured=1)
+      - alert: ReconcileBudgetNotionalLow
+        expr: |
+          grinder_reconcile_budget_configured == 1
+          and
+          grinder_reconcile_budget_notional_remaining_day < 10
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Reconcile budget notional critically low"
+          description: "Notional budget remaining is {{ $value | printf \"%.2f\" }} USDT (threshold: 10). Used today: {{ with query \"grinder_reconcile_budget_notional_used_day\" }}{{ . | first | value | printf \"%.2f\" }}{{ end }} USDT."
+          runbook_url: "docs/runbooks/16_RECONCILE_ALERTS_SLOS.md#reconcilebudgetnotionallow"

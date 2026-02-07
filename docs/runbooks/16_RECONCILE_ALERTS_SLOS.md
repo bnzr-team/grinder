@@ -23,6 +23,8 @@ This runbook covers:
 | ReconcileRemediationPlanned | info | Dry-run action planned |
 | ReconcileRemediationBlocked | info | Action blocked by gates |
 | ReconcileMismatchNoBlocks | warning | Mismatches but no remediation |
+| ReconcileBudgetCallsExhausted | warning | No remediation calls remaining today |
+| ReconcileBudgetNotionalLow | warning | Notional budget critically low (< $10) |
 
 ---
 
@@ -309,6 +311,101 @@ export RECONCILE_ENABLED=0
 
 ---
 
+### ReconcileBudgetCallsExhausted
+
+**Severity:** Warning
+
+**Meaning:** No remediation calls remaining for today (budget exhausted).
+
+**Impact:** Any new mismatches will be detected but NOT remediated until budget resets.
+
+**Note:** This alert only fires when `grinder_reconcile_budget_configured=1`.
+If budget tracking is not active (no RemediationExecutor initialized), the alert is suppressed.
+
+**Triage Steps:**
+
+1. Check budget state:
+   ```bash
+   curl -s http://localhost:9090/metrics | grep grinder_reconcile_budget
+   ```
+
+2. Verify calls used:
+   ```bash
+   # Check audit log for today's executions
+   grep "EXECUTED" audit/reconcile.jsonl | wc -l
+   ```
+
+3. Review if budget was intentionally tight:
+   ```bash
+   echo "MAX_CALLS_PER_DAY=$MAX_CALLS_PER_DAY"
+   echo "MAX_CALLS_PER_RUN=$MAX_CALLS_PER_RUN"
+   ```
+
+4. Check budget state file:
+   ```bash
+   cat $BUDGET_STATE_PATH
+   ```
+
+**Resolution:**
+- If expected (staged rollout): Wait for daily budget reset (UTC midnight)
+- If urgent: Reset budget with `--reset-budget-state` flag (see M4.2)
+- If budget too tight: Increase `MAX_CALLS_PER_DAY` and restart
+- Review executed actions: Were they all necessary?
+
+**Budget Reset:**
+```bash
+# Option 1: Wait for automatic daily reset (UTC midnight)
+# Option 2: Manual reset (use with caution!)
+rm $BUDGET_STATE_PATH
+# Or use the CLI flag:
+PYTHONPATH=src python3 -m scripts.run_live_reconcile --reset-budget-state ...
+```
+
+---
+
+### ReconcileBudgetNotionalLow
+
+**Severity:** Warning
+
+**Meaning:** Remaining notional budget is critically low (< $10 USDT).
+
+**Impact:** Only very small remediation actions can execute; larger positions may not be flattened.
+
+**Note:** This alert only fires when `grinder_reconcile_budget_configured=1`.
+If budget tracking is not active (no RemediationExecutor initialized), the alert is suppressed.
+
+**Triage Steps:**
+
+1. Check current budget state:
+   ```bash
+   curl -s http://localhost:9090/metrics | grep grinder_reconcile_budget
+   ```
+
+2. Review notional usage:
+   ```bash
+   # Check what notional was used
+   grep "EXECUTED.*notional" audit/reconcile.jsonl | tail -10
+   ```
+
+3. Verify budget configuration:
+   ```bash
+   echo "MAX_NOTIONAL_PER_DAY=$MAX_NOTIONAL_PER_DAY"
+   echo "FLATTEN_MAX_NOTIONAL_PER_CALL=$FLATTEN_MAX_NOTIONAL_PER_CALL"
+   ```
+
+**Resolution:**
+- If expected (tight budgets for testing): Wait for daily reset or adjust limits
+- If urgent remediation needed:
+  1. Reset budget state (see ReconcileBudgetCallsExhausted)
+  2. Or increase `MAX_NOTIONAL_PER_DAY` and restart
+- Review if positions are larger than expected
+
+**See Also:**
+- [Runbook 13: Stage E](13_OPERATOR_CEREMONY.md#stage-e-non-btc-symbol-micro-test-flatten) - Non-BTC micro-test with tight budgets
+- M4.2 BudgetState Policy for budget lifecycle management
+
+---
+
 ## Emergency Rollback
 
 ### Immediate Stop (Big Red Button)
@@ -375,6 +472,22 @@ increase(grinder_reconcile_runs_total[5m]) > 0
 
 # Snapshot freshness (should be 1)
 grinder_reconcile_last_snapshot_age_seconds < 120
+```
+
+### Budget Panel (LC-18)
+
+```promql
+# Calls remaining today (red=0, yellow=1-4, green=5+)
+grinder_reconcile_budget_calls_remaining_day
+
+# Calls used today
+grinder_reconcile_budget_calls_used_day
+
+# Notional remaining today (red=0, yellow=<$10, green=$50+)
+grinder_reconcile_budget_notional_remaining_day
+
+# Notional used today
+grinder_reconcile_budget_notional_used_day
 ```
 
 ---

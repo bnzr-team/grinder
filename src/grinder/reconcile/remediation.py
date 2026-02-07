@@ -167,6 +167,8 @@ class RemediationExecutor:
                 max_notional_per_run=self.config.max_notional_per_run,
                 state_path=self.config.budget_state_path,
             )
+        # Initialize budget metrics on startup
+        self.sync_budget_metrics()
 
     def reset_run_counters(self) -> None:
         """Reset per-run counters. Call at start of each reconcile run."""
@@ -174,6 +176,39 @@ class RemediationExecutor:
         self._symbols_this_run = set()
         if self.budget_tracker:
             self.budget_tracker.reset_run_counters()
+        # Sync budget state to metrics
+        self.sync_budget_metrics()
+
+    def sync_budget_metrics(self) -> None:
+        """Push budget state to global ReconcileMetrics (LC-18).
+
+        Should be called:
+        - After __post_init__ (initialization)
+        - After reset_run_counters() (each run start)
+        - After record_execution() (each execution)
+
+        If budget_tracker is None, sets budget_configured=False.
+        """
+        metrics = get_reconcile_metrics()
+        if self.budget_tracker is None:
+            metrics.set_budget_metrics(
+                calls_used=0,
+                notional_used=Decimal("0"),
+                calls_remaining=0,
+                notional_remaining=Decimal("0"),
+                configured=False,
+            )
+            return
+
+        used = self.budget_tracker.get_used()
+        remaining = self.budget_tracker.get_remaining()
+        metrics.set_budget_metrics(
+            calls_used=int(used["calls_used_day"]),
+            notional_used=Decimal(str(used["notional_used_day"])),
+            calls_remaining=int(remaining["calls_remaining_day"]),
+            notional_remaining=Decimal(str(remaining["notional_remaining_day"])),
+            configured=True,
+        )
 
     def _check_env_var(self) -> bool:
         """Check ALLOW_MAINNET_TRADE env var."""
@@ -511,6 +546,7 @@ class RemediationExecutor:
                 # LC-18: Record budget usage (cancel has no notional)
                 if self.budget_tracker:
                     self.budget_tracker.record_execution(Decimal("0"))
+                    self.sync_budget_metrics()
 
                 metrics.record_action_executed(action)
                 logger.info(
@@ -677,6 +713,7 @@ class RemediationExecutor:
             # LC-18: Record budget usage with notional
             if self.budget_tracker:
                 self.budget_tracker.record_execution(notional_usdt)
+                self.sync_budget_metrics()
 
             metrics.record_action_executed(action)
             logger.info(
