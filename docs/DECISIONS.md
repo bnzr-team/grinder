@@ -2615,3 +2615,32 @@
   - ADR-043: Active Remediation v0.1
   - ADR-045: Configurable Order Identity (LC-12)
   - Runbook: `docs/runbooks/12_ACTIVE_REMEDIATION.md` (update pending)
+
+## ADR-053 — ROADMAP Structure: Post-Stage-E (M4/M5/M6)
+- **Date:** 2026-02-07
+- **Status:** accepted
+- **Context:**
+  After Stage D/E E2E mainnet verification (PR #102–#104), the original "M3 — Production v1.0" placeholder
+  in ROADMAP.md no longer reflects reality. The LC-* series (LC-04 through LC-18) delivered live
+  reconciliation with active remediation, which was the actual production-readiness work. The old M3
+  items (connector hardening, risk controls, HA, monitoring) are either completed via LC-* deliverables
+  (see STATE.md for details) or need to be replanned as separate milestones (M4/M5/M6).
+
+- **Decision:**
+  - Rename completed work to "M3 — Live Reconciliation" and mark as ✅ Done
+  - Add "Section 0) Current Main Truth State" at top of ROADMAP.md for quick reference
+  - Define new milestones M4/M5/M6 for remaining production hardening:
+    - M4: Ops Hardening (artifacts hygiene, budget policy, low-notional symbols)
+    - M5: Observability Polish (dashboards, alerts, SLOs)
+    - M6: HA / Leader Election (LC-20)
+  - Each milestone has: Deliverables, Acceptance/DoD, Required Proof
+
+- **Consequences:**
+  - ROADMAP.md now matches STATE.md (no SSOT conflict)
+  - Clear separation: "what's done" vs "what's planned"
+  - Each planned milestone has verifiable acceptance criteria
+  - Historical M1/M2 DoD preserved for reference
+
+- **Alternatives:**
+  - Keep old M3 and mark items as done/skipped: rejected — creates confusion about what "M3" means
+  - Rename to M3.1/M3.2: rejected — harder to track than clean M4/M5/M6 numbering
