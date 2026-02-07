@@ -33,6 +33,14 @@ Usage:
     PYTHONPATH=src python3 -m scripts.run_live_reconcile --duration 60
     # Creates: /var/lib/grinder/artifacts/YYYY-MM-DD/run_<ts>/{stdout.log,audit.jsonl,...}
 
+    # First run (clean budget) - use --reset-budget-state:
+    BUDGET_STATE_PATH=/var/lib/grinder/budget.json \\
+    PYTHONPATH=src python3 -m scripts.run_live_reconcile --reset-budget-state --duration 60
+
+    # Multi-run (persist budget) - no reset flag:
+    BUDGET_STATE_PATH=/var/lib/grinder/budget.json \\
+    PYTHONPATH=src python3 -m scripts.run_live_reconcile --duration 60
+
 Environment Variables:
     REMEDIATION_MODE              detect_only|plan_only|blocked|execute_cancel_all|execute_flatten
     ALLOW_MAINNET_TRADE           Must be "1" for EXECUTE_* modes (default: "0")
@@ -44,6 +52,7 @@ Environment Variables:
     MAX_NOTIONAL_PER_RUN          Max notional per run (default: 1000)
     FLATTEN_MAX_NOTIONAL_PER_CALL Max notional for single flatten (default: 500)
     BUDGET_STATE_PATH             Path to persist daily budget (default: None)
+    BUDGET_STATE_STALE_HOURS      Hours before stale warning (default: 24)
     GRINDER_ARTIFACTS_DIR         Base artifacts directory (enables run-dir mode)
     GRINDER_ARTIFACT_TTL_DAYS     Days to keep old run-dirs (default: 14)
 
@@ -90,6 +99,7 @@ from grinder.ops.artifacts import (
     resolve_artifact_paths,
     write_stdout_summary,
 )
+from grinder.ops.budget import check_budget_state_stale, reset_budget_state
 from grinder.reconcile.audit import AuditConfig, AuditWriter
 from grinder.reconcile.config import ReconcileConfig, RemediationAction, RemediationMode
 from grinder.reconcile.engine import ReconcileEngine
@@ -616,6 +626,15 @@ def parse_args() -> argparse.Namespace:
             "Path = use explicit path."
         ),
     )
+    parser.add_argument(
+        "--reset-budget-state",
+        action="store_true",
+        help=(
+            "Delete BUDGET_STATE_PATH file before starting. "
+            "Use for first run or to start with clean budget. "
+            "Logs: budget_state_reset=1 path=..."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -638,6 +657,14 @@ def main() -> int:  # noqa: PLR0915, PLR0912
     except ConfigError as e:
         print_config_error(str(e))
         return EXIT_CONFIG_ERROR
+
+    # Handle budget state lifecycle (M4.2)
+    # Reset must happen BEFORE anything else loads the budget state
+    if args.reset_budget_state:
+        reset_budget_state(config.budget_state_path)
+    else:
+        # Check for stale budget state file (default: 24h)
+        check_budget_state_stale(config.budget_state_path)
 
     # Load artifact config and resolve paths (M4.1)
     # Three states for --audit-out / --metrics-out:

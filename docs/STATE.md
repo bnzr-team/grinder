@@ -853,6 +853,24 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
       ```bash
       ls -la $GRINDER_ARTIFACTS_DIR/$(date +%Y-%m-%d)/run_*/
       ```
+  - **Budget State Lifecycle (M4.2):**
+    - `BUDGET_STATE_PATH`: Path to persist daily budget (optional)
+    - `BUDGET_STATE_STALE_HOURS`: Hours before stale warning (default: 24)
+    - `--reset-budget-state`: CLI flag to delete budget file before start
+    - **First run (clean):** Use `--reset-budget-state` to start fresh
+    - **Multi-run (persist):** Omit flag to preserve budget across runs
+    - **Stale warning:** Logs warning if file mtime > 24h (configurable)
+    - **Usage:**
+      ```bash
+      # First run - clean budget
+      BUDGET_STATE_PATH=/var/lib/grinder/budget.json \
+      PYTHONPATH=src python3 -m scripts.run_live_reconcile --reset-budget-state --duration 60
+
+      # Multi-run - preserve budget
+      BUDGET_STATE_PATH=/var/lib/grinder/budget.json \
+      PYTHONPATH=src python3 -m scripts.run_live_reconcile --duration 60
+      ```
+    - **Unit tests:** `tests/unit/test_budget_lifecycle.py`
 - **ReconcileLoop for LiveEngine** (`src/grinder/live/reconcile_loop.py`):
   - Periodic background loop for reconciliation in LiveEngine (LC-14a, LC-14b)
   - **Threading pattern:** Daemon thread with `threading.Event` for graceful shutdown

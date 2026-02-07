@@ -304,6 +304,48 @@ watch -n 10 'curl -s http://localhost:9090/metrics | grep action_executed'
 2. Check if orders are from another grinder instance
 3. Consider tightening symbol whitelist
 
+## Budget State Management (M4.2)
+
+### First Run vs Multi-Run
+
+**First run (clean slate):** Use `--reset-budget-state` to start with fresh budget counters:
+
+```bash
+BUDGET_STATE_PATH=/var/lib/grinder/budget.json \
+GRINDER_ARTIFACTS_DIR=/var/lib/grinder/artifacts \
+PYTHONPATH=src python3 -m scripts.run_live_reconcile \
+  --reset-budget-state \
+  --duration 60
+```
+
+Output includes: `budget_state_reset=1 path=/var/lib/grinder/budget.json`
+
+**Multi-run (preserve budget):** Omit `--reset-budget-state` to accumulate budget usage:
+
+```bash
+BUDGET_STATE_PATH=/var/lib/grinder/budget.json \
+GRINDER_ARTIFACTS_DIR=/var/lib/grinder/artifacts \
+PYTHONPATH=src python3 -m scripts.run_live_reconcile \
+  --duration 60
+```
+
+This ensures you hit real `BUDGET_EXHAUSTED` scenarios across runs.
+
+### Stale Budget Warning
+
+If the budget state file is older than 24 hours, you'll see:
+
+```
+WARNING: Budget state is stale (25.3h old, threshold=24h)
+         Last modified: 2024-01-14 10:00:00 UTC
+         Path: /var/lib/grinder/budget.json
+         Consider using --reset-budget-state for a clean start.
+```
+
+This helps catch "forgot to reset" or "stale from yesterday" situations.
+
+Configure threshold via `BUDGET_STATE_STALE_HOURS` env var (default: 24).
+
 ## Checklist Summary
 
 ### Pre-Enablement
