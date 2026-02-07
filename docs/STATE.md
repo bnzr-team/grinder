@@ -680,7 +680,8 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - **Unit tests:** `tests/unit/test_remediation.py` (48 tests, including LC-20 HA tests)
   - **HA Leader-Only Remediation (LC-20):**
     - Only `HARole.ACTIVE` instances can execute remediation
-    - Non-leader (STANDBY, UNKNOWN) returns PLANNED status with `NOT_LEADER` reason
+    - Non-leader (STANDBY, UNKNOWN) returns BLOCKED status with `NOT_LEADER` reason
+    - Appears in `action_blocked_total{reason="not_leader"}` metric (NOT planned)
     - Gate 0 (HA role check) happens before all other gates
     - `grinder_ha_is_leader` metric: 1=leader, 0=follower
     - See ADR-054 for design decisions

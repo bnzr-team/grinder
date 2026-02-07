@@ -241,7 +241,8 @@ export RECONCILE_ENABLED=0
 - `dry_run`: DRY_RUN mode enabled
 - `mode_plan_only`: PLAN_ONLY remediation mode
 - `mode_blocked`: BLOCKED remediation mode
-- `not_leader`: LC-20 — Instance is not HA leader (STANDBY or UNKNOWN role)
+
+**Note:** `not_leader` (LC-20) is recorded as BLOCKED, not PLANNED. See ReconcileRemediationBlocked alert.
 
 **Triage Steps:**
 

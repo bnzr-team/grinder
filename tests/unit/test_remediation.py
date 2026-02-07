@@ -1213,7 +1213,8 @@ class TestHALeaderOnlyRemediation:
     """Tests for LC-20 HA leader-only remediation.
 
     Only instances with HARole.ACTIVE can execute remediation.
-    Non-leader instances (STANDBY, UNKNOWN) can detect and plan but not execute.
+    Non-leader instances (STANDBY, UNKNOWN) are BLOCKED with reason=not_leader.
+    This appears in action_blocked_total{reason="not_leader"} metric.
     """
 
     def test_leader_can_execute_cancel(
@@ -1261,10 +1262,10 @@ class TestHALeaderOnlyRemediation:
         assert result.status == RemediationStatus.EXECUTED
         mock_port.place_market_order.assert_called_once()
 
-    def test_standby_cannot_execute_returns_planned(
+    def test_standby_cannot_execute_returns_blocked(
         self, mock_port: MagicMock, observed_order: ObservedOrder
     ) -> None:
-        """Standby (non-leader) cannot execute, returns PLANNED."""
+        """Standby (non-leader) cannot execute, returns BLOCKED."""
         set_ha_state(role=HARole.STANDBY)
 
         executor = _make_executor(
@@ -1281,14 +1282,14 @@ class TestHALeaderOnlyRemediation:
 
         result = executor.remediate_cancel(observed_order)
 
-        assert result.status == RemediationStatus.PLANNED
+        assert result.status == RemediationStatus.BLOCKED
         assert result.block_reason == RemediationBlockReason.NOT_LEADER
         mock_port.cancel_order.assert_not_called()
 
-    def test_unknown_role_cannot_execute_returns_planned(
+    def test_unknown_role_cannot_execute_returns_blocked(
         self, mock_port: MagicMock, observed_order: ObservedOrder
     ) -> None:
-        """Unknown role (initial state) cannot execute, returns PLANNED."""
+        """Unknown role (initial state) cannot execute, returns BLOCKED."""
         set_ha_state(role=HARole.UNKNOWN)
 
         executor = _make_executor(
@@ -1305,14 +1306,14 @@ class TestHALeaderOnlyRemediation:
 
         result = executor.remediate_cancel(observed_order)
 
-        assert result.status == RemediationStatus.PLANNED
+        assert result.status == RemediationStatus.BLOCKED
         assert result.block_reason == RemediationBlockReason.NOT_LEADER
         mock_port.cancel_order.assert_not_called()
 
-    def test_standby_flatten_returns_planned(
+    def test_standby_flatten_returns_blocked(
         self, mock_port: MagicMock, observed_position: ObservedPosition
     ) -> None:
-        """Standby cannot execute flatten, returns PLANNED."""
+        """Standby cannot execute flatten, returns BLOCKED."""
         set_ha_state(role=HARole.STANDBY)
 
         executor = _make_executor(
@@ -1328,14 +1329,14 @@ class TestHALeaderOnlyRemediation:
 
         result = executor.remediate_flatten(observed_position, current_price=Decimal("42500.00"))
 
-        assert result.status == RemediationStatus.PLANNED
+        assert result.status == RemediationStatus.BLOCKED
         assert result.block_reason == RemediationBlockReason.NOT_LEADER
         mock_port.place_market_order.assert_not_called()
 
-    def test_not_leader_increments_planned_counter(
+    def test_not_leader_increments_blocked_counter(
         self, mock_port: MagicMock, observed_order: ObservedOrder
     ) -> None:
-        """NOT_LEADER should increment planned counter, not blocked."""
+        """NOT_LEADER should increment blocked counter, not planned."""
         set_ha_state(role=HARole.STANDBY)
 
         executor = _make_executor(
@@ -1353,9 +1354,9 @@ class TestHALeaderOnlyRemediation:
         executor.remediate_cancel(observed_order)
 
         metrics = get_reconcile_metrics()
-        # NOT_LEADER is a planning reason, not a blocking reason
-        assert metrics.action_planned_counts.get("cancel_all", 0) == 1
-        assert metrics.action_blocked_counts.get("not_leader", 0) == 0
+        # NOT_LEADER is a blocking reason, appears in action_blocked_total
+        assert metrics.action_blocked_counts.get("not_leader", 0) == 1
+        assert metrics.action_planned_counts.get("cancel_all", 0) == 0
 
     def test_role_check_is_first_gate(self, mock_port: MagicMock) -> None:
         """HA role check happens before all other gates (Gate 0).

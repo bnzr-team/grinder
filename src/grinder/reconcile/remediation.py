@@ -6,6 +6,7 @@ See ADR-047 for HA leader-only remediation (LC-20).
 
 Key safety guarantees:
 - HA leader check: Only ACTIVE instance can execute (LC-20)
+  Non-leaders are BLOCKED with reason=not_leader (appears in action_blocked_total)
 - 9 safety gates must ALL pass for real execution
 - Default: dry-run only (plan but don't execute)
 - Order identity check required for cancel (protects manual/other orders)
@@ -487,14 +488,14 @@ class RemediationExecutor:
         if not can_exec:
             # LC-18/LC-20: Determine if this is a planning scenario or a real block
             # DETECT_ONLY: No planning at all
-            # PLAN_ONLY, MODE_BLOCKED, DRY_RUN, ACTION_IS_NONE, NOT_LEADER: Record as planned
+            # PLAN_ONLY, MODE_BLOCKED, DRY_RUN, ACTION_IS_NONE: Record as planned
+            # NOT_LEADER (LC-20): Record as BLOCKED (appears in action_blocked_total)
             # Everything else: Record as blocked
             planning_reasons = (
                 RemediationBlockReason.ACTION_IS_NONE,
                 RemediationBlockReason.DRY_RUN,
                 RemediationBlockReason.MODE_PLAN_ONLY,
                 RemediationBlockReason.MODE_BLOCKED,
-                RemediationBlockReason.NOT_LEADER,  # LC-20: Follower can plan
             )
             detect_only_reasons = (RemediationBlockReason.MODE_DETECT_ONLY,)
 
@@ -644,12 +645,12 @@ class RemediationExecutor:
 
         if not can_exec:
             # LC-18/LC-20: Determine if this is a planning scenario or a real block
+            # NOT_LEADER (LC-20): Record as BLOCKED (appears in action_blocked_total)
             planning_reasons = (
                 RemediationBlockReason.ACTION_IS_NONE,
                 RemediationBlockReason.DRY_RUN,
                 RemediationBlockReason.MODE_PLAN_ONLY,
                 RemediationBlockReason.MODE_BLOCKED,
-                RemediationBlockReason.NOT_LEADER,  # LC-20: Follower can plan
             )
             detect_only_reasons = (RemediationBlockReason.MODE_DETECT_ONLY,)
 
