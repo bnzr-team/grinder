@@ -127,11 +127,11 @@ See ADR-053 for rationale.
 - ✅ Connector hardening: Timeouts, retries, idempotency, circuit breaker (via LC-* PRs)
 
 **M3 DoD achieved:**
-- Stage D E2E: `execute_cancel_all` verified on mainnet ✓
-- Stage E E2E: `execute_flatten` verified on mainnet ✓
+- Stage D E2E: `execute_cancel_all` verified on mainnet (PR #102) ✓
+- Stage E E2E: `execute_flatten` verified on mainnet (PR #103) ✓
 - All safety gates verified (ALLOW_MAINNET_TRADE, allowlists, budgets) ✓
 - Metrics contract SSOT in `live_contract.py` ✓
-- Runbook-ready commands in STATE.md ✓
+- Runbook-ready commands in STATE.md (PR #104) ✓
 
 ---
 

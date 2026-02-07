@@ -4,6 +4,15 @@
 
 Next steps and progress tracker: `docs/ROADMAP.md`.
 
+**Note on H-labels:** Throughout this document, labels like `(H1)`, `(H2)`, etc. are informal shorthand for connector hardening ADRs:
+- H1 = ADR-024 (Timeouts + Clean Shutdown)
+- H2 = ADR-025 (Retry Utilities)
+- H3 = ADR-026 (Idempotency)
+- H4 = ADR-027 (Circuit Breaker)
+- H5 = ADR-028 (Observability Metrics)
+
+These are **not** a formal checklist. For canonical status, see the ADRs in `docs/DECISIONS.md`.
+
 ## Works now
 - `grinder --help` / `grinder-paper --help` / `grinder-backtest --help` — CLI entrypoints работают.
 - `python -m scripts.run_live` поднимает `/healthz` и `/metrics`:
