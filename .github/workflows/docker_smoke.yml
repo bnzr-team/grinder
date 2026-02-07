@@ -128,8 +128,8 @@ jobs:
           curl -fsS http://localhost:9091/metrics | grep -E "grinder_ha_(role|is_leader)"
 
           # LC-20: Verify grinder_ha_is_leader metric exists and is correct
-          IS_LEADER_1=$(curl -fsS http://localhost:9090/metrics | grep "grinder_ha_is_leader " | awk '{print $2}')
-          IS_LEADER_2=$(curl -fsS http://localhost:9091/metrics | grep "grinder_ha_is_leader " | awk '{print $2}')
+          IS_LEADER_1=$(curl -fsS http://localhost:9090/metrics | grep "^grinder_ha_is_leader " | awk '{print $2}')
+          IS_LEADER_2=$(curl -fsS http://localhost:9091/metrics | grep "^grinder_ha_is_leader " | awk '{print $2}')
           echo ""
           echo "=== LC-20: Leader status ==="
           echo "Instance 1 is_leader: $IS_LEADER_1"
