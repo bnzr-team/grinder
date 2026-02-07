@@ -2,8 +2,10 @@
 
 See ADR-043 for design decisions.
 See ADR-045 for configurable order identity (LC-12).
+See ADR-047 for HA leader-only remediation (LC-20).
 
 Key safety guarantees:
+- HA leader check: Only ACTIVE instance can execute (LC-20)
 - 9 safety gates must ALL pass for real execution
 - Default: dry-run only (plan but don't execute)
 - Order identity check required for cancel (protects manual/other orders)
@@ -22,6 +24,7 @@ from enum import Enum
 from typing import TYPE_CHECKING
 
 from grinder.core import OrderSide
+from grinder.ha.role import HARole, get_ha_state
 from grinder.reconcile.budget import BudgetTracker
 from grinder.reconcile.config import ReconcileConfig, RemediationAction, RemediationMode
 from grinder.reconcile.identity import (
@@ -82,6 +85,9 @@ class RemediationBlockReason(Enum):
     STRATEGY_NOT_ALLOWED = "strategy_not_allowed"
     SYMBOL_NOT_IN_REMEDIATION_ALLOWLIST = "symbol_not_in_remediation_allowlist"
 
+    # LC-20: HA reasons
+    NOT_LEADER = "not_leader"
+
 
 class RemediationStatus(Enum):
     """Status of a remediation action."""
@@ -131,7 +137,8 @@ class RemediationResult:
 class RemediationExecutor:
     """Executor for active remediation actions.
 
-    Safety architecture (LC-10 + LC-18):
+    Safety architecture (LC-10 + LC-18 + LC-20):
+    - HA role gate (LC-20): Only ACTIVE instance can execute
     - Mode gates: DETECT_ONLY/PLAN_ONLY/BLOCKED prevent execution
     - Budget gates: Per-run and per-day limits
     - Allowlist gates: Strategy and symbol restrictions
@@ -341,7 +348,8 @@ class RemediationExecutor:
         Returns:
             (can_execute, block_reason): Tuple of result and optional reason
 
-        Gate sequence (LC-18 additions first):
+        Gate sequence (LC-20/LC-18 additions first):
+            0. HA role == ACTIVE (LC-20, leader-only)
             0a. Mode allows this action type
             0b. Budget limits (per-run and per-day)
             0c. Strategy in allowlist (if configured)
@@ -362,6 +370,12 @@ class RemediationExecutor:
             - max_symbols_per_action
             - require_whitelist
         """
+        # LC-20 Gate 0: HA role check - only leader can execute
+        # Followers can still detect and plan, but CANNOT execute
+        ha_state = get_ha_state()
+        if ha_state.role != HARole.ACTIVE:
+            return (False, RemediationBlockReason.NOT_LEADER)
+
         # LC-18 Gate 0a: Mode check
         mode_ok, mode_reason = self._check_mode_allows_action(is_cancel)
         if not mode_ok:
@@ -471,15 +485,16 @@ class RemediationExecutor:
         )
 
         if not can_exec:
-            # LC-18: Determine if this is a planning scenario or a real block
+            # LC-18/LC-20: Determine if this is a planning scenario or a real block
             # DETECT_ONLY: No planning at all
-            # PLAN_ONLY, MODE_BLOCKED, DRY_RUN, ACTION_IS_NONE: Record as planned
+            # PLAN_ONLY, MODE_BLOCKED, DRY_RUN, ACTION_IS_NONE, NOT_LEADER: Record as planned
             # Everything else: Record as blocked
             planning_reasons = (
                 RemediationBlockReason.ACTION_IS_NONE,
                 RemediationBlockReason.DRY_RUN,
                 RemediationBlockReason.MODE_PLAN_ONLY,
                 RemediationBlockReason.MODE_BLOCKED,
+                RemediationBlockReason.NOT_LEADER,  # LC-20: Follower can plan
             )
             detect_only_reasons = (RemediationBlockReason.MODE_DETECT_ONLY,)
 
@@ -628,12 +643,13 @@ class RemediationExecutor:
         )
 
         if not can_exec:
-            # LC-18: Determine if this is a planning scenario or a real block
+            # LC-18/LC-20: Determine if this is a planning scenario or a real block
             planning_reasons = (
                 RemediationBlockReason.ACTION_IS_NONE,
                 RemediationBlockReason.DRY_RUN,
                 RemediationBlockReason.MODE_PLAN_ONLY,
                 RemediationBlockReason.MODE_BLOCKED,
+                RemediationBlockReason.NOT_LEADER,  # LC-20: Follower can plan
             )
             detect_only_reasons = (RemediationBlockReason.MODE_DETECT_ONLY,)
 

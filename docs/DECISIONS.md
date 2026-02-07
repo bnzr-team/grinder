@@ -2644,3 +2644,45 @@
 - **Alternatives:**
   - Keep old M3 and mark items as done/skipped: rejected — creates confusion about what "M3" means
   - Rename to M3.1/M3.2: rejected — harder to track than clean M4/M5/M6 numbering
+
+## ADR-054 — HA Leader-Only Remediation (LC-20)
+
+- **Status:** Accepted
+- **Context:**
+  RemediationExecutor can execute cancel/flatten actions, but in an HA deployment with multiple
+  instances (active + standby), we must ensure only ONE instance executes remediation. Otherwise:
+  - Both instances might try to cancel the same order (race condition)
+  - Both might try to flatten the same position (doubled trade)
+  - Budget tracking would be split across instances
+
+- **Decision:**
+  1. Add `NOT_LEADER = "not_leader"` to `RemediationBlockReason` enum
+  2. Add HA role check as Gate 0 in `can_execute()` — before all other gates
+  3. Only `HARole.ACTIVE` instances can execute remediation
+  4. Non-leader instances (STANDBY, UNKNOWN) return `PLANNED` status (can detect/plan, not execute)
+  5. Add `grinder_ha_is_leader` metric (1=leader, 0=follower) for dashboards/alerts
+  6. NOT_LEADER is a "planning reason" — increments `action_planned_total`, not `action_blocked_total`
+
+- **Gate Order (updated):**
+  - Gate 0: HA role == ACTIVE (LC-20)
+  - Gate 0a: Mode allows action (LC-18)
+  - Gate 0b: Budget limits (LC-18)
+  - Gate 0c-0d: Allowlists (LC-18)
+  - Gates 1-9: Original safety gates (LC-10)
+
+- **Consequences:**
+  - HA deployments are safe: only leader executes remediation
+  - Followers can still detect mismatches and plan (useful for monitoring)
+  - Budget tracking remains correct (only leader updates state file)
+  - If leader fails over, new leader takes over remediation responsibility
+  - `grinder_ha_is_leader` provides simple alerting target
+
+- **Metrics:**
+  - `grinder_ha_is_leader` (gauge): 1 if this instance is leader, 0 otherwise
+  - `grinder_reconcile_action_planned_total{action="cancel_all|flatten"}`: includes NOT_LEADER plans
+  - `grinder_reconcile_action_blocked_total{reason="not_leader"}`: NOT used (NOT_LEADER is planning)
+
+- **Testing:**
+  - Unit tests: TestHALeaderOnlyRemediation (7 tests)
+  - HA smoke test: Verifies only leader has is_leader=1
+  - Integration: docker-compose.ha.yml with 2 instances

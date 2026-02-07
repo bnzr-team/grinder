@@ -237,6 +237,12 @@ export RECONCILE_ENABLED=0
 
 **Impact:** None - action was simulated, not executed.
 
+**Planning Reasons:**
+- `dry_run`: DRY_RUN mode enabled
+- `mode_plan_only`: PLAN_ONLY remediation mode
+- `mode_blocked`: BLOCKED remediation mode
+- `not_leader`: LC-20 — Instance is not HA leader (STANDBY or UNKNOWN role)
+
 **Triage Steps:**
 
 1. Review planned actions:
@@ -249,8 +255,16 @@ export RECONCILE_ENABLED=0
    echo "RECONCILE_DRY_RUN=$RECONCILE_DRY_RUN"
    ```
 
+3. Check if NOT_LEADER (LC-20):
+   ```bash
+   # Check HA role
+   curl -s http://localhost:9090/metrics | grep grinder_ha_is_leader
+   # 1 = leader (can execute), 0 = follower (can only plan)
+   ```
+
 **Resolution:**
 - Expected behavior during Stage 2 (Plan-only)
+- If NOT_LEADER: This is expected for HA follower instances
 - Review plans before enabling execution
 
 ---
