@@ -690,6 +690,9 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - Leader: `status=planned`, `action_planned_total{action="cancel_all"} >= 1`
     - Follower: `status=blocked`, `action_blocked_total{reason="not_leader"} >= 1`
     - Uses FakePort (no real HTTP calls to Binance)
+    - **Diagnostics debug knob (local only):**
+      - Set `SMOKE_FORCE_FAIL=1` to force an early exit after the HA stack starts, to verify that `dump_diagnostics()` prints `docker compose ps`, container logs, and HA metrics.
+      - CI does **not** use `SMOKE_FORCE_FAIL`; it is intended for manual troubleshooting only.
   - **Limitations (v0.2):**
     - Not integrated with LiveEngineV0 event loop
     - No automatic strategy recovery
