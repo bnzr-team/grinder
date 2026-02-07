@@ -143,6 +143,58 @@ class TestResolveArtifactPaths:
         assert paths.metrics_out == paths.run_dir / METRICS_PROM
         assert paths.metrics_explicit is False
 
+    def test_audit_disabled_with_run_dir(self, tmp_path: Path) -> None:
+        """When audit_disabled=True + base_dir, audit_out is None even with run-dir."""
+        config = ArtifactConfig(
+            base_dir=tmp_path,
+            audit_disabled=True,
+        )
+
+        paths = resolve_artifact_paths(config)
+
+        assert paths.run_dir is not None
+        assert paths.audit_out is None  # Explicitly disabled
+        assert paths.metrics_out == paths.run_dir / METRICS_PROM
+
+    def test_metrics_disabled_with_run_dir(self, tmp_path: Path) -> None:
+        """When metrics_disabled=True + base_dir, metrics_out is None even with run-dir."""
+        config = ArtifactConfig(
+            base_dir=tmp_path,
+            metrics_disabled=True,
+        )
+
+        paths = resolve_artifact_paths(config)
+
+        assert paths.run_dir is not None
+        assert paths.metrics_out is None  # Explicitly disabled
+        assert paths.audit_out == paths.run_dir / AUDIT_JSONL
+
+    def test_both_disabled_returns_all_none(self) -> None:
+        """When both audit_disabled and metrics_disabled, all output paths are None."""
+        config = ArtifactConfig(
+            base_dir=Path("/tmp/artifacts"),  # Even with base_dir set
+            audit_disabled=True,
+            metrics_disabled=True,
+        )
+
+        paths = resolve_artifact_paths(config)
+
+        assert paths.run_dir is None
+        assert paths.stdout_log is None
+        assert paths.audit_out is None
+        assert paths.metrics_out is None
+
+    def test_disabled_overrides_explicit_path(self) -> None:
+        """When disabled=True, explicit path is ignored."""
+        config = ArtifactConfig(
+            explicit_audit_out="/tmp/audit.jsonl",
+            audit_disabled=True,
+        )
+
+        paths = resolve_artifact_paths(config)
+
+        assert paths.audit_out is None  # Disabled takes precedence
+
 
 class TestEnsureRunDir:
     """Tests for ensure_run_dir()."""

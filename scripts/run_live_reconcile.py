@@ -29,9 +29,9 @@ Usage:
     PYTHONPATH=src python3 -m scripts.run_live_reconcile --duration 60
 
     # With artifacts run-dir (M4.1):
-    GRINDER_ARTIFACTS_DIR=/var/log/grinder \\
+    GRINDER_ARTIFACTS_DIR=/var/lib/grinder/artifacts \\
     PYTHONPATH=src python3 -m scripts.run_live_reconcile --duration 60
-    # Creates: /var/log/grinder/YYYY-MM-DD/run_<ts>/{stdout.log,audit.jsonl,...}
+    # Creates: /var/lib/grinder/artifacts/YYYY-MM-DD/run_<ts>/{stdout.log,audit.jsonl,...}
 
 Environment Variables:
     REMEDIATION_MODE              detect_only|plan_only|blocked|execute_cancel_all|execute_flatten
@@ -586,8 +586,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--audit-out",
         type=str,
-        default="/tmp/grinder_audit.jsonl",
-        help="Audit log output path (default: /tmp/grinder_audit.jsonl, empty=disable)",
+        default=None,
+        help=(
+            "Audit log output path. "
+            "Not provided = auto (uses run-dir if GRINDER_ARTIFACTS_DIR set). "
+            "Empty string = disabled. "
+            "Path = use explicit path."
+        ),
     )
     parser.add_argument(
         "--symbols",
@@ -603,8 +608,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--metrics-out",
         type=str,
-        default="",
-        help="Path to write final metrics in Prometheus text format (empty=disabled)",
+        default=None,
+        help=(
+            "Path to write final metrics in Prometheus text format. "
+            "Not provided = auto (uses run-dir if GRINDER_ARTIFACTS_DIR set). "
+            "Empty string = disabled. "
+            "Path = use explicit path."
+        ),
     )
     return parser.parse_args()
 
@@ -630,18 +640,25 @@ def main() -> int:  # noqa: PLR0915, PLR0912
         return EXIT_CONFIG_ERROR
 
     # Load artifact config and resolve paths (M4.1)
-    # Empty string = disabled for explicit paths
+    # Three states for --audit-out / --metrics-out:
+    #   None = not provided, can use run-dir auto
+    #   "" = explicitly disabled (even with run-dir)
+    #   "path" = explicit path
+    audit_disabled = args.audit_out == ""
+    metrics_disabled = args.metrics_out == ""
     explicit_audit = args.audit_out if args.audit_out else None
     explicit_metrics = args.metrics_out if args.metrics_out else None
     artifact_config = load_artifact_config_from_env(
         explicit_audit_out=explicit_audit,
         explicit_metrics_out=explicit_metrics,
+        audit_disabled=audit_disabled,
+        metrics_disabled=metrics_disabled,
     )
     artifact_paths = resolve_artifact_paths(artifact_config)
 
-    # Run TTL cleanup if artifacts dir is configured
-    if artifact_config.base_dir and artifact_config.ttl_days > 0:
-        cleanup_old_runs(artifact_config.base_dir, artifact_config.ttl_days)
+    # Run TTL cleanup only if run-dir is actually being used (P1 fix)
+    if artifact_paths.run_dir and artifact_config.ttl_days > 0:
+        cleanup_old_runs(artifact_config.base_dir, artifact_config.ttl_days)  # type: ignore[arg-type]
 
     # Create run-dir if needed
     if artifact_paths.run_dir:

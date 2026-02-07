@@ -845,9 +845,9 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - Backward compatible: explicit `--audit-out`/`--metrics-out` take precedence
     - **Usage:**
       ```bash
-      GRINDER_ARTIFACTS_DIR=/var/log/grinder \
+      GRINDER_ARTIFACTS_DIR=/var/lib/grinder/artifacts \
       PYTHONPATH=src python3 -m scripts.run_live_reconcile --duration 60
-      # Creates: /var/log/grinder/2026-02-07/run_1707307200000/{stdout.log,...}
+      # Creates: /var/lib/grinder/artifacts/2026-02-07/run_1707307200000/{stdout.log,...}
       ```
     - **Post-run artifact bundle:**
       ```bash

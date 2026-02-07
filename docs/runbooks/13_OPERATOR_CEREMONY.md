@@ -112,7 +112,7 @@ Enable structured artifact storage for post-mortem analysis:
 
 ```bash
 # Enable artifact run-directory (M4.1)
-export GRINDER_ARTIFACTS_DIR=/var/log/grinder
+export GRINDER_ARTIFACTS_DIR=/var/lib/grinder/artifacts
 export GRINDER_ARTIFACT_TTL_DAYS=14  # Optional: days to keep old runs
 
 # Run reconcile - artifacts are auto-created in run-dir

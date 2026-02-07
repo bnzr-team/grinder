@@ -74,26 +74,40 @@ class ArtifactConfig:
         ttl_days: Days to keep old run-dirs (0 = no cleanup)
         explicit_audit_out: Explicit audit path from CLI (takes precedence)
         explicit_metrics_out: Explicit metrics path from CLI (takes precedence)
+        audit_disabled: True if audit explicitly disabled (empty string passed)
+        metrics_disabled: True if metrics explicitly disabled (empty string passed)
     """
 
     base_dir: Path | None = None
     ttl_days: int = DEFAULT_TTL_DAYS
     explicit_audit_out: str | None = None
     explicit_metrics_out: str | None = None
+    audit_disabled: bool = False
+    metrics_disabled: bool = False
 
 
 def load_artifact_config_from_env(
     explicit_audit_out: str | None = None,
     explicit_metrics_out: str | None = None,
+    audit_disabled: bool = False,
+    metrics_disabled: bool = False,
 ) -> ArtifactConfig:
     """Load artifact configuration from environment variables.
 
     Args:
-        explicit_audit_out: CLI-provided audit path (takes precedence)
-        explicit_metrics_out: CLI-provided metrics path (takes precedence)
+        explicit_audit_out: CLI-provided audit path (takes precedence over run-dir)
+        explicit_metrics_out: CLI-provided metrics path (takes precedence over run-dir)
+        audit_disabled: True if audit explicitly disabled (user passed empty string)
+        metrics_disabled: True if metrics explicitly disabled (user passed empty string)
 
     Returns:
         ArtifactConfig with resolved settings
+
+    Note:
+        Three states for each output:
+        1. Not provided (None, disabled=False) → can use run-dir auto path
+        2. Explicit path provided → use that path
+        3. Explicitly disabled (None, disabled=True) → no output even with run-dir
     """
     base_dir_str = os.environ.get(ENV_ARTIFACTS_DIR, "").strip()
     base_dir = Path(base_dir_str) if base_dir_str else None
@@ -112,6 +126,8 @@ def load_artifact_config_from_env(
         ttl_days=ttl_days,
         explicit_audit_out=explicit_audit_out if explicit_audit_out else None,
         explicit_metrics_out=explicit_metrics_out if explicit_metrics_out else None,
+        audit_disabled=audit_disabled,
+        metrics_disabled=metrics_disabled,
     )
 
 
@@ -122,10 +138,10 @@ def resolve_artifact_paths(
     """Resolve artifact paths based on configuration.
 
     Rules:
-    1. If config.base_dir is set and no explicit paths are given,
-       create run-dir and use fixed filenames inside it.
-    2. If explicit paths are given, use them directly (no run-dir).
-    3. If neither, return all None (artifacts disabled).
+    1. If explicitly disabled (audit_disabled/metrics_disabled), output is None
+    2. If explicit path given, use that path
+    3. If base_dir set and not disabled, use run-dir auto path
+    4. Otherwise, output is None
 
     Args:
         config: Artifact configuration
@@ -137,7 +153,20 @@ def resolve_artifact_paths(
     if run_ts_ms is None:
         run_ts_ms = int(datetime.now(UTC).timestamp() * 1000)
 
-    # If both explicit paths are given, use them without run-dir
+    # If both outputs are explicitly disabled, no run-dir needed
+    if config.audit_disabled and config.metrics_disabled:
+        return ArtifactPaths(
+            run_dir=None,
+            stdout_log=None,
+            audit_out=None,
+            metrics_out=None,
+            metrics_summary=None,
+            budget_state=None,
+            audit_explicit=False,
+            metrics_explicit=False,
+        )
+
+    # If both explicit paths are given (and not disabled), use them without run-dir
     if config.explicit_audit_out and config.explicit_metrics_out:
         return ArtifactPaths(
             run_dir=None,
@@ -150,10 +179,14 @@ def resolve_artifact_paths(
             metrics_explicit=True,
         )
 
-    # If no base_dir, check for explicit paths
+    # If no base_dir, check for explicit paths (respecting disabled flags)
     if config.base_dir is None:
-        audit = Path(config.explicit_audit_out) if config.explicit_audit_out else None
-        metrics = Path(config.explicit_metrics_out) if config.explicit_metrics_out else None
+        audit = None
+        if not config.audit_disabled and config.explicit_audit_out:
+            audit = Path(config.explicit_audit_out)
+        metrics = None
+        if not config.metrics_disabled and config.explicit_metrics_out:
+            metrics = Path(config.explicit_metrics_out)
         return ArtifactPaths(
             run_dir=None,
             stdout_log=None,
@@ -169,15 +202,27 @@ def resolve_artifact_paths(
     date_str = datetime.fromtimestamp(run_ts_ms / 1000, tz=UTC).strftime("%Y-%m-%d")
     run_dir = config.base_dir / date_str / f"run_{run_ts_ms}"
 
+    # Resolve audit path: explicit > run-dir > None (if disabled)
+    if config.audit_disabled:
+        audit_out = None
+    elif config.explicit_audit_out:
+        audit_out = Path(config.explicit_audit_out)
+    else:
+        audit_out = run_dir / AUDIT_JSONL
+
+    # Resolve metrics path: explicit > run-dir > None (if disabled)
+    if config.metrics_disabled:
+        metrics_out = None
+    elif config.explicit_metrics_out:
+        metrics_out = Path(config.explicit_metrics_out)
+    else:
+        metrics_out = run_dir / METRICS_PROM
+
     return ArtifactPaths(
         run_dir=run_dir,
         stdout_log=run_dir / STDOUT_LOG,
-        audit_out=Path(config.explicit_audit_out)
-        if config.explicit_audit_out
-        else run_dir / AUDIT_JSONL,
-        metrics_out=Path(config.explicit_metrics_out)
-        if config.explicit_metrics_out
-        else run_dir / METRICS_PROM,
+        audit_out=audit_out,
+        metrics_out=metrics_out,
         metrics_summary=run_dir / METRICS_SUMMARY_JSON,
         budget_state=run_dir / BUDGET_STATE_JSON,
         audit_explicit=config.explicit_audit_out is not None,
