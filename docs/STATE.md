@@ -833,8 +833,10 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - **E2E Validation (Mainnet):**
     - **Stage D E2E:** Verified on Binance Futures mainnet — grinder_ orders cancelled (PR #102)
     - **Stage E E2E:** Verified on Binance Futures mainnet — position flattened (PR #103)
-    - **BTCUSDT Limitation:** Binance Futures min notional = $100; `scripts/place_test_position.py` has
+    - **BTCUSDT Limitation:** Binance Futures min notional is high; `scripts/place_test_position.py` has
       P0 safety guard that fails if min notional exceeds $20 cap (prevents accidental large positions)
+    - **Non-BTC Micro-Test (M4.3):** For lower-notional testing, see Runbook 13 "Stage E: Non-BTC Symbol
+      Micro-Test" — includes exchangeInfo procedure to verify min-notional before testing
   - **Unit tests:** `tests/unit/test_run_live_reconcile.py` (27 tests)
   - See ADR-052 for LC-18 design decisions
   - **Artifact Run-Directory (M4.1):**
