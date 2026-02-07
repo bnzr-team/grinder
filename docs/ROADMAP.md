@@ -6,27 +6,55 @@ This file tracks **plan + progress**.
 - **Why key choices were made:** `docs/DECISIONS.md`
 - Specs in `docs/*` describe **target behavior** unless `STATE.md` says implemented.
 
-Last updated: 2026-02-01
+Last updated: 2026-02-07
 
 ---
 
-## 1) Current status (from STATE.md)
+## 0) Current Main Truth State
+
+This section reflects **what is verified and merged on main** as of PR #104.
+
+### Completed Milestones
+
+| Milestone | Status | Completed |
+|-----------|--------|-----------|
+| M1 — Vertical Slice v0.1 | ✅ Done | 2026-01-31 |
+| M2 — Beta v0.5 | ✅ Done | 2026-02-01 |
+| M3 — Live Reconciliation | ✅ Done | 2026-02-07 |
+
+### Stage D/E E2E Mainnet Verification
+
+| Stage | Status | Description | PR |
+|-------|--------|-------------|-----|
+| Stage D | ✅ E2E mainnet | `execute_cancel_all` — grinder_ orders cancelled | PR #102 |
+| Stage E | ✅ E2E mainnet | `execute_flatten` — position flattened | PR #103 → `9572fd7` |
+| Docs | ✅ Runbook-ready | STATE.md updated with tight budgets | PR #104 → `4434284` |
+
+### Key Achievements (LC-* series)
+
+- **LC-12:** `parse_client_order_id()` — fixed `split("_")` bug for cancel routing
+- **LC-18:** 5-mode staged rollout (detect_only → plan_only → blocked → execute_cancel_all → execute_flatten)
+- **Connector hardening:** Timeouts, retries, idempotency, circuit breaker, connector metrics (see STATE.md)
+- **Safety gates verified:**
+  - `ALLOW_MAINNET_TRADE=1` hard gate for execute modes
+  - `REMEDIATION_*_ALLOWLIST` for strategy + symbol filtering
+  - Budget caps: `MAX_CALLS_PER_DAY`, `MAX_NOTIONAL_PER_DAY`
+- **Metrics contract:** SSOT in `live_contract.py`, graceful without redis
+
+---
+
+## 1) Historical Status
 
 ### Foundation / Infrastructure — Done
 - ✅ PR #2–#9: infrastructure fixes (CLI entrypoints, soak runner, docker/grafana, docs truth, proof guards)
 - ✅ PR #10: `STATE.md` updated to match reality
 - ✅ PR #11: CODEOWNERS added for critical paths
 
-### Now
-- ✅ M1 — Vertical Slice v0.1 (Replay-first) — completed 2026-01-31
-- ✅ M2 — Beta v0.5 (paper loop + gating) — completed 2026-02-01
-- ⬜ M3 — Production v1.0 (hardening + ops)
-
 ---
 
-## 2) Milestones
+## 2) Completed Milestones
 
-### M1 — Vertical Slice v0.1 (Replay-first)
+### M1 — Vertical Slice v0.1 (Replay-first) — ✅ Done 2026-01-31
 **Goal:** fixture → prefilter → policy → order intents → execution stub → metrics/logs → deterministic replay
 
 **Governing docs**
@@ -37,13 +65,7 @@ Last updated: 2026-02-01
 - `docs/10_RISK_SPEC.md` (limits/kill-switch expectations)
 - `docs/13_OBSERVABILITY.md` (metrics/logging expectations)
 
-**Success criteria (measurable)**
-- `python -m scripts.verify_replay_determinism --fixture <...>` returns stable digest for the same fixture
-- Unit tests exist for each stage (prefilter/policy/execution glue)
-- CLI can run one end-to-end replay (skeleton mode is fine)
-- `STATE.md` updated after each PR to reflect what is implemented
-
-**Work items (recommended PR sequence)**
+**Work items (all merged)**
 - ✅ PR-013: Domain contracts (events/state/order_intents) — merged 2026-01-31
 - ✅ PR-014: Prefilter v0 (rule-based gating) — merged 2026-01-31
 - ✅ PR-015: Adaptive Controller spec + unicode scanner — merged 2026-01-31
@@ -53,10 +75,10 @@ Last updated: 2026-02-01
 
 ---
 
-### M2 — Beta v0.5
+### M2 — Beta v0.5 (Paper Loop + Gating) — ✅ Done 2026-02-01
 **Goal:** paper loop with gating + observability maturity
 
-**Work items (recommended PR sequence)**
+**Work items (all merged)**
 - ✅ Adaptive Controller spec (docs-only): `docs/16_ADAPTIVE_GRID_CONTROLLER_SPEC.md` — merged 2026-01-31
 - ✅ PR-019: Paper Loop v0 + Gating (rate limit + risk gate) — merged 2026-01-31
 - ✅ PR-020: Gating metrics contract (GatingMetrics, labels, contract tests) — merged 2026-01-31
@@ -68,7 +90,6 @@ Last updated: 2026-02-01
 - ✅ PR-026: Top-K prefilter v0 (volatility scoring, K=3 default) — merged 2026-01-31
 - ✅ PR-027: Adaptive Controller v0 (rule-based modes: BASE/WIDEN/TIGHTEN/PAUSE) — merged 2026-02-01 (GitHub PR #35)
 - ✅ PR-028: Observability stack v0 (Prometheus + Grafana + alerts) — merged 2026-02-01 (GitHub PR #37)
-  - Note: Also fixed `.github/workflows/promtool.yml` (added `--entrypoint promtool`)
 - ✅ PR-029: docs/DEV.md (developer environment setup guide) — merged 2026-02-01 (GitHub PR #36)
 
 **M2 DoD achieved:**
@@ -81,41 +102,167 @@ Last updated: 2026-02-01
 
 ---
 
-### M3 — Production v1.0
-**Goal:** hardening + operations + safety
-- ⬜ Connector integration hardened (timeouts, retries, idempotency)
-- ⬜ Risk controls complete (kill-switch, limits, drawdown guard)
-- ⬜ HA deployment + runbooks
-- ⬜ Monitoring dashboards + alerts finalized
-- ⬜ Soak thresholds used as a release gate
+### M3 — Live Reconciliation (LC-* series) — ✅ Done 2026-02-07
+**Goal:** Live reconciliation with active remediation on Binance Futures USDT-M
+
+**Note:** This milestone supersedes the original "M3 — Production v1.0" placeholder.
+See ADR-053 for rationale.
+
+**Work items (all merged, PR #37–#104)**
+- ✅ LC-04: BinanceExchangePort v0.2 (Spot, testnet + mainnet guards)
+- ✅ LC-05: LiveEngine v0 (write-path wiring with arming model)
+- ✅ LC-06: LiveFeed v0 (read-path: WS → Snapshot → Features)
+- ✅ LC-08b-F: BinanceFuturesPort v0.1 (Futures USDT-M)
+- ✅ LC-09a: FuturesUserDataWsConnector (user-data stream)
+- ✅ LC-09b: Passive reconciliation (expected vs observed state)
+- ✅ LC-10: Active remediation (cancel_all + flatten actions)
+- ✅ LC-11: ReconcileRunner wiring + routing policy
+- ✅ LC-12: Configurable order identity (`parse_client_order_id()`)
+- ✅ LC-13: E2E smoke harness (3 scenarios)
+- ✅ LC-14a/b: ReconcileLoop (background thread + real sources)
+- ✅ LC-15a: Enablement ceremony (5-stage rollout)
+- ✅ LC-15b: Reconcile observability (26 metrics + 7 alerts + SLOs)
+- ✅ LC-17: Credentialed real-source smoke (detect-only)
+- ✅ LC-18: Staged rollout modes (5 modes)
+- ✅ Connector hardening: Timeouts, retries, idempotency, circuit breaker (via LC-* PRs)
+
+**M3 DoD achieved:**
+- Stage D E2E: `execute_cancel_all` verified on mainnet ✓
+- Stage E E2E: `execute_flatten` verified on mainnet ✓
+- All safety gates verified (ALLOW_MAINNET_TRADE, allowlists, budgets) ✓
+- Metrics contract SSOT in `live_contract.py` ✓
+- Runbook-ready commands in STATE.md ✓
 
 ---
 
-## 3) Traceability matrix (milestones → docs → proofs → outputs)
+## 3) Planned Milestones (Post-Stage-E)
 
-If a PR touches a milestone scope, it must:
-- follow the governing specs below,
-- include the required Proof Bundle items,
-- update `STATE.md`.
+### M4 — Ops Hardening (P1/P2)
+**Goal:** Operational hygiene for production readiness
+
+#### M4.1 — Artifacts Hygiene
+**Deliverables:**
+- Run-directory structure: `$GRINDER_ARTIFACTS_DIR/YYYY-MM-DD/run_<ts>/`
+- Fixed filenames inside run-dir: `stdout.log`, `audit.jsonl`, `metrics.prom`, `metrics_summary.json`, `budget_state.json`
+- TTL policy: 7–14 days retention, older run-dirs rotated/archived
+
+**Acceptance / DoD:**
+- If `--audit-out`/`--metrics-out` are NOT provided and `GRINDER_ARTIFACTS_DIR` is set, outputs go to run-dir by default; explicit paths override
+- Rotation script or cron job documented in runbook
+- No `/tmp` artifacts in operator workflow
+
+**Required proof:**
+- `ls -laR $GRINDER_ARTIFACTS_DIR/` showing run-dir structure + fixed filenames
+- Runbook section for rotation
+- `pytest tests/unit/test_audit.py` passes
+
+---
+
+#### M4.2 — BudgetState Policy
+**Deliverables:**
+- Document when to delete `BUDGET_STATE_PATH` (first run clean vs multi-run persist)
+- Add `--reset-budget` CLI flag to `run_live_reconcile.py`
+- Add warning log if budget file older than 24h
+
+**Acceptance / DoD:**
+- Runbook section: "Budget State Management"
+- `--reset-budget` flag implemented and tested
+- Stale budget warning appears in logs
+
+**Required proof:**
+- `python -m scripts.run_live_reconcile --help` shows `--reset-budget`
+- Log output showing stale budget warning
+- `pytest tests/unit/test_budget.py` passes
+
+---
+
+#### M4.3 — Runbook: Stage E on Non-BTC Symbols
+**Deliverables:**
+- Document procedure to query `GET /fapi/v1/exchangeInfo` and extract min notional per symbol
+- Example symbols with low min notional (verify live before use)
+- Example command for micro-position testing (~$10–20)
+- Update `scripts/place_test_position.py` safety cap if needed
+
+**Acceptance / DoD:**
+- Runbook section: "Testing with Low-Notional Symbols" with query procedure
+- At least 2 example symbols with instructions to verify min notional live
+- Example command runnable without $100+ exposure
+
+**Required proof:**
+- `curl -s 'https://fapi.binance.com/fapi/v1/exchangeInfo' | jq '.symbols[] | select(.symbol=="DOGEUSDT") | .filters'` (or equivalent)
+- Runbook diff with query procedure + example command
+- (Optional) E2E test on low-notional symbol
+
+---
+
+### M5 — Observability Polish
+**Goal:** Production-grade dashboards and alerting
+
+**Deliverables:**
+- Dashboard panel: budget remaining (calls/notional)
+- Dashboard panel: `action_executed_total` time series
+- SLO/Runbook binding: "Budget exhausted → what to do"
+- Alert: `ReconcileBudgetExhausted` (critical)
+
+**Acceptance / DoD:**
+- Grafana dashboard updated with budget panels
+- Alert rule added to `monitoring/alert_rules.yml`
+- Runbook section: "Budget Exhausted Response"
+
+**Required proof:**
+- `docker compose -f docker-compose.observability.yml up --build -d`
+- `./scripts/docker_smoke_observability.sh` passes
+- `curl -sf localhost:9090/metrics | rg "grinder_reconcile_budget"` shows budget metrics
+- `promtool check rules monitoring/alert_rules.yml` passes
+- Runbook diff
+- (Optional) Screenshot of Grafana dashboard with budget panels
+
+---
+
+### M6 — HA / Leader Election (LC-20)
+**Goal:** Safe multi-instance deployment where only leader can remediate
+
+**Deliverables:**
+- Leader election mechanism (e.g., Redis lock, etcd, Kubernetes lease)
+- `ReconcileLoop` respects leader status (only leader executes, followers detect/plan)
+- Metric: `grinder_ha_is_leader` gauge
+- Graceful leader handoff on shutdown
+
+**Acceptance / DoD:**
+- 2-instance test: only 1 instance executes remediation
+- Failover test: leader dies → follower takes over within 30s
+- No split-brain: 0 duplicate executions
+
+**Required proof:**
+- Integration test with 2 instances
+- Log output showing leader election
+- Metric `grinder_ha_is_leader` toggling
+- `pytest tests/integration/test_ha_leader.py` passes
+
+---
+
+## 4) Traceability Matrix
 
 | Milestone | Scope / Deliverable | Governing docs | Required proofs/tests | Outputs / artifacts |
 |---|---|---|---|---|
-| M1 — Vertical Slice v0.1 | End-to-end fixture pipeline: prefilter → policy → intents → execution stub → metrics/logs → deterministic replay | `STATE.md`, `11_BACKTEST_PROTOCOL.md`, `04_PREFILTER_SPEC.md`, `07_GRID_POLICY_LIBRARY.md`, `09_EXECUTION_SPEC.md`, `10_RISK_SPEC.md` | `pytest`, `mypy`, `python -m scripts.verify_replay_determinism` | Replay output JSON + stable digest |
-| M2 — Beta v0.5 | Paper loop + gating + observability | `STATE.md`, `13_OBSERVABILITY.md`, `06_TOXICITY_SPEC.md`, `09_EXECUTION_SPEC.md`, `10_RISK_SPEC.md` | `pytest`, `mypy`, docker/compose smoke (`/healthz`, `/metrics`), `python -m scripts.secret_guard --verbose` | Running paper loop + dashboards |
-| M3 — Production v1.0 | Ops + safety hardening | `STATE.md`, `10_RISK_SPEC.md`, `09_EXECUTION_SPEC.md`, `13_OBSERVABILITY.md`, `14_GITHUB_WORKFLOW.md`, `DECISIONS.md` | `pytest`, `mypy`, soak thresholds pass, docker/compose smoke, security scans | Runbooks + release gates |
+| M1 — Vertical Slice | Fixture pipeline | STATE.md, 11_BACKTEST_PROTOCOL.md | pytest, mypy, verify_replay_determinism | Replay digest |
+| M2 — Beta v0.5 | Paper loop + gating | STATE.md, 13_OBSERVABILITY.md | pytest, mypy, docker smoke | Dashboards |
+| M3 — Live Reconciliation | Active remediation | STATE.md, ADR-042–052 | pytest, mypy, E2E mainnet verification | Audit JSONL, metrics |
+| M4 — Ops Hardening | Artifacts, budget, runbooks | STATE.md, runbooks/ | pytest, runbook review | Stable artifacts |
+| M5 — Observability Polish | Dashboards, alerts, SLOs | STATE.md, 13_OBSERVABILITY.md | promtool, Grafana screenshots | Alert rules |
+| M6 — HA / Leader Election | Multi-instance safety | STATE.md, ADR-TBD | Integration tests, failover test | HA runbook |
 
 ---
 
-## 4) Definition of Done (DoD) for M1 PRs
+## 5) Definition of Done (DoD) — Historical Reference
 
-This is the checklist that must be satisfied for each PR in M1 to be considered "Done".
+See sections below for M1/M2 PR-level DoD. These are preserved for reference.
 
 ### PR-013 — Domain contracts (events/state/order_intents)
 **DoD**
-- Introduce minimal typed contracts used across the pipeline:
-  - Snapshot/event type(s), PolicyState, OrderIntent, Decision container
+- Introduce minimal typed contracts used across the pipeline
 - No business logic yet — only contracts + tests
-- Update `STATE.md` ("contracts added")
+- Update `STATE.md`
 
 **Proof**
 - `PYTHONPATH=src python -m pytest -q`
@@ -127,7 +274,7 @@ This is the checklist that must be satisfied for each PR in M1 to be considered 
 **DoD**
 - Implement a rule-based gate that returns ALLOW/BLOCK + reason
 - Unit tests: allow + block paths
-- Update `STATE.md` (prefilter implemented, limitations listed)
+- Update `STATE.md`
 
 **Proof**
 - `pytest`, `mypy`
@@ -135,111 +282,17 @@ This is the checklist that must be satisfied for each PR in M1 to be considered 
 
 ---
 
-### PR-015 — Adaptive Controller spec + unicode scanner
-**DoD**
-- Add `docs/16_ADAPTIVE_GRID_CONTROLLER_SPEC.md` (regime/step/reset spec)
-- Add `scripts/check_unicode.py` with `--all` flag for Python files
-- Docs-only + tooling, no production code
-
-**Proof**
-- `python scripts/check_unicode.py --all` passes
-- Spec reviewed and merged
-
----
-
-### PR-016 — GridPolicy v0 (static symmetric grid)
-**DoD**
-- Implement one minimal policy that produces deterministic intents from a snapshot
-- Unit tests for levels/spacing/edge cases
-- Update `STATE.md` (policy implemented, parameters + limitations)
-
-**Proof**
-- `pytest`, `mypy`
-- `verify_replay_determinism` if it affects replay output
-
----
-
-### PR-017 — Execution stub v0 (apply intents)
-**DoD**
-- Executor applies intents in replay/paper mode without exchange writes
-- Structured logs + basic metrics updated (as per `13_OBSERVABILITY.md` minimal set)
-- Unit tests for mapping intents→actions
-- Update `STATE.md`
-
-**Proof**
-- `pytest`, `mypy`
-- `verify_replay_determinism`
-
----
-
-### PR-018 — CLI wiring end-to-end (replay-first)
-**DoD**
-- `grinder replay ...` runs end-to-end on a fixture and produces deterministic output
-- `verify_replay_determinism` passes on at least one fixture
-- Update `STATE.md` (end-to-end slice "implemented")
-
-**Proof**
-- `pytest`, `mypy`
-- `python -m scripts.verify_replay_determinism --fixture ...` (stable digest)
-
----
-
-## 5) Definition of Done (DoD) for M2 PRs
-
 ### PR-019 — Paper Loop v0 + Gating
 **DoD**
 - PaperExecutionPort/PaperEngine: execution without real orders
 - Gating v0: at least 2 gates (rate limit + risk limit)
-- CLI: `grinder paper --fixture <path>` runs paper trading on fixture
+- CLI: `grinder paper --fixture <path>`
 - Unit tests for gates (allow/block paths)
 - E2E test for paper loop with deterministic digest
-- Update `STATE.md` (paper loop + gating implemented)
+- Update `STATE.md`
 
 **Proof**
-- `pip install -e .`
-- `grinder --help` + `grinder paper --help`
 - `PYTHONPATH=src python3 -m pytest -q`
 - `ruff check .` + `ruff format --check .`
 - `mypy .`
 - `python3 scripts/check_unicode.py --all`
-
----
-
-### PR-020 — Gating metrics contract
-**DoD**
-- `GatingMetrics` class with `record_allowed()`, `record_blocked()`, `to_prometheus_lines()`
-- `GateName` and `GateReason` enums with stable values for metric labels
-- Contract tests ensuring label values don't change
-- Update `STATE.md` (gating metrics documented)
-
-**Proof**
-- `pytest tests/unit/test_gating_contracts.py`
-- Verify metric format: `grinder_gating_allowed_total{gate="..."}`, `grinder_gating_blocked_total{gate="...",reason="..."}`
-
----
-
-### PR-021 — Observability /metrics endpoint
-**DoD**
-- `/metrics` endpoint exports system metrics + gating metrics in Prometheus format
-- `MetricsBuilder` consolidates all metrics
-- Contract tests for metric names and labels
-- Update `STATE.md` (observability documented)
-
-**Proof**
-- `curl localhost:9090/metrics` shows gating metrics
-- `pytest tests/unit/test_observability.py`
-
----
-
-### PR-022 — Allowed-orders fixture + fill coverage
-**DoD**
-- New fixture `tests/fixtures/sample_day_allowed/` with events that pass prefilter + gating
-- At least 1 order placed (not blocked)
-- Canonical digest locked in config.json and tests
-- Determinism verified across runs
-- Update `STATE.md` and `ROADMAP.md`
-
-**Proof**
-- `grinder paper --fixture tests/fixtures/sample_day_allowed` → orders_placed > 0
-- Digest matches `f78930356488da3e`
-- `pytest tests/unit/test_paper.py::TestAllowedOrdersFixture` passes
