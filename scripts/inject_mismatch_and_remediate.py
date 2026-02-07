@@ -79,6 +79,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     """Run mismatch injection and remediation attempt."""
+    # SAFETY GUARD: Fail if ALLOW_MAINNET_TRADE is set externally
+    # This script uses FakePort and must NEVER execute real trades
+    if os.getenv("ALLOW_MAINNET_TRADE") == "1":
+        print(json.dumps({"error": "ALLOW_MAINNET_TRADE=1 is forbidden in smoke tests"}))
+        return 2
+
     args = parse_args()
 
     # Reset metrics for clean state
@@ -113,12 +119,13 @@ def main() -> int:
     # Create fake port
     fake_port = FakePort()
 
-    # Create executor with all safety gates enabled
-    os.environ["ALLOW_MAINNET_TRADE"] = "1"
+    # Create executor with safety gates
+    # NOTE: armed=False because this is a smoke test with FakePort
+    # The test verifies HA role gating (not_leader) and dry_run behavior
     executor = RemediationExecutor(
         config=config,
         port=fake_port,  # type: ignore[arg-type]
-        armed=True,
+        armed=False,  # Never arm in smoke tests
         symbol_whitelist=["BTCUSDT", "ETHUSDT"],
         identity_config=identity_config,
     )
