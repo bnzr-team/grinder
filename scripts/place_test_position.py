@@ -89,10 +89,12 @@ def get_current_price(http_client: RequestsHttpClient, symbol: str) -> Decimal:
     )
     if response.status_code != 200:
         raise ConnectorNonRetryableError(f"Failed to get price: {response.json_data}")
-    return Decimal(str(response.json_data.get("markPrice", "0")))
+    if isinstance(response.json_data, dict):
+        return Decimal(str(response.json_data.get("markPrice", "0")))
+    raise ConnectorNonRetryableError("Unexpected response format")
 
 
-def main() -> int:
+def main() -> int:  # noqa: PLR0915
     # Check env
     api_key = os.environ.get("BINANCE_API_KEY", "")
     api_secret = os.environ.get("BINANCE_SECRET_KEY", "")
@@ -110,8 +112,8 @@ def main() -> int:
 
     # Config
     symbol = "BTCUSDT"
-    # Binance Futures minimum notional = $100
-    target_notional = Decimal("110")  # Just above minimum
+    # Safety cap: maximum notional we're willing to risk
+    max_notional_cap = Decimal("20")  # Hard safety cap
 
     http_client = RequestsHttpClient()
 
@@ -122,31 +124,54 @@ def main() -> int:
         print(f"ERROR getting price: {e}")
         return 1
 
-    # Calculate quantity for target notional
-    # Binance BTCUSDT min qty step is 0.001
-    raw_qty = target_notional / current_price
-    # Round up to 0.001 (3 decimals), enforce minimum
-    quantity = max(Decimal(str(round(float(raw_qty), 3))), Decimal("0.001"))
+    # Calculate minimum possible notional for this symbol
+    # Binance BTCUSDT: min qty = 0.001, min notional = $100
+    min_qty = Decimal("0.001")
+    min_possible_notional = min_qty * current_price
+    binance_min_notional = Decimal("100")  # Binance Futures minimum
 
+    print("=" * 60)
+    print("POSITION SIZE CHECK")
+    print("=" * 60)
+    print(f"  Symbol:              {symbol}")
+    print(f"  Current Price:       ${current_price:.2f}")
+    print(f"  Min Qty (Binance):   {min_qty} BTC")
+    print(f"  Min Notional (qty):  ${min_possible_notional:.2f}")
+    print(f"  Min Notional (API):  ${binance_min_notional}")
+    print(f"  Safety Cap:          ${max_notional_cap}")
+    print("=" * 60)
+
+    # P0 SAFETY: Fail if minimum notional exceeds our safety cap
+    effective_min = max(min_possible_notional, binance_min_notional)
+    if effective_min > max_notional_cap:
+        print()
+        print("ERROR: Cannot create micro-position on BTCUSDT mainnet.")
+        print(f"  Binance minimum notional: ${effective_min:.2f}")
+        print(f"  Safety cap:               ${max_notional_cap}")
+        print()
+        print("Options:")
+        print("  1. Use Binance TESTNET for safe testing")
+        print("  2. Override with --force-large-position (not implemented)")
+        print("  3. Test flatten with existing position")
+        print()
+        print("max_notional_guard=FAIL")
+        return 1
+
+    # Calculate quantity for target notional (just above minimum)
+    target_notional = effective_min + Decimal("10")  # $10 buffer
+    raw_qty = target_notional / current_price
+    quantity = max(Decimal(str(round(float(raw_qty), 3))), min_qty)
     actual_notional = quantity * current_price
 
-    print("=" * 60)
-    print("PLACING MICRO MARKET ORDER FOR STAGE E")
-    print("=" * 60)
-    print(f"  Symbol:        {symbol}")
-    print("  Side:          BUY (creates LONG position)")
-    print(f"  Current Price: ${current_price:.2f}")
-    print(f"  Quantity:      {quantity} BTC")
-    print(f"  Est. Notional: ${actual_notional:.2f}")
+    print()
+    print("POSITION PARAMETERS:")
+    print(f"  Quantity:        {quantity} BTC")
+    print(f"  Est. Notional:   ${actual_notional:.2f}")
+    print("  max_notional_guard=PASS")
     print()
     print("  WARNING: This is a REAL market order!")
     print("  Use Stage E (execute_flatten) to close this position.")
     print("=" * 60)
-
-    # Safety check: notional must be < $150 (Binance min = $100, we target $110)
-    if actual_notional > Decimal("150"):
-        print(f"\nERROR: Notional ${actual_notional:.2f} > $150 safety limit")
-        return 1
 
     # Confirm
     confirm = input("\nType 'YES' to place order: ")
@@ -168,7 +193,7 @@ def main() -> int:
         symbol_whitelist=[symbol],
         dry_run=False,
         allow_mainnet=True,
-        max_notional_per_order=Decimal("150"),  # Binance min = $100
+        max_notional_per_order=max_notional_cap + Decimal("5"),  # Safety cap + buffer
         max_orders_per_run=1,
         max_open_orders=1,
         target_leverage=1,
