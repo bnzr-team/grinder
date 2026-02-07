@@ -250,7 +250,7 @@ See ADR-053 for rationale.
 | M3 — Live Reconciliation | Active remediation | STATE.md, ADR-042–052 | pytest, mypy, E2E mainnet verification | Audit JSONL, metrics |
 | M4 — Ops Hardening | Artifacts, budget, runbooks | STATE.md, runbooks/ | pytest, runbook review | Stable artifacts |
 | M5 — Observability Polish | Dashboards, alerts, SLOs | STATE.md, 13_OBSERVABILITY.md | promtool, Grafana screenshots | Alert rules |
-| M6 — HA / Leader Election | Multi-instance safety | STATE.md, ADR-TBD | Integration tests, failover test | HA runbook |
+| M6 — HA / Leader Election | Multi-instance safety | STATE.md | Integration tests, failover test | HA runbook |
 
 ---
 
