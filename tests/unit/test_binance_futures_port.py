@@ -662,3 +662,83 @@ class TestMockTransportMode:
         call = futures_noop_client.calls[0]
         assert call["method"] == "DELETE"
         assert "/fapi/v1/order" in call["url"]
+
+
+# --- Cancel Order Identity Parsing Tests (LC-12) ---
+
+
+class TestCancelOrderIdentityParsing:
+    """Tests for cancel_order clientOrderId parsing (LC-12 fix).
+
+    The cancel_order method must correctly parse both:
+    - v1 format: grinder_{strategy}_{symbol}_{level}_{ts}_{seq}
+    - Legacy format: grinder_{symbol}_{level}_{ts}_{seq}
+
+    Bug found during Stage D E2E: naive split("_") parsed strategy_id as symbol.
+    """
+
+    def test_cancel_order_v1_format_extracts_symbol(
+        self, futures_noop_client: NoopHttpClient, live_trade_config: BinanceFuturesPortConfig
+    ) -> None:
+        """cancel_order correctly parses v1 format with strategy_id."""
+        port = BinanceFuturesPort(http_client=futures_noop_client, config=live_trade_config)
+
+        # v1 format: grinder_{strategy}_{symbol}_{level}_{ts}_{seq}
+        # strategy_id = "d", symbol = "BTCUSDT"
+        port.cancel_order("grinder_d_BTCUSDT_0_1770470846_1")
+
+        assert len(futures_noop_client.calls) == 1
+        call = futures_noop_client.calls[0]
+        assert call["method"] == "DELETE"
+        # Symbol should be BTCUSDT (not "d")
+        assert call["params"]["symbol"] == "BTCUSDT"
+        assert call["params"]["origClientOrderId"] == "grinder_d_BTCUSDT_0_1770470846_1"
+
+    def test_cancel_order_v1_format_long_strategy(
+        self, futures_noop_client: NoopHttpClient, live_trade_config: BinanceFuturesPortConfig
+    ) -> None:
+        """cancel_order correctly parses v1 format with longer strategy_id."""
+        port = BinanceFuturesPort(http_client=futures_noop_client, config=live_trade_config)
+
+        # strategy_id = "default", symbol = "BTCUSDT"
+        port.cancel_order("grinder_default_BTCUSDT_1_1704067200000_1")
+
+        assert len(futures_noop_client.calls) == 1
+        call = futures_noop_client.calls[0]
+        assert call["params"]["symbol"] == "BTCUSDT"
+
+    def test_cancel_order_legacy_format_still_works(
+        self, futures_noop_client: NoopHttpClient, live_trade_config: BinanceFuturesPortConfig
+    ) -> None:
+        """cancel_order still works with legacy format (no strategy_id)."""
+        port = BinanceFuturesPort(http_client=futures_noop_client, config=live_trade_config)
+
+        # Legacy format: grinder_{symbol}_{level}_{ts}_{seq}
+        port.cancel_order("grinder_BTCUSDT_1_1000000_1")
+
+        assert len(futures_noop_client.calls) == 1
+        call = futures_noop_client.calls[0]
+        assert call["params"]["symbol"] == "BTCUSDT"
+
+    def test_cancel_order_invalid_format_raises_error(
+        self, noop_client: NoopHttpClient, live_trade_config: BinanceFuturesPortConfig
+    ) -> None:
+        """cancel_order raises error for unparseable clientOrderId."""
+        port = BinanceFuturesPort(http_client=noop_client, config=live_trade_config)
+
+        with pytest.raises(ConnectorNonRetryableError) as exc_info:
+            port.cancel_order("invalid_order_id_format")
+
+        assert "Cannot parse order_id" in str(exc_info.value)
+
+    def test_cancel_order_symbol_not_whitelisted_blocked(
+        self, noop_client: NoopHttpClient, live_trade_config: BinanceFuturesPortConfig
+    ) -> None:
+        """cancel_order blocks if parsed symbol is not in whitelist."""
+        port = BinanceFuturesPort(http_client=noop_client, config=live_trade_config)
+
+        # Symbol XYZUSDT is not in whitelist ["BTCUSDT", "ETHUSDT"]
+        with pytest.raises(ConnectorNonRetryableError) as exc_info:
+            port.cancel_order("grinder_d_XYZUSDT_0_1770470846_1")
+
+        assert "whitelist" in str(exc_info.value).lower()

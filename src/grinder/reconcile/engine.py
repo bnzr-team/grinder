@@ -81,7 +81,12 @@ class ReconcileEngine:
         for mismatch in mismatches:
             self.metrics.record_mismatch(mismatch.mismatch_type)
 
-        self.metrics.set_last_snapshot_age(now - self.observed.last_snapshot_ts)
+        # Track snapshot timestamp and age
+        snapshot_ts = self.observed.last_snapshot_ts
+        self.metrics.set_last_snapshot_ts(snapshot_ts)
+        if snapshot_ts > 0:
+            self.metrics.set_last_snapshot_age(now - snapshot_ts)
+        # else: leave age at 0 (no snapshot yet)
         self.metrics.record_reconcile_run()
 
         return mismatches

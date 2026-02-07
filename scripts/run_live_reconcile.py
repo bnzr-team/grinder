@@ -51,14 +51,31 @@ import os
 import signal
 import sys
 import time
+
+try:
+    import requests
+except ImportError:
+    requests = None
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from grinder.core import OrderSide
     from grinder.reconcile.metrics import ReconcileMetrics
+
+# Real port imports
+from grinder.connectors.errors import ConnectorNonRetryableError, ConnectorTransientError
+from grinder.connectors.live_connector import SafeMode
+from grinder.execution.binance_futures_port import (
+    BINANCE_FUTURES_MAINNET_URL,
+    BinanceFuturesPort,
+    BinanceFuturesPortConfig,
+)
+from grinder.execution.binance_port import HttpResponse
 from grinder.live.reconcile_loop import ReconcileLoop, ReconcileLoopConfig
+from grinder.reconcile.audit import AuditConfig, AuditWriter
 from grinder.reconcile.config import ReconcileConfig, RemediationAction, RemediationMode
 from grinder.reconcile.engine import ReconcileEngine
 from grinder.reconcile.expected_state import ExpectedStateStore
@@ -279,6 +296,126 @@ class FakePort:
 
 
 # =============================================================================
+# REAL PORT (for real exchange calls)
+# =============================================================================
+
+
+@dataclass
+class RequestsHttpClient:
+    """HTTP client using requests library for real API calls."""
+
+    def request(
+        self,
+        method: str,
+        url: str,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
+        timeout_ms: int = 5000,
+    ) -> HttpResponse:
+        """Execute HTTP request via requests library."""
+        if requests is None:
+            raise ConfigError("requests library required. Run: pip install requests")
+
+        timeout_s = timeout_ms / 1000.0
+
+        try:
+            if method == "GET":
+                resp = requests.get(url, params=params, headers=headers, timeout=timeout_s)
+            elif method == "POST":
+                resp = requests.post(url, params=params, headers=headers, timeout=timeout_s)
+            elif method == "DELETE":
+                resp = requests.delete(url, params=params, headers=headers, timeout=timeout_s)
+            else:
+                raise ConnectorNonRetryableError(f"Unsupported method: {method}")
+
+            return HttpResponse(
+                status_code=resp.status_code,
+                json_data=resp.json() if resp.content else {},
+            )
+
+        except requests.exceptions.Timeout as e:
+            raise ConnectorTransientError(f"Request timeout: {e}") from e
+        except requests.exceptions.ConnectionError as e:
+            raise ConnectorTransientError(f"Connection error: {e}") from e
+        except requests.exceptions.RequestException as e:
+            raise ConnectorNonRetryableError(f"Request error: {e}") from e
+
+
+def validate_credentials() -> tuple[str, str]:
+    """Validate and return API credentials.
+
+    Returns:
+        Tuple of (api_key, api_secret)
+
+    Raises:
+        ConfigError: If credentials are missing.
+    """
+    api_key = os.environ.get("BINANCE_API_KEY", "").strip()
+    api_secret = os.environ.get("BINANCE_SECRET_KEY", "").strip()
+
+    if not api_key:
+        raise ConfigError("BINANCE_API_KEY not set (required for real port)")
+    if not api_secret:
+        raise ConfigError("BINANCE_SECRET_KEY not set (required for real port)")
+
+    return api_key, api_secret
+
+
+def create_real_port(
+    symbol_whitelist: list[str],
+    dry_run: bool,
+    max_notional_per_order: Decimal = Decimal("500"),
+) -> BinanceFuturesPort:
+    """Create a real BinanceFuturesPort with validated credentials.
+
+    Args:
+        symbol_whitelist: Symbols to allow trading.
+        dry_run: If True, port is in dry-run mode.
+        max_notional_per_order: Max notional per order (safety cap).
+
+    Returns:
+        Configured BinanceFuturesPort.
+
+    Raises:
+        ConfigError: If credentials are missing or invalid.
+    """
+    api_key, api_secret = validate_credentials()
+
+    http_client = RequestsHttpClient()
+
+    config = BinanceFuturesPortConfig(
+        mode=SafeMode.LIVE_TRADE,
+        base_url=BINANCE_FUTURES_MAINNET_URL,
+        api_key=api_key,
+        api_secret=api_secret,
+        symbol_whitelist=symbol_whitelist,
+        dry_run=dry_run,
+        allow_mainnet=True,
+        max_notional_per_order=max_notional_per_order,
+        max_orders_per_run=100,  # High limit, budget controls apply
+        max_open_orders=50,
+        target_leverage=1,  # Conservative default
+    )
+
+    return BinanceFuturesPort(http_client=http_client, config=config)
+
+
+def sanity_check_port(port: BinanceFuturesPort) -> None:
+    """Run a sanity check on the port before loop starts.
+
+    Raises:
+        ConfigError: If sanity check fails.
+    """
+    logger.info("Running port sanity check (get position mode)...")
+    try:
+        # Use a lightweight endpoint to verify connectivity + auth
+        position_mode = port.get_position_mode()
+        logger.info(f"Port sanity check PASSED (position_mode={position_mode})")
+    except (ConnectorNonRetryableError, ConnectorTransientError) as e:
+        raise ConfigError(f"Port sanity check FAILED: {e}") from e
+
+
+# =============================================================================
 # STDOUT CONTRACT
 # =============================================================================
 
@@ -436,6 +573,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Use FakePort instead of real port (for testing)",
     )
+    parser.add_argument(
+        "--metrics-out",
+        type=str,
+        default="",
+        help="Path to write final metrics in Prometheus text format (empty=disabled)",
+    )
     return parser.parse_args()
 
 
@@ -444,7 +587,7 @@ def parse_args() -> argparse.Namespace:
 # =============================================================================
 
 
-def main() -> int:
+def main() -> int:  # noqa: PLR0915
     """Run live reconcile with env-configured LC-18 settings."""
     args = parse_args()
 
@@ -472,9 +615,12 @@ def main() -> int:
     )
 
     # Setup components
+    # Use strategy allowlist from config for identity checking
+    # This allows reconcile to detect orders from any allowed strategy
     identity_config = OrderIdentityConfig(
         prefix="grinder_",
         strategy_id="default",
+        allowed_strategies=config.remediation_strategy_allowlist or {"default"},
     )
 
     observed = ObservedStateStore()
@@ -490,13 +636,36 @@ def main() -> int:
         identity_config=identity_config,
     )
 
-    # Port (fake for now)
+    # Port selection: real vs fake
     if args.use_fake_port:
         port: Any = FakePort()
         logger.info("Using FakePort (no real exchange calls)")
     else:
-        port = FakePort()
-        logger.info("Using FakePort (real port not yet wired)")
+        # Real port - requires credentials
+        try:
+            # Determine dry_run based on mode
+            is_execute_mode = config.remediation_mode in (
+                RemediationMode.EXECUTE_CANCEL_ALL,
+                RemediationMode.EXECUTE_FLATTEN,
+            )
+            port_dry_run = not is_execute_mode
+
+            port = create_real_port(
+                symbol_whitelist=symbol_whitelist,
+                dry_run=port_dry_run,
+                max_notional_per_order=config.flatten_max_notional_per_call,
+            )
+            logger.info(
+                f"Using real BinanceFuturesPort (dry_run={port_dry_run}, "
+                f"symbols={symbol_whitelist})"
+            )
+
+            # Sanity check
+            sanity_check_port(port)
+
+        except ConfigError as e:
+            print_config_error(str(e))
+            return EXIT_CONFIG_ERROR
 
     # Executor
     executor = RemediationExecutor(
@@ -507,12 +676,45 @@ def main() -> int:
         identity_config=identity_config,
     )
 
+    # Audit writer (if enabled)
+    audit_writer: AuditWriter | None = None
+    if audit_out:
+        audit_config = AuditConfig(
+            enabled=True,
+            path=audit_out,
+            flush_every=1,  # Immediate flush for safety
+        )
+        audit_writer = AuditWriter(config=audit_config)
+        logger.info(f"Audit enabled: {audit_out}")
+
+    # Snapshot callback for REST polling (LC-19)
+    def fetch_snapshot() -> None:
+        """Fetch REST snapshot before each reconcile run."""
+        if args.use_fake_port:
+            return  # FakePort has no fetch_open_orders_raw
+
+        ts = int(time.time() * 1000)
+        all_orders: list[dict[str, Any]] = []
+
+        for symbol in symbol_whitelist:
+            try:
+                orders = port.fetch_open_orders_raw(symbol)
+                all_orders.extend(orders)
+                logger.debug(f"Fetched {len(orders)} open orders for {symbol}")
+            except (ConnectorNonRetryableError, ConnectorTransientError) as e:
+                logger.warning(f"Failed to fetch orders for {symbol}: {e}")
+
+        observed.update_from_rest_orders(all_orders, ts)
+        logger.debug(f"Snapshot updated: {len(all_orders)} orders, ts={ts}")
+
     # Runner
     runner = ReconcileRunner(
         engine=engine,
         executor=executor,
         observed=observed,
         price_getter=lambda _: Decimal("50000.00"),
+        audit_writer=audit_writer,
+        pre_run_callback=fetch_snapshot if not args.use_fake_port else None,
     )
 
     # Loop config
@@ -558,6 +760,13 @@ def main() -> int:
     logger.info("Stopping ReconcileLoop...")
     loop.stop()
 
+    # Close audit writer and get event count
+    audit_events = 0
+    if audit_writer is not None:
+        audit_events = audit_writer.event_count
+        audit_writer.close()
+        logger.info(f"Audit closed: {audit_events} events written")
+
     # Get stats
     stats = loop.stats
     port_calls = len(port.calls) if hasattr(port, "calls") else 0
@@ -581,9 +790,25 @@ def main() -> int:
         budget_notional_used=metrics.budget_notional_used_day,
         budget_calls_remaining=metrics.budget_calls_remaining_day,
         budget_notional_remaining=metrics.budget_notional_remaining_day,
-        audit_events=0,  # TODO: wire audit when enabled
+        audit_events=audit_events,
         exit_code=EXIT_SUCCESS,
     )
+
+    # Save metrics to file if requested (Prometheus text format)
+    if args.metrics_out:
+        # Get Prometheus lines from reconcile metrics
+        prom_lines = metrics.to_prometheus_lines()
+        # Add summary metrics as comments for debugging
+        prom_lines.append("")
+        prom_lines.append("# run_live_reconcile summary")
+        prom_lines.append(f"# runs_total: {stats.runs_total}")
+        prom_lines.append(f"# port_calls: {port_calls}")
+        prom_lines.append(f"# mode: {config.remediation_mode.value}")
+        prom_lines.append(f"# use_fake_port: {args.use_fake_port}")
+        prom_lines.append(f"# exit_code: {EXIT_SUCCESS}")
+        with Path(args.metrics_out).open("w") as f:
+            f.write("\n".join(prom_lines) + "\n")
+        logger.info(f"Metrics saved to {args.metrics_out}")
 
     return EXIT_SUCCESS
 

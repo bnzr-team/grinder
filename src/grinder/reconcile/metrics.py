@@ -16,6 +16,7 @@ from grinder.reconcile.types import MismatchType
 # Metric names (stable contract)
 METRIC_MISMATCH_TOTAL = "grinder_reconcile_mismatch_total"
 METRIC_LAST_SNAPSHOT_AGE = "grinder_reconcile_last_snapshot_age_seconds"
+METRIC_LAST_SNAPSHOT_TS = "grinder_reconcile_last_snapshot_ts_ms"
 METRIC_RECONCILE_RUNS = "grinder_reconcile_runs_total"
 
 # LC-10: Remediation metrics
@@ -75,6 +76,7 @@ class ReconcileMetrics:
     # Passive reconciliation (LC-09b)
     mismatch_counts: dict[str, int] = field(default_factory=dict)
     last_snapshot_age_ms: int = 0
+    last_snapshot_ts_ms: int = 0  # 0 = never taken
     reconcile_runs: int = 0
 
     # Active remediation (LC-10)
@@ -101,6 +103,10 @@ class ReconcileMetrics:
     def set_last_snapshot_age(self, age_ms: int) -> None:
         """Set age of last REST snapshot."""
         self.last_snapshot_age_ms = age_ms
+
+    def set_last_snapshot_ts(self, ts_ms: int) -> None:
+        """Set timestamp of last REST snapshot (0 = never taken)."""
+        self.last_snapshot_ts_ms = ts_ms
 
     def record_reconcile_run(self) -> None:
         """Record a reconciliation run."""
@@ -168,6 +174,15 @@ class ReconcileMetrics:
                 f"# HELP {METRIC_LAST_SNAPSHOT_AGE} Age of last REST snapshot in seconds",
                 f"# TYPE {METRIC_LAST_SNAPSHOT_AGE} gauge",
                 f"{METRIC_LAST_SNAPSHOT_AGE} {self.last_snapshot_age_ms / 1000.0:.1f}",
+            ]
+        )
+
+        # Last snapshot timestamp gauge (0 = never taken)
+        lines.extend(
+            [
+                f"# HELP {METRIC_LAST_SNAPSHOT_TS} Timestamp of last REST snapshot in ms (0=never)",
+                f"# TYPE {METRIC_LAST_SNAPSHOT_TS} gauge",
+                f"{METRIC_LAST_SNAPSHOT_TS} {self.last_snapshot_ts_ms}",
             ]
         )
 
