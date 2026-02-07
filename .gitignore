@@ -82,3 +82,4 @@ Thumbs.db
 # Jupyter
 .ipynb_checkpoints/
 .claude/
+.env.stage_d

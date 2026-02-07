@@ -133,9 +133,9 @@ def main() -> int:
 
     port = BinanceFuturesPort(http_client=http_client, config=config)
 
-    # Place order with short clientOrderId (Binance < 36 chars limit)
-    # Format: grinder_default_BTCUSDT_0_<short_ts>_1
-    ts = int(time.time())  # Use seconds, not ms, for shorter ID
+    # Place order with short clientOrderId (Binance limit: 36 chars max)
+    # Uses seconds timestamp (not ms) to keep ID short
+    ts = int(time.time())
     try:
         order_id = port.place_order(
             symbol=symbol,
