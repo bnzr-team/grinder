@@ -581,7 +581,8 @@ class TestMarketOrders:
         )
 
         assert order_id is not None
-        assert "cleanup" in order_id
+        # Level_id is "c" (short for cleanup) to fit Binance 36-char limit
+        assert "_c_" in order_id
         assert len(noop_client.calls) == 0
 
 
