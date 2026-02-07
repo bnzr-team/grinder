@@ -685,6 +685,11 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - Gate 0 (HA role check) happens before all other gates
     - `grinder_ha_is_leader` metric: 1=leader, 0=follower
     - See ADR-054 for design decisions
+  - **CI Smoke Test (ha-mismatch-smoke):**
+    - `scripts/docker_smoke_ha_mismatch.sh` verifies leader-only execution in Docker
+    - Leader: `status=planned`, `action_planned_total{action="cancel_all"} >= 1`
+    - Follower: `status=blocked`, `action_blocked_total{reason="not_leader"} >= 1`
+    - Uses FakePort (no real HTTP calls to Binance)
   - **Limitations (v0.2):**
     - Not integrated with LiveEngineV0 event loop
     - No automatic strategy recovery
