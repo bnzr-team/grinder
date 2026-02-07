@@ -28,6 +28,11 @@ Usage:
     ALLOW_MAINNET_TRADE=1 \\
     PYTHONPATH=src python3 -m scripts.run_live_reconcile --duration 60
 
+    # With artifacts run-dir (M4.1):
+    GRINDER_ARTIFACTS_DIR=/var/lib/grinder/artifacts \\
+    PYTHONPATH=src python3 -m scripts.run_live_reconcile --duration 60
+    # Creates: /var/lib/grinder/artifacts/YYYY-MM-DD/run_<ts>/{stdout.log,audit.jsonl,...}
+
 Environment Variables:
     REMEDIATION_MODE              detect_only|plan_only|blocked|execute_cancel_all|execute_flatten
     ALLOW_MAINNET_TRADE           Must be "1" for EXECUTE_* modes (default: "0")
@@ -39,6 +44,8 @@ Environment Variables:
     MAX_NOTIONAL_PER_RUN          Max notional per run (default: 1000)
     FLATTEN_MAX_NOTIONAL_PER_CALL Max notional for single flatten (default: 500)
     BUDGET_STATE_PATH             Path to persist daily budget (default: None)
+    GRINDER_ARTIFACTS_DIR         Base artifacts directory (enables run-dir mode)
+    GRINDER_ARTIFACT_TTL_DAYS     Days to keep old run-dirs (default: 14)
 
 See ADR-052 for LC-18 design decisions.
 """
@@ -58,7 +65,6 @@ except ImportError:
     requests = None
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -75,6 +81,15 @@ from grinder.execution.binance_futures_port import (
 )
 from grinder.execution.binance_port import HttpResponse
 from grinder.live.reconcile_loop import ReconcileLoop, ReconcileLoopConfig
+from grinder.ops.artifacts import (
+    ArtifactPaths,
+    cleanup_old_runs,
+    copy_budget_state,
+    ensure_run_dir,
+    load_artifact_config_from_env,
+    resolve_artifact_paths,
+    write_stdout_summary,
+)
 from grinder.reconcile.audit import AuditConfig, AuditWriter
 from grinder.reconcile.config import ReconcileConfig, RemediationAction, RemediationMode
 from grinder.reconcile.engine import ReconcileEngine
@@ -428,7 +443,7 @@ def print_startup_banner(
     duration: int,
     interval_ms: int,
     metrics_port: int,
-    audit_out: str | None,
+    artifact_paths: ArtifactPaths,
 ) -> None:
     """Print startup banner per stdout contract."""
     allow_mainnet = os.environ.get("ALLOW_MAINNET_TRADE", "0")
@@ -451,7 +466,11 @@ def print_startup_banner(
     print(f"  Duration:             {duration}s")
     print(f"  Interval:             {interval_ms}ms")
     print(f"  Metrics port:         {metrics_port if metrics_port else 'DISABLED'}")
-    print(f"  Audit out:            {audit_out if audit_out else 'DISABLED'}")
+    print()
+    print("  Artifacts:")
+    print(f"    run_dir:            {artifact_paths.run_dir or 'DISABLED'}")
+    print(f"    audit_out:          {artifact_paths.audit_out or 'DISABLED'}")
+    print(f"    metrics_out:        {artifact_paths.metrics_out or 'DISABLED'}")
     print()
     print(f"  Remediation mode:     {config.remediation_mode.value}")
     print(f"  Allow mainnet trade:  {allow_mainnet}")
@@ -484,6 +503,7 @@ def print_final_summary(
     budget_notional_remaining: Decimal,
     audit_events: int,
     exit_code: int,
+    artifact_paths: ArtifactPaths | None = None,
 ) -> None:
     """Print final summary per stdout contract."""
     print()
@@ -504,6 +524,10 @@ def print_final_summary(
     print()
     if audit_events > 0:
         print(f"  Audit events:   {audit_events}")
+    if artifact_paths and artifact_paths.run_dir:
+        print()
+        print("  Artifacts:")
+        print(f"    run_dir:      {artifact_paths.run_dir}")
     print("=" * 60)
     print(f"EXIT CODE: {exit_code}")
 
@@ -562,8 +586,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--audit-out",
         type=str,
-        default="/tmp/grinder_audit.jsonl",
-        help="Audit log output path (default: /tmp/grinder_audit.jsonl, empty=disable)",
+        default=None,
+        help=(
+            "Audit log output path. "
+            "Not provided = auto (uses run-dir if GRINDER_ARTIFACTS_DIR set). "
+            "Empty string = disabled. "
+            "Path = use explicit path."
+        ),
     )
     parser.add_argument(
         "--symbols",
@@ -579,8 +608,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--metrics-out",
         type=str,
-        default="",
-        help="Path to write final metrics in Prometheus text format (empty=disabled)",
+        default=None,
+        help=(
+            "Path to write final metrics in Prometheus text format. "
+            "Not provided = auto (uses run-dir if GRINDER_ARTIFACTS_DIR set). "
+            "Empty string = disabled. "
+            "Path = use explicit path."
+        ),
     )
     return parser.parse_args()
 
@@ -590,7 +624,7 @@ def parse_args() -> argparse.Namespace:
 # =============================================================================
 
 
-def main() -> int:  # noqa: PLR0915
+def main() -> int:  # noqa: PLR0915, PLR0912
     """Run live reconcile with env-configured LC-18 settings."""
     args = parse_args()
 
@@ -605,8 +639,30 @@ def main() -> int:  # noqa: PLR0915
         print_config_error(str(e))
         return EXIT_CONFIG_ERROR
 
-    # Resolve audit out (empty string = disabled)
-    audit_out = args.audit_out if args.audit_out else None
+    # Load artifact config and resolve paths (M4.1)
+    # Three states for --audit-out / --metrics-out:
+    #   None = not provided, can use run-dir auto
+    #   "" = explicitly disabled (even with run-dir)
+    #   "path" = explicit path
+    audit_disabled = args.audit_out == ""
+    metrics_disabled = args.metrics_out == ""
+    explicit_audit = args.audit_out if args.audit_out else None
+    explicit_metrics = args.metrics_out if args.metrics_out else None
+    artifact_config = load_artifact_config_from_env(
+        explicit_audit_out=explicit_audit,
+        explicit_metrics_out=explicit_metrics,
+        audit_disabled=audit_disabled,
+        metrics_disabled=metrics_disabled,
+    )
+    artifact_paths = resolve_artifact_paths(artifact_config)
+
+    # Run TTL cleanup only if run-dir is actually being used (P1 fix)
+    if artifact_paths.run_dir and artifact_config.ttl_days > 0:
+        cleanup_old_runs(artifact_config.base_dir, artifact_config.ttl_days)  # type: ignore[arg-type]
+
+    # Create run-dir if needed
+    if artifact_paths.run_dir:
+        ensure_run_dir(artifact_paths)
 
     # Print startup banner
     print_startup_banner(
@@ -614,7 +670,7 @@ def main() -> int:  # noqa: PLR0915
         duration=args.duration,
         interval_ms=args.interval_ms,
         metrics_port=args.metrics_port,
-        audit_out=audit_out,
+        artifact_paths=artifact_paths,
     )
 
     # Setup components
@@ -694,14 +750,14 @@ def main() -> int:  # noqa: PLR0915
 
     # Audit writer (if enabled)
     audit_writer: AuditWriter | None = None
-    if audit_out:
+    if artifact_paths.audit_out:
         audit_config = AuditConfig(
             enabled=True,
-            path=audit_out,
+            path=str(artifact_paths.audit_out),
             flush_every=1,  # Immediate flush for safety
         )
         audit_writer = AuditWriter(config=audit_config)
-        logger.info(f"Audit enabled: {audit_out}")
+        logger.info(f"Audit enabled: {artifact_paths.audit_out}")
 
     # Snapshot callback for REST polling (LC-19)
     def fetch_snapshot() -> None:
@@ -817,10 +873,11 @@ def main() -> int:  # noqa: PLR0915
         budget_notional_remaining=metrics.budget_notional_remaining_day,
         audit_events=audit_events,
         exit_code=EXIT_SUCCESS,
+        artifact_paths=artifact_paths,
     )
 
-    # Save metrics to file if requested (Prometheus text format)
-    if args.metrics_out:
+    # Save metrics to file if configured (Prometheus text format)
+    if artifact_paths.metrics_out:
         # Get Prometheus lines from reconcile metrics
         prom_lines = metrics.to_prometheus_lines()
         # Add summary metrics as comments for debugging
@@ -831,9 +888,36 @@ def main() -> int:  # noqa: PLR0915
         prom_lines.append(f"# mode: {config.remediation_mode.value}")
         prom_lines.append(f"# use_fake_port: {args.use_fake_port}")
         prom_lines.append(f"# exit_code: {EXIT_SUCCESS}")
-        with Path(args.metrics_out).open("w") as f:
+        artifact_paths.metrics_out.parent.mkdir(parents=True, exist_ok=True)
+        with artifact_paths.metrics_out.open("w") as f:
             f.write("\n".join(prom_lines) + "\n")
-        logger.info(f"Metrics saved to {args.metrics_out}")
+        logger.info(f"Metrics saved to {artifact_paths.metrics_out}")
+
+    # Write stdout summary to run-dir (M4.1)
+    if artifact_paths.stdout_log:
+        config_summary = {
+            "mode": config.remediation_mode.value,
+            "duration": args.duration,
+            "symbols": args.symbols,
+            "max_calls_per_day": config.max_calls_per_day,
+            "max_notional_per_day": str(config.max_notional_per_day),
+            "runs_total": stats.runs_total,
+            "executed_count": executed_count,
+            "planned_count": planned_count,
+            "blocked_count": blocked_count,
+        }
+        write_stdout_summary(
+            path=artifact_paths.stdout_log,
+            config_summary=config_summary,
+            exit_code=EXIT_SUCCESS,
+            paths=artifact_paths,
+        )
+        logger.info(f"Stdout summary saved to {artifact_paths.stdout_log}")
+
+    # Copy budget state to run-dir (M4.1)
+    if artifact_paths.budget_state and config.budget_state_path:
+        copy_budget_state(config.budget_state_path, artifact_paths.budget_state)
+        logger.info(f"Budget state copied to {artifact_paths.budget_state}")
 
     return EXIT_SUCCESS
 
