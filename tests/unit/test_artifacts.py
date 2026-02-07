@@ -329,6 +329,7 @@ class TestIntegration:
         result = ensure_run_dir(paths)
         assert result is True
         assert paths.run_dir.exists()
+        assert paths.stdout_log is not None
 
         # Write summary
         write_stdout_summary(

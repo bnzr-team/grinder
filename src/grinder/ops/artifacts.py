@@ -308,7 +308,7 @@ def cleanup_old_runs(
 
 def write_stdout_summary(
     path: Path,
-    config_summary: dict,
+    config_summary: dict[str, object],
     exit_code: int,
     paths: ArtifactPaths,
 ) -> bool:
