@@ -346,6 +346,140 @@ This helps catch "forgot to reset" or "stale from yesterday" situations.
 
 Configure threshold via `BUDGET_STATE_STALE_HOURS` env var (default: 24).
 
+## Stage E: Non-BTC Symbol Micro-Test (Flatten)
+
+BTCUSDT has a high minimum notional requirement, making micro-position tests difficult.
+For safer initial flatten testing, choose a symbol with lower min-notional.
+
+### E.1 Choose Low-Min-Notional Symbol (Procedure)
+
+**Do not hardcode min-notional values** — Binance updates filters periodically.
+Always verify live before testing.
+
+#### Step 1: Query exchangeInfo
+
+```bash
+# Fetch all symbol filters
+curl -s "https://fapi.binance.com/fapi/v1/exchangeInfo" | jq '.symbols[] | select(.symbol == "DOGEUSDT") | .filters'
+
+# Or list all symbols with their MIN_NOTIONAL/NOTIONAL filter
+curl -s "https://fapi.binance.com/fapi/v1/exchangeInfo" | jq -r '
+  .symbols[] |
+  select(.status == "TRADING") |
+  (.filters[] | select(.filterType == "MIN_NOTIONAL" or .filterType == "NOTIONAL")) as $f |
+  "\(.symbol): \($f.filterType) = \($f.notional // $f.minNotional)"
+' | sort | head -50
+```
+
+#### Step 2: Identify Relevant Filters
+
+Look for these filters in the response:
+
+| Filter | Field | What it means |
+|--------|-------|---------------|
+| `MIN_NOTIONAL` or `NOTIONAL` | `notional` / `minNotional` | Minimum order value in USDT |
+| `LOT_SIZE` | `minQty`, `stepSize` | Minimum quantity and step |
+| `MARKET_LOT_SIZE` | `minQty`, `stepSize` | Market order quantity constraints |
+
+**Note:** Binance may use `MIN_NOTIONAL` or `NOTIONAL` filter type — check both.
+
+#### Step 3: Estimate Micro-Test Feasibility
+
+```bash
+# Example: Check DOGEUSDT current price
+curl -s "https://fapi.binance.com/fapi/v1/ticker/price?symbol=DOGEUSDT" | jq '.price'
+
+# Calculate: minNotional / price = minimum qty
+# If minNotional=5 and price=0.10, then minQty ≈ 50 DOGE
+```
+
+**Goal:** Find a symbol where `minNotional` allows a position small enough for
+your test budget (e.g., target notional slightly above min).
+
+### E.2 Example Candidate Symbols
+
+Common symbols with historically lower min-notional (as of writing):
+
+- `DOGEUSDT`
+- `MATICUSDT` / `POLUSDT`
+- `1000PEPEUSDT`
+- `1000SHIBUSDT`
+
+**⚠️ VERIFY LIVE via exchangeInfo before use — filters change without notice.**
+
+### E.3 Stage E Micro-Test Template
+
+Once you've identified a suitable symbol:
+
+```bash
+# 1. Set strict symbol allowlist (SINGLE symbol only)
+export REMEDIATION_SYMBOL_ALLOWLIST="DOGEUSDT"
+
+# 2. Set EXTREMELY tight budgets
+#    Values should be slightly above verified min-notional
+export MAX_CALLS_PER_DAY=1
+export MAX_CALLS_PER_RUN=1
+export MAX_NOTIONAL_PER_DAY=10       # Adjust based on verified min-notional
+export MAX_NOTIONAL_PER_RUN=10       # Same as above
+export FLATTEN_MAX_NOTIONAL_PER_CALL=10
+
+# 3. Enable mainnet trade (REQUIRED for real execution)
+export ALLOW_MAINNET_TRADE=1
+
+# 4. Set remediation mode to flatten
+export REMEDIATION_MODE=execute_flatten
+
+# 5. Budget state + artifacts
+export BUDGET_STATE_PATH=/var/lib/grinder/budget.json
+export GRINDER_ARTIFACTS_DIR=/var/lib/grinder/artifacts
+
+# 6. Run with fresh budget
+PYTHONPATH=src python3 -m scripts.run_live_reconcile \
+  --reset-budget-state \
+  --duration 60
+```
+
+**⚠️ CRITICAL REMINDERS:**
+
+- Flatten uses **market orders** — higher slippage risk than limit orders
+- After test: `unset ALLOW_MAINNET_TRADE` immediately
+- Review artifacts before any subsequent runs
+- Single symbol + single call = maximum isolation
+
+### E.4 Verify Test Artifacts
+
+After the micro-test run:
+
+```bash
+# Find latest run-dir
+RUN_DIR=$(ls -dt $GRINDER_ARTIFACTS_DIR/$(date +%Y-%m-%d)/run_* 2>/dev/null | head -1)
+
+# Check summary
+cat $RUN_DIR/stdout.log
+
+# Review audit trail for REMEDIATE_* events
+grep "REMEDIATE" $RUN_DIR/audit.jsonl | jq .
+
+# Check budget state
+cat $RUN_DIR/budget_state.json
+
+# Verify on exchange (Binance web/API) that position was flattened
+```
+
+### E.5 Post-Test Cleanup
+
+```bash
+# IMMEDIATELY disable mainnet trading
+unset ALLOW_MAINNET_TRADE
+
+# Reset to safe mode
+export REMEDIATION_MODE=detect_only
+
+# Verify
+echo "ALLOW_MAINNET_TRADE=${ALLOW_MAINNET_TRADE:-unset}"
+echo "REMEDIATION_MODE=$REMEDIATION_MODE"
+```
+
 ## Checklist Summary
 
 ### Pre-Enablement
@@ -372,6 +506,15 @@ Configure threshold via `BUDGET_STATE_STALE_HOURS` env var (default: 24).
 - [ ] Gradual limit increase
 - [ ] Alerting configured
 - [ ] Rollback procedure tested
+
+### Stage E (Non-BTC Micro-Test)
+- [ ] Verified min-notional via live exchangeInfo
+- [ ] Single symbol in REMEDIATION_SYMBOL_ALLOWLIST
+- [ ] Tight budgets (MAX_CALLS=1, notional slightly above min)
+- [ ] ALLOW_MAINNET_TRADE=1 set
+- [ ] --reset-budget-state used
+- [ ] Artifacts reviewed post-run
+- [ ] ALLOW_MAINNET_TRADE unset after test
 
 ## See Also
 
