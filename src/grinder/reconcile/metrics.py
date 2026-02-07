@@ -34,6 +34,7 @@ METRIC_BUDGET_CALLS_USED_DAY = "grinder_reconcile_budget_calls_used_day"
 METRIC_BUDGET_NOTIONAL_USED_DAY = "grinder_reconcile_budget_notional_used_day"
 METRIC_BUDGET_CALLS_REMAINING_DAY = "grinder_reconcile_budget_calls_remaining_day"
 METRIC_BUDGET_NOTIONAL_REMAINING_DAY = "grinder_reconcile_budget_notional_remaining_day"
+METRIC_BUDGET_CONFIGURED = "grinder_reconcile_budget_configured"
 
 # Label keys
 LABEL_TYPE = "type"
@@ -94,6 +95,7 @@ class ReconcileMetrics:
     budget_notional_used_day: Decimal = field(default_factory=lambda: Decimal("0"))
     budget_calls_remaining_day: int = 0
     budget_notional_remaining_day: Decimal = field(default_factory=lambda: Decimal("0"))
+    budget_configured: bool = False  # True when budget tracker is active
 
     def record_mismatch(self, mismatch_type: MismatchType) -> None:
         """Record a mismatch event."""
@@ -144,12 +146,22 @@ class ReconcileMetrics:
         notional_used: Decimal,
         calls_remaining: int,
         notional_remaining: Decimal,
+        configured: bool = True,
     ) -> None:
-        """Set budget metrics from BudgetTracker state (LC-18)."""
+        """Set budget metrics from BudgetTracker state (LC-18).
+
+        Args:
+            calls_used: Remediation calls used today
+            notional_used: Notional USDT used today
+            calls_remaining: Remaining calls for today
+            notional_remaining: Remaining notional for today
+            configured: Whether budget tracking is active (default True)
+        """
         self.budget_calls_used_day = calls_used
         self.budget_notional_used_day = notional_used
         self.budget_calls_remaining_day = calls_remaining
         self.budget_notional_remaining_day = notional_remaining
+        self.budget_configured = configured
 
     def to_prometheus_lines(self) -> list[str]:
         """Generate Prometheus text format lines."""
@@ -289,6 +301,15 @@ class ReconcileMetrics:
             ]
         )
 
+        # LC-18: Budget configured gauge (1=active, 0=not configured)
+        lines.extend(
+            [
+                f"# HELP {METRIC_BUDGET_CONFIGURED} Whether budget tracking is active (1=yes, 0=no)",
+                f"# TYPE {METRIC_BUDGET_CONFIGURED} gauge",
+                f"{METRIC_BUDGET_CONFIGURED} {1 if self.budget_configured else 0}",
+            ]
+        )
+
         return lines
 
     def reset(self) -> None:
@@ -307,6 +328,7 @@ class ReconcileMetrics:
         self.budget_notional_used_day = Decimal("0")
         self.budget_calls_remaining_day = 0
         self.budget_notional_remaining_day = Decimal("0")
+        self.budget_configured = False
 
 
 # Global singleton

@@ -113,6 +113,9 @@ REQUIRED_METRICS_PATTERNS = [
     "# HELP grinder_reconcile_budget_notional_remaining_day",
     "# TYPE grinder_reconcile_budget_notional_remaining_day",
     "grinder_reconcile_budget_notional_remaining_day",
+    "# HELP grinder_reconcile_budget_configured",
+    "# TYPE grinder_reconcile_budget_configured",
+    "grinder_reconcile_budget_configured",
 ]
 
 # Forbidden high-cardinality labels (H5-02 contract tightening)
