@@ -84,6 +84,7 @@ from grinder.reconcile.metrics import get_reconcile_metrics
 from grinder.reconcile.observed_state import ObservedStateStore
 from grinder.reconcile.remediation import RemediationExecutor
 from grinder.reconcile.runner import ReconcileRunner
+from grinder.reconcile.types import ExpectedPosition
 
 # =============================================================================
 # LOGGING
@@ -365,6 +366,7 @@ def create_real_port(
     symbol_whitelist: list[str],
     dry_run: bool,
     max_notional_per_order: Decimal = Decimal("500"),
+    identity_config: OrderIdentityConfig | None = None,
 ) -> BinanceFuturesPort:
     """Create a real BinanceFuturesPort with validated credentials.
 
@@ -395,6 +397,7 @@ def create_real_port(
         max_orders_per_run=100,  # High limit, budget controls apply
         max_open_orders=50,
         target_leverage=1,  # Conservative default
+        identity_config=identity_config,
     )
 
     return BinanceFuturesPort(http_client=http_client, config=config)
@@ -617,15 +620,27 @@ def main() -> int:  # noqa: PLR0915
     # Setup components
     # Use strategy allowlist from config for identity checking
     # This allows reconcile to detect orders from any allowed strategy
+    # Short strategy_id "r" (reconcile) to fit Binance 36-char clientOrderId limit
     identity_config = OrderIdentityConfig(
         prefix="grinder_",
-        strategy_id="default",
+        strategy_id="r",  # Short ID for Binance 36-char limit
         allowed_strategies=config.remediation_strategy_allowlist or {"default"},
     )
 
     observed = ObservedStateStore()
     expected = ExpectedStateStore()
     metrics = get_reconcile_metrics()
+
+    # Register expected positions for all symbols (expected = 0 for reconcile)
+    ts_now = int(time.time() * 1000)
+    for symbol in symbol_whitelist:
+        expected.set_position(
+            ExpectedPosition(
+                symbol=symbol,
+                expected_position_amt=Decimal("0"),
+                ts_updated=ts_now,
+            )
+        )
 
     # Engine
     engine = ReconcileEngine(
@@ -654,6 +669,7 @@ def main() -> int:  # noqa: PLR0915
                 symbol_whitelist=symbol_whitelist,
                 dry_run=port_dry_run,
                 max_notional_per_order=config.flatten_max_notional_per_call,
+                identity_config=identity_config,
             )
             logger.info(
                 f"Using real BinanceFuturesPort (dry_run={port_dry_run}, "
@@ -689,12 +705,13 @@ def main() -> int:  # noqa: PLR0915
 
     # Snapshot callback for REST polling (LC-19)
     def fetch_snapshot() -> None:
-        """Fetch REST snapshot before each reconcile run."""
+        """Fetch REST snapshot (orders + positions) before each reconcile run."""
         if args.use_fake_port:
             return  # FakePort has no fetch_open_orders_raw
 
         ts = int(time.time() * 1000)
         all_orders: list[dict[str, Any]] = []
+        all_positions: list[dict[str, Any]] = []
 
         for symbol in symbol_whitelist:
             try:
@@ -704,8 +721,16 @@ def main() -> int:  # noqa: PLR0915
             except (ConnectorNonRetryableError, ConnectorTransientError) as e:
                 logger.warning(f"Failed to fetch orders for {symbol}: {e}")
 
+            try:
+                positions = port.fetch_positions_raw(symbol)
+                all_positions.extend(positions)
+                logger.debug(f"Fetched {len(positions)} positions for {symbol}")
+            except (ConnectorNonRetryableError, ConnectorTransientError) as e:
+                logger.warning(f"Failed to fetch positions for {symbol}: {e}")
+
         observed.update_from_rest_orders(all_orders, ts)
-        logger.debug(f"Snapshot updated: {len(all_orders)} orders, ts={ts}")
+        observed.update_from_rest_positions(all_positions, ts)
+        logger.debug(f"Snapshot: {len(all_orders)} orders, {len(all_positions)} positions")
 
     # Runner
     runner = ReconcileRunner(

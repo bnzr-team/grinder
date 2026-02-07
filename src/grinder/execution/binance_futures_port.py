@@ -389,6 +389,39 @@ class BinanceFuturesPort:
 
         return positions
 
+    def fetch_positions_raw(self, symbol: str) -> list[dict[str, Any]]:
+        """Fetch raw position data from Binance (for reconcile observed state).
+
+        Args:
+            symbol: Trading symbol to fetch
+
+        Returns:
+            List of raw position dicts from Binance REST response
+        """
+        self._validate_symbol(symbol)
+
+        if self.config.dry_run:
+            return []
+
+        params = {"symbol": symbol}
+        params = self._sign_request(params)
+
+        url = f"{self.config.base_url}/fapi/v2/positionRisk"
+        response = self.http_client.request(
+            method="GET",
+            url=url,
+            params=params,
+            headers=self._get_headers(),
+            timeout_ms=self.config.timeout_ms,
+        )
+
+        if response.status_code != 200:
+            map_binance_error(response.status_code, response.json_data)
+
+        if isinstance(response.json_data, list):
+            return response.json_data
+        return []
+
     def get_account_info(self) -> FuturesAccountInfo:
         """Get futures account information."""
         if self.config.dry_run:
@@ -542,7 +575,7 @@ class BinanceFuturesPort:
         client_order_id = generate_client_order_id(
             config=identity,
             symbol=symbol,
-            level_id="cleanup",
+            level_id="c",  # Short for "cleanup" to fit 36-char Binance limit
             ts=ts,
             seq=self._order_counter,
         )
