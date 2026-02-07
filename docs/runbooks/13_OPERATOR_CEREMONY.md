@@ -106,26 +106,37 @@ curl -s http://localhost:9090/metrics | grep action_planned
 - Mismatches are expected behavior (manual orders, etc.)
 - Any uncertainty about what would be cancelled
 
-### 2.4 Enable Audit Trail (Optional)
+### 2.4 Enable Artifact Run-Directory (Recommended)
 
-Enable JSONL audit trail for post-mortem analysis:
+Enable structured artifact storage for post-mortem analysis:
 
 ```bash
-# Enable audit logging
-export GRINDER_AUDIT_ENABLED=1
-export GRINDER_AUDIT_PATH=/var/log/grinder/reconcile_audit.jsonl
+# Enable artifact run-directory (M4.1)
+export GRINDER_ARTIFACTS_DIR=/var/log/grinder
+export GRINDER_ARTIFACT_TTL_DAYS=14  # Optional: days to keep old runs
 
-# Deploy and verify audit file is created
-ls -la /var/log/grinder/reconcile_audit.jsonl
+# Run reconcile - artifacts are auto-created in run-dir
+PYTHONPATH=src python3 -m scripts.run_live_reconcile --duration 60
 
-# View recent audit events
-tail -f /var/log/grinder/reconcile_audit.jsonl | jq .
+# Find today's run-dirs
+ls -la $GRINDER_ARTIFACTS_DIR/$(date +%Y-%m-%d)/
+
+# View latest run's artifacts
+RUN_DIR=$(ls -d $GRINDER_ARTIFACTS_DIR/$(date +%Y-%m-%d)/run_* | tail -1)
+cat $RUN_DIR/stdout.log       # Run summary
+tail -f $RUN_DIR/audit.jsonl | jq .  # Audit events
+cat $RUN_DIR/budget_state.json       # Budget snapshot
 ```
 
-Audit events include:
-- `RECONCILE_RUN`: Summary of each reconciliation run
-- Mismatch counts by type
-- Mode (dry_run/live), action, symbols
+Each run-dir contains:
+- `stdout.log`: Config summary and exit code
+- `audit.jsonl`: Audit events (RECONCILE_RUN, REMEDIATE_*)
+- `metrics.prom`: Prometheus metrics snapshot
+- `metrics_summary.json`: Metrics summary
+- `budget_state.json`: Budget state at run end
+
+**Backward compatibility:** Explicit `--audit-out`/`--metrics-out` flags still work
+and take precedence over run-dir paths.
 
 See ADR-046 for audit schema details.
 

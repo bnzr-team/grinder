@@ -837,6 +837,22 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
       P0 safety guard that fails if min notional exceeds $20 cap (prevents accidental large positions)
   - **Unit tests:** `tests/unit/test_run_live_reconcile.py` (27 tests)
   - See ADR-052 for LC-18 design decisions
+  - **Artifact Run-Directory (M4.1):**
+    - Set `GRINDER_ARTIFACTS_DIR` to enable structured artifact storage
+    - Creates: `$GRINDER_ARTIFACTS_DIR/YYYY-MM-DD/run_<ts>/` per run
+    - Fixed filenames: `stdout.log`, `audit.jsonl`, `metrics.prom`, `metrics_summary.json`, `budget_state.json`
+    - TTL cleanup: `GRINDER_ARTIFACT_TTL_DAYS` (default: 14) deletes old run-dirs at startup
+    - Backward compatible: explicit `--audit-out`/`--metrics-out` take precedence
+    - **Usage:**
+      ```bash
+      GRINDER_ARTIFACTS_DIR=/var/log/grinder \
+      PYTHONPATH=src python3 -m scripts.run_live_reconcile --duration 60
+      # Creates: /var/log/grinder/2026-02-07/run_1707307200000/{stdout.log,...}
+      ```
+    - **Post-run artifact bundle:**
+      ```bash
+      ls -la $GRINDER_ARTIFACTS_DIR/$(date +%Y-%m-%d)/run_*/
+      ```
 - **ReconcileLoop for LiveEngine** (`src/grinder/live/reconcile_loop.py`):
   - Periodic background loop for reconciliation in LiveEngine (LC-14a, LC-14b)
   - **Threading pattern:** Daemon thread with `threading.Event` for graceful shutdown
