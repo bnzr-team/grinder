@@ -2737,12 +2737,12 @@
   these operations to delegate to BinanceFuturesPort when in LIVE_TRADE mode.
 
 - **Decision:**
-  1. Add 3-gate safety check for LIVE_TRADE write operations (lowest level, can't be bypassed):
+  1. Add 3 safety gates + required `futures_port` for LIVE_TRADE writes (lowest level, can't be bypassed):
      - Gate 1: `armed=True` in config (explicit arming)
      - Gate 2: `mode=LIVE_TRADE` (explicit mode selection)
      - Gate 3: `ALLOW_MAINNET_TRADE=1` env var (external safeguard)
-     - Gate 4: `futures_port` must be configured (injectable dependency)
-  2. All 4 gates must pass; any failure → `ConnectorNonRetryableError` with actionable message
+     - Required: `futures_port` must be configured (injectable dependency, not a safety gate)
+  2. All 3 gates + futures_port must pass; any failure → `ConnectorNonRetryableError` with actionable message
   3. Injectable `futures_port` via `LiveConnectorConfig.futures_port` for testing
   4. PAPER mode unchanged (uses PaperExecutionAdapter, ignores armed flag)
   5. READ_ONLY mode unchanged (blocks all writes)
@@ -2751,17 +2751,17 @@
   - Gate 1 (`armed`): Prevents accidental trading from config typo
   - Gate 2 (`mode`): Explicit intent declaration in code
   - Gate 3 (`ALLOW_MAINNET_TRADE`): External safeguard, can be managed at infra level
-  - Gate 4 (`futures_port`): Ensures trading infrastructure is configured
+  - `futures_port` (required dependency): Ensures trading infrastructure is wired
 
 - **Testing:**
   - `FakeFuturesPort` records calls without network
-  - 4 negative-path tests (one per gate failure)
+  - 4 negative-path tests (3 gates + futures_port check)
   - 4 positive-path tests (place/cancel/replace delegation + edge case)
   - All tests use monkeypatch for env var control
 
 - **Consequences:**
   - LIVE_TRADE mode now routes writes to BinanceFuturesPort
-  - 4 safety gates prevent accidental mainnet trading
+  - 3 safety gates + required futures_port prevent accidental mainnet trading
   - Unit tests increased from 35 to 43 (+8 for LIVE_TRADE gates)
   - Mainnet smoke requires `ALLOW_MAINNET_TRADE=1 PYTHONPATH=src pytest tests/smoke/...`
 
