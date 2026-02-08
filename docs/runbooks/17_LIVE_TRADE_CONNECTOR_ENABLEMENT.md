@@ -8,10 +8,10 @@
 - Production trading on Binance Futures USDT-M
 
 **What this runbook does NOT cover:**
-- Policy changes (grid sizing, risk limits) — see runbook 12
+- Policy changes (grid sizing, risk limits) — see [12_ACTIVE_REMEDIATION](12_ACTIVE_REMEDIATION.md)
 - L2 order book integration — not yet implemented
-- Reconciliation/remediation — see runbooks 11, 12
-- HA leader election — see runbook 07
+- Reconciliation/remediation — see [11_RECONCILIATION_TRIAGE](11_RECONCILIATION_TRIAGE.md), [12_ACTIVE_REMEDIATION](12_ACTIVE_REMEDIATION.md)
+- HA leader election — see [07_HA_OPERATIONS](07_HA_OPERATIONS.md)
 
 ---
 
@@ -49,7 +49,7 @@ Before enabling LIVE_TRADE, verify each item:
 ### 2. Notional Limits
 - [ ] `max_notional_per_order` configured (default: $125)
 - [ ] Binance minimum notional met ($100 for USDT-M Futures)
-- [ ] See runbook 10 for notional calculation
+- [ ] See [10_FUTURES_MAINNET_TRADE_SMOKE](10_FUTURES_MAINNET_TRADE_SMOKE.md) for notional calculation
 
 ### 3. WebSocket Health
 - [ ] `grinder_ws_connected` = 1
@@ -59,7 +59,7 @@ Before enabling LIVE_TRADE, verify each item:
 ### 4. HA Mode (if enabled)
 - [ ] Current instance is **leader** (check `/readyz` or `grinder_ha_is_leader`)
 - [ ] Only leader should have `armed=True`
-- [ ] See runbook 07 for HA operations
+- [ ] See [07_HA_OPERATIONS](07_HA_OPERATIONS.md) for HA operations
 
 ### 5. Stream-Only Sanity
 Run in `READ_ONLY` mode first to verify:
@@ -269,7 +269,7 @@ config = LiveConnectorConfig(futures_port=futures_port, ...)
 
 **Fix:**
 - Increase quantity: `notional = price * quantity >= 100`
-- See runbook 10 for notional calculation
+- See [10_FUTURES_MAINNET_TRADE_SMOKE](10_FUTURES_MAINNET_TRADE_SMOKE.md) for notional calculation
 
 ### 6. Not Leader (HA Mode)
 
@@ -277,7 +277,7 @@ config = LiveConnectorConfig(futures_port=futures_port, ...)
 
 **Check:** `curl http://localhost:9090/readyz` should return `{"role": "leader"}`
 
-**Fix:** Check HA configuration, see runbook 07
+**Fix:** Check HA configuration, see [07_HA_OPERATIONS](07_HA_OPERATIONS.md)
 
 ### 7. Reconnect Loop
 
@@ -288,14 +288,14 @@ config = LiveConnectorConfig(futures_port=futures_port, ...)
 - Binance status page
 - Rate limits (too many connections)
 
-**Fix:** See runbook 02 for health triage
+**Fix:** See [02_HEALTH_TRIAGE](02_HEALTH_TRIAGE.md) for health triage
 
 ---
 
 ## References
 
 - ADR-056: LC-22 LIVE_TRADE Write-Path (`docs/DECISIONS.md`)
-- Runbook 07: HA Operations
-- Runbook 10: Futures Mainnet Trade Smoke
-- Runbook 11: Reconciliation Triage
+- [07_HA_OPERATIONS](07_HA_OPERATIONS.md): HA Operations
+- [10_FUTURES_MAINNET_TRADE_SMOKE](10_FUTURES_MAINNET_TRADE_SMOKE.md): Futures Mainnet Trade Smoke
+- [11_RECONCILIATION_TRIAGE](11_RECONCILIATION_TRIAGE.md): Reconciliation Triage
 - `scripts/smoke_lc22_live_trade.py`: Smoke test script
