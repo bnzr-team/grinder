@@ -624,7 +624,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - `tests/fixtures/reconcile/mismatch_scenarios.jsonl`: Test scenarios
   - **Limitations (v0.1):**
     - No integration with LiveEngineV0 event loop
-    - No HA leader election for reconcile loop
+  - **Note:** HA leader election for remediation loop was added in Active Remediation v0.2 (LC-20). See below.
   - See ADR-042 for design decisions
 - **Active Remediation v0.2** (`src/grinder/reconcile/remediation.py`):
   - Extends passive reconciliation (LC-09b) with active actions (LC-10)
