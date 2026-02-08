@@ -383,7 +383,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
       3. `ALLOW_MAINNET_TRADE=1` env var (external safeguard)
       - Plus: `futures_port` must be configured (required dependency, not a safety gate)
     - Any check failure → `ConnectorNonRetryableError` with actionable message
-    - See ADR-056 for design decisions
+    - See ADR-056 for design decisions, runbook 17 for enablement procedure
   - **Unit tests:** `tests/unit/test_live_connector.py` (43 tests)
   - **Integration tests:** `tests/integration/test_live_connector_integration.py` (6 tests)
   - See ADR-029 (live connector v0), ADR-030 (paper write-path v0)

@@ -105,6 +105,7 @@ Where to find information:
   - `14_RECONCILE_E2E_SMOKE.md` — E2E reconcile→remediate smoke test (LC-13)
   - `15_ENABLEMENT_CEREMONY.md` — Staged enablement ceremony for ReconcileLoop (LC-15a)
   - `16_RECONCILE_ALERTS_SLOS.md` — Reconcile alerts, SLOs, and triage (LC-15b)
+  - `17_LIVE_TRADE_CONNECTOR_ENABLEMENT.md` — LIVE_TRADE connector enablement (LC-22)
 - `scripts/smoke_live_testnet.py` — Spot smoke test script (testnet/mainnet)
 - `scripts/smoke_futures_mainnet.py` — Futures USDT-M smoke test script (mainnet)
 - `scripts/smoke_reconcile_e2e.py` — E2E reconcile→remediate smoke harness (LC-13)
@@ -113,6 +114,7 @@ Where to find information:
 - `scripts/smoke_enablement_ceremony.py` — Enablement ceremony smoke test (LC-15a)
 - `scripts/smoke_real_sources_detect_only.py` — Credentialed real-source smoke test (LC-17)
 - `scripts/smoke_metrics_contract.py` — Metrics contract validation smoke (LC-16)
+- `scripts/smoke_lc22_live_trade.py` — LIVE_TRADE connector smoke test (LC-22)
 - `monitoring/grafana/dashboards/grinder_overview.json` — Grafana dashboard: Overview (LC-16)
 - `monitoring/grafana/dashboards/grinder_reconcile.json` — Grafana dashboard: Reconcile & Remediation (LC-16)
 

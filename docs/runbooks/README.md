@@ -22,6 +22,7 @@ Operational runbooks for GRINDER trading system.
 | [14_RECONCILE_E2E_SMOKE](14_RECONCILE_E2E_SMOKE.md) | E2E reconcile→remediate smoke test (LC-13) |
 | [15_ENABLEMENT_CEREMONY](15_ENABLEMENT_CEREMONY.md) | Staged enablement ceremony for ReconcileLoop (LC-15a) |
 | [16_RECONCILE_ALERTS_SLOS](16_RECONCILE_ALERTS_SLOS.md) | Reconcile alerts, SLOs, and triage (LC-15b) |
+| [17_LIVE_TRADE_CONNECTOR_ENABLEMENT](17_LIVE_TRADE_CONNECTOR_ENABLEMENT.md) | LIVE_TRADE connector enablement (LC-22) |
 
 ## Quick Reference
 
