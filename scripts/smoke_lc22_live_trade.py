@@ -75,7 +75,7 @@ class RequestsHttpClient:
         timeout: float = 10.0,
     ) -> HttpResponse:
         resp = requests.get(url, params=params, headers=headers, timeout=timeout)
-        return HttpResponse(status_code=resp.status_code, body=resp.text)
+        return HttpResponse(status_code=resp.status_code, json_data=resp.json())
 
     def post(
         self,
@@ -85,7 +85,7 @@ class RequestsHttpClient:
         timeout: float = 10.0,
     ) -> HttpResponse:
         resp = requests.post(url, data=data, headers=headers, timeout=timeout)
-        return HttpResponse(status_code=resp.status_code, body=resp.text)
+        return HttpResponse(status_code=resp.status_code, json_data=resp.json())
 
     def delete(
         self,
@@ -95,7 +95,7 @@ class RequestsHttpClient:
         timeout: float = 10.0,
     ) -> HttpResponse:
         resp = requests.delete(url, params=params, headers=headers, timeout=timeout)
-        return HttpResponse(status_code=resp.status_code, body=resp.text)
+        return HttpResponse(status_code=resp.status_code, json_data=resp.json())
 
 
 async def smoke_test(dry_run: bool, symbol: str) -> int:
@@ -237,7 +237,7 @@ async def smoke_test(dry_run: bool, symbol: str) -> int:
             params={"symbol": symbol},
         )
         import json
-        current_price = Decimal(json.loads(price_resp.body)["price"])
+        current_price = Decimal(str(price_resp.json_data["price"]))
         print(f"Current {symbol} price: {current_price}")
 
         # Far from market (50% below)
