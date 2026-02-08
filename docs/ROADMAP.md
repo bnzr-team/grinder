@@ -14,16 +14,19 @@ Last updated: 2026-02-08
 
 This section reflects **what is verified and merged on main** as of PR #117.
 
-### Completed Milestones
+### Milestone Status
 
-| Milestone | Status | Completed |
-|-----------|--------|-----------|
+| Milestone | Status | Date |
+|-----------|--------|------|
 | M1 — Vertical Slice v0.1 | ✅ Done | 2026-01-31 |
 | M2 — Beta v0.5 | ✅ Done | 2026-02-01 |
 | M3 — Live Reconciliation | ✅ Done | 2026-02-07 |
 | M4 — Ops Hardening | ✅ Done | 2026-02-07 |
 | M5 — Observability Polish | ✅ Done | 2026-02-07 |
 | M6 — HA Leader Election | ✅ Done | 2026-02-08 |
+| M7 — Smart Grid v2.0 | 🔜 Planned | — |
+| M8 — ML Integration | 🔜 Planned | — |
+| M9 — Multi-venue | 🔜 Planned | — |
 
 ### Stage D/E E2E Mainnet Verification
 
@@ -271,10 +274,110 @@ See ADR-053 for rationale.
 | M4 — Ops Hardening | Artifacts, budget, runbooks | STATE.md, runbooks/ | pytest, runbook review | Stable artifacts |
 | M5 — Observability Polish | Dashboards, alerts, SLOs | STATE.md, 13_OBSERVABILITY.md | promtool, Grafana screenshots | Alert rules |
 | M6 — HA / Leader Election | Multi-instance safety | STATE.md | Integration tests, failover test | HA runbook |
+| M7 — Smart Grid v2.0 | L2-aware + DD Allocator | smart_grid/SPEC_V2_0.md | L2 fixtures, allocator tests | L2 digest |
+| M8 — ML Integration | Inference pipeline | 12_ML_SPEC.md | Pinned artifacts, determinism | Calibration artifacts |
+| M9 — Multi-venue | COIN-M + other exchanges | — | Per-venue smoke tests | Venue adapters |
 
 ---
 
-## 5) Definition of Done (DoD) — Historical Reference
+## 5) Planned Milestones (M7–M9)
+
+### M7 — Smart Grid v2.0 (L2-aware + DD Allocator) — 🔜 Planned
+
+**Goal:** L2 order book integration with depth-aware sizing and portfolio-level drawdown allocation
+
+**Governing docs:**
+- `docs/smart_grid/SPEC_V2_0.md` — target spec
+- ADR-031: Auto-Sizing v1 (risk-budget-based) — foundation
+- ADR-032: DD Allocator v1 (portfolio-to-symbol) — foundation
+- ADR-033: Drawdown Guard Wiring v1 — foundation
+
+**Key deliverables:**
+- L2 order book snapshots in replay/paper/live pipelines
+- Depth-aware impact/spread gating and sizing
+- Drawdown allocator distributing budget across Top-K symbols
+- Deterministic walk-the-book execution model
+
+**Not started:** No code, no fixtures, ADRs are design-only.
+
+---
+
+### M8 — ML Integration — 🔜 Planned
+
+**Goal:** ML-assisted regime classification and parameter tuning
+
+**Governing docs:**
+- `docs/12_ML_SPEC.md` — target spec
+
+**Key deliverables:**
+- Offline calibration pipeline with pinned artifacts by hash
+- Inference integration with determinism tests
+- Feature store for training data
+
+**Current state:**
+- `src/grinder/ml/` — empty placeholder
+- Spec exists, no implementation
+
+---
+
+### M9 — Multi-venue — 🔜 Planned
+
+**Goal:** Extend beyond Binance USDT-M Futures
+
+**Candidates:**
+- Binance COIN-M Futures
+- Other CEXs (Bybit, OKX)
+- DEXs (future consideration)
+
+**Key deliverables:**
+- Venue abstraction layer
+- Per-venue adapters (port implementations)
+- Cross-venue reconciliation
+
+**Current state:** Out of scope until M7/M8 complete.
+
+---
+
+## 6) LC-Series Index
+
+This section documents the LC-* (Live Connector) series for traceability.
+
+### LC Numbering
+
+| LC | ADR | Description | Status | Notes |
+|----|-----|-------------|--------|-------|
+| LC-01 | ADR-029 | LiveConnector v0 SafeMode | ✅ Done | |
+| LC-02 | ADR-030 | Paper Write-Path v0 | ✅ Done | |
+| LC-03 | ADR-034 | Paper Realism (tick-delay) | ✅ Done | |
+| LC-04 | ADR-035 | BinanceExchangePort v0.1 (Spot) | ✅ Done | |
+| LC-05 | ADR-036 | LiveEngineV0 wiring | ✅ Done | |
+| LC-06 | ADR-037 | LiveFeed read-path | ✅ Done | |
+| LC-07 | ADR-038 | Testnet smoke harness | ✅ Done | |
+| LC-08b | ADR-039 | Spot mainnet smoke | ✅ Done | |
+| LC-08b-F | ADR-040 | Futures USDT-M mainnet smoke | ✅ Done | |
+| LC-09a | ADR-041 | FuturesUserDataWsConnector | ✅ Done | |
+| LC-09b | ADR-042 | Passive reconciliation | ✅ Done | |
+| LC-10 | ADR-043 | Active remediation (9 gates) | ✅ Done | |
+| LC-11 | ADR-044 | ReconcileRunner wiring | ✅ Done | |
+| LC-11b | ADR-046 | Audit JSONL | ✅ Done | |
+| LC-12 | ADR-045 | Configurable order identity | ✅ Done | |
+| LC-13 | ADR-047 | E2E smoke harness | ✅ Done | |
+| LC-14a | ADR-048 | ReconcileLoop wiring | ✅ Done | |
+| LC-14b | ADR-049 | Real sources wiring | ✅ Done | |
+| LC-15a | ADR-050 | Staged enablement ceremony | ✅ Done | |
+| LC-15b | ADR-051 | Reconcile alerts/SLOs | ✅ Done | |
+| LC-16 | — | Observability hardening | ✅ Done | No ADR: polish, no contract change |
+| LC-17 | — | Credentialed real-source smoke | ✅ Done | Script-only |
+| LC-18 | ADR-052 | 5-mode staged rollout | ✅ Done | |
+| LC-19 | — | — | ⏭️ Skipped | Reserved, never used |
+| LC-20 | ADR-054 | HA leader-only remediation | ✅ Done | PR #111 |
+| LC-21 | ADR-055 | L1 WebSocket integration | ✅ Done | PR #119 |
+| LC-22 | ADR-056 | LIVE_TRADE write-path | ✅ Done | PR #120 |
+| LC-23 | — | Enablement runbook (docs-only) | ✅ Done | PR #122, no ADR |
+
+---
+
+## 7) Definition of Done (DoD) — Historical Reference
 
 See sections below for M1/M2 PR-level DoD. These are preserved for reference.
 

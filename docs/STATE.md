@@ -1335,3 +1335,13 @@ Comprehensive adaptive grid system design:
     - **Output:** `topk_v1_selected_symbols`, `topk_v1_scores`, `topk_v1_gate_excluded`
     - **Fixture:** `sample_day_topk_v1` — 6 symbols, paper digest `63d981b60a8e9b3a`
     - **NOT included:** real-time re-selection (selects once after warmup), adaptive scoring weights
+
+### ML Integration (`docs/12_ML_SPEC.md`)
+- **Spec:** `docs/12_ML_SPEC.md` exists
+- **Code:** `src/grinder/ml/` — empty placeholder
+- **Status:** 🔜 Planned (see ROADMAP M8)
+
+### Multi-venue
+- **Current:** Binance Futures USDT-M only
+- **Planned:** COIN-M, other CEXs (see ROADMAP M9)
+- **Status:** 🔜 Planned, out of scope until M7/M8 complete
