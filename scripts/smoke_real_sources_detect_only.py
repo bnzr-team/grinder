@@ -27,7 +27,7 @@ Usage:
     PYTHONPATH=src python3 -m scripts.smoke_real_sources_detect_only --dry-run
 
     # With mainnet credentials (read-only, detect-only)
-    BINANCE_API_KEY=xxx BINANCE_SECRET=xxx \\
+    BINANCE_API_KEY=xxx BINANCE_API_SECRET=xxx \\
     PYTHONPATH=src python3 -m scripts.smoke_real_sources_detect_only \\
         --duration 60 \\
         --audit-out /tmp/grinder_audit.jsonl
@@ -224,7 +224,7 @@ def get_api_credentials(testnet: bool) -> tuple[str, str]:
         api_secret = os.environ.get("BINANCE_TESTNET_SECRET", "")
     else:
         api_key = os.environ.get("BINANCE_API_KEY", "")
-        api_secret = os.environ.get("BINANCE_SECRET", "")
+        api_secret = os.environ.get("BINANCE_API_SECRET", "")
     return api_key, api_secret
 
 
@@ -581,7 +581,7 @@ def main() -> int:  # noqa: PLR0915, PLR0912
 
     if not has_credentials and not args.dry_run:
         print("\n  ERROR: No API credentials found.")
-        print("  Set BINANCE_API_KEY and BINANCE_SECRET (or BINANCE_TESTNET_* for testnet)")
+        print("  Set BINANCE_API_KEY and BINANCE_API_SECRET (or BINANCE_TESTNET_* for testnet)")
         print("  Or use --dry-run to test script structure without credentials.")
         return EXIT_CONFIG_ERROR
 

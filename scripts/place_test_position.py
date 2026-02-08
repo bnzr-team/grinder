@@ -97,12 +97,12 @@ def get_current_price(http_client: RequestsHttpClient, symbol: str) -> Decimal:
 def main() -> int:  # noqa: PLR0915
     # Check env
     api_key = os.environ.get("BINANCE_API_KEY", "")
-    api_secret = os.environ.get("BINANCE_SECRET_KEY", "")
+    api_secret = os.environ.get("BINANCE_API_SECRET", "")
     allow_mainnet = os.environ.get("ALLOW_MAINNET_TRADE", "")
 
     errors = []
     if not api_key or not api_secret:
-        errors.append("BINANCE_API_KEY and BINANCE_SECRET_KEY required")
+        errors.append("BINANCE_API_KEY and BINANCE_API_SECRET required")
     if allow_mainnet != "1":
         errors.append("ALLOW_MAINNET_TRADE=1 required")
     if errors:

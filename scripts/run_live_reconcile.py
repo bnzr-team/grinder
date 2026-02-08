@@ -377,12 +377,12 @@ def validate_credentials() -> tuple[str, str]:
         ConfigError: If credentials are missing.
     """
     api_key = os.environ.get("BINANCE_API_KEY", "").strip()
-    api_secret = os.environ.get("BINANCE_SECRET_KEY", "").strip()
+    api_secret = os.environ.get("BINANCE_API_SECRET", "").strip()
 
     if not api_key:
         raise ConfigError("BINANCE_API_KEY not set (required for real port)")
     if not api_secret:
-        raise ConfigError("BINANCE_SECRET_KEY not set (required for real port)")
+        raise ConfigError("BINANCE_API_SECRET not set (required for real port)")
 
     return api_key, api_secret
 

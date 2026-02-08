@@ -20,7 +20,7 @@ Usage:
     PYTHONPATH=src python3 -m scripts.smoke_live_reconcile_loop_real_sources --testnet
 
     # With mainnet API keys (read-only, still detect-only)
-    BINANCE_API_KEY=xxx BINANCE_SECRET=xxx \
+    BINANCE_API_KEY=xxx BINANCE_API_SECRET=xxx \
     PYTHONPATH=src python3 -m scripts.smoke_live_reconcile_loop_real_sources
 
 See ADR-049 for design decisions.
@@ -172,7 +172,7 @@ def get_api_credentials(testnet: bool) -> tuple[str, str]:
         api_secret = os.environ.get("BINANCE_TESTNET_SECRET", "")
     else:
         api_key = os.environ.get("BINANCE_API_KEY", "")
-        api_secret = os.environ.get("BINANCE_SECRET", "")
+        api_secret = os.environ.get("BINANCE_API_SECRET", "")
     return api_key, api_secret
 
 

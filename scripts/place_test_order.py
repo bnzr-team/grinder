@@ -78,11 +78,11 @@ class RequestsHttpClient:
 def main() -> int:
     # Check env
     api_key = os.environ.get("BINANCE_API_KEY", "")
-    api_secret = os.environ.get("BINANCE_SECRET_KEY", "")
+    api_secret = os.environ.get("BINANCE_API_SECRET", "")
     allow_mainnet = os.environ.get("ALLOW_MAINNET_TRADE", "")
 
     if not api_key or not api_secret:
-        print("ERROR: BINANCE_API_KEY and BINANCE_SECRET_KEY required")
+        print("ERROR: BINANCE_API_KEY and BINANCE_API_SECRET required")
         return 1
     if allow_mainnet != "1":
         print("ERROR: ALLOW_MAINNET_TRADE=1 required")
