@@ -2708,8 +2708,8 @@
   6. Add 4 WebSocket metrics:
      - `grinder_ws_connected` (gauge): 1=connected, 0=disconnected
      - `grinder_ws_reconnect_total` (counter): reconnection events
-     - `grinder_ticks_received_total` (counter): ticks per symbol
-     - `grinder_last_tick_ts` (gauge): last tick timestamp per symbol
+     - `grinder_ticks_received_total` (counter): ticks per connector (ADR-028 compliant)
+     - `grinder_last_tick_ts` (gauge): last tick timestamp per connector
 
 - **Testing without flaky:**
   - `FakeWsTransport` injectable via `ws_transport` config field

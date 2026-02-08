@@ -378,8 +378,8 @@ class LiveConnectorV0(DataConnector):
             metrics = get_connector_metrics()
             try:
                 async for snapshot in self._ws_connector.iter_snapshots():
-                    # Check if closed during iteration
-                    if self._state == ConnectorState.CLOSED:
+                    # Check if closed during iteration (state can change during async yield)
+                    if self._state == ConnectorState.CLOSED:  # type: ignore[comparison-overlap]
                         break
 
                     # Update stats
