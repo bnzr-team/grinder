@@ -32,6 +32,7 @@ import logging
 import os
 import sys
 import time
+import traceback
 from decimal import Decimal
 
 # Guard: Import errors should fail clearly
@@ -102,7 +103,7 @@ class RequestsHttpClient:
         return HttpResponse(status_code=resp.status_code, json_data=resp.json())
 
 
-async def smoke_test(dry_run: bool, symbol: str) -> int:
+async def smoke_test(dry_run: bool, symbol: str) -> int:  # noqa: PLR0911, PLR0912, PLR0915
     """Run LC-22 smoke test.
 
     Returns:
@@ -117,7 +118,7 @@ async def smoke_test(dry_run: bool, symbol: str) -> int:
     api_secret = os.environ.get("BINANCE_API_SECRET", "")
     allow_mainnet = os.environ.get("ALLOW_MAINNET_TRADE", "")
 
-    print(f"\n## Environment")
+    print("\n## Environment")
     print(f"BINANCE_API_KEY: {'set' if api_key else 'NOT SET'}")
     print(f"BINANCE_API_SECRET: {'set' if api_secret else 'NOT SET'}")
     print(f"ALLOW_MAINNET_TRADE: {allow_mainnet or 'NOT SET'}")
@@ -248,7 +249,6 @@ async def smoke_test(dry_run: bool, symbol: str) -> int:
             f"{BINANCE_FUTURES_MAINNET_URL}/fapi/v1/ticker/price",
             params={"symbol": symbol},
         )
-        import json
         current_price = Decimal(str(price_resp.json_data["price"]))
         print(f"Current {symbol} price: {current_price}")
 
@@ -259,9 +259,9 @@ async def smoke_test(dry_run: bool, symbol: str) -> int:
         min_notional = Decimal("105")  # $105 to be safe above $100 min
         order_qty = (min_notional / order_price).quantize(Decimal("0.001"), rounding="ROUND_UP")
 
-        print(f"\n## Placing order via LiveConnectorV0.place_order()")
+        print("\n## Placing order via LiveConnectorV0.place_order()")
         print(f"  symbol: {symbol}")
-        print(f"  side: BUY")
+        print("  side: BUY")
         print(f"  price: {order_price} (50% below market)")
         print(f"  quantity: {order_qty}")
 
@@ -276,19 +276,19 @@ async def smoke_test(dry_run: bool, symbol: str) -> int:
             ts=ts_before,
         )
 
-        print(f"\n### Order placed!")
+        print("\n### Order placed!")
         print(f"  order_id: {order_id}")
 
         # Small delay
         await asyncio.sleep(1)
 
         # Cancel the order
-        print(f"\n## Cancelling order via LiveConnectorV0.cancel_order()")
+        print("\n## Cancelling order via LiveConnectorV0.cancel_order()")
         print(f"  order_id: {order_id}")
 
         cancel_result = connector.cancel_order(order_id)
 
-        print(f"\n### Order cancelled!")
+        print("\n### Order cancelled!")
         print(f"  result: {cancel_result}")
 
         print("\n" + "=" * 60)
@@ -298,7 +298,6 @@ async def smoke_test(dry_run: bool, symbol: str) -> int:
 
     except Exception as e:
         print(f"\n### ERROR: {e}")
-        import traceback
         traceback.print_exc()
         return 1
     finally:
