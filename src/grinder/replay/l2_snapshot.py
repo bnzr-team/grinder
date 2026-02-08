@@ -151,6 +151,13 @@ def _parse_levels(raw_levels: list[list[str]], side: str) -> tuple[BookLevel, ..
         if not isinstance(level, list) or len(level) != 2:
             raise L2ParseError(f"{side}[{i}]: expected [price, qty], got {level!r}")
         price_str, qty_str = level
+
+        # SPEC B.1: "Strings for determinism" - prices/qty must be strings
+        if not isinstance(price_str, str):
+            raise L2ParseError(f"{side}[{i}]: price must be string, got {type(price_str).__name__}")
+        if not isinstance(qty_str, str):
+            raise L2ParseError(f"{side}[{i}]: qty must be string, got {type(qty_str).__name__}")
+
         try:
             price = Decimal(price_str)
             qty = Decimal(qty_str)
@@ -296,6 +303,13 @@ def parse_l2_snapshot_line(line: str) -> L2Snapshot:
     _validate_sorting(asks, "asks")
     _validate_quantities(bids, "bids")
     _validate_quantities(asks, "asks")
+
+    # Validate book is not crossed/locked (best_bid < best_ask)
+    if bids and asks:
+        best_bid = bids[0].price
+        best_ask = asks[0].price
+        if best_bid >= best_ask:
+            raise L2ParseError(f"crossed/locked book: best_bid={best_bid} >= best_ask={best_ask}")
 
     # Extract optional meta
     meta = data.get("meta", {})

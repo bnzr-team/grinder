@@ -365,6 +365,56 @@ class TestL2SnapshotNegativePaths:
                 '"meta":["not","a","dict"]}'
             )
 
+    def test_crossed_book_rejected(self) -> None:
+        """Reject crossed book (best_bid >= best_ask)."""
+        with pytest.raises(L2ParseError, match="crossed/locked book"):
+            parse_l2_snapshot_line(
+                '{"type":"l2_snapshot","v":0,"ts_ms":0,'
+                '"symbol":"X","venue":"x","depth":1,'
+                '"bids":[["101.0","1.0"]],'  # Bid at 101
+                '"asks":[["100.0","1.0"]]}'  # Ask at 100 (crossed!)
+            )
+
+    def test_locked_book_rejected(self) -> None:
+        """Reject locked book (best_bid == best_ask)."""
+        with pytest.raises(L2ParseError, match="crossed/locked book"):
+            parse_l2_snapshot_line(
+                '{"type":"l2_snapshot","v":0,"ts_ms":0,'
+                '"symbol":"X","venue":"x","depth":1,'
+                '"bids":[["100.0","1.0"]],'
+                '"asks":[["100.0","1.0"]]}'  # Same price (locked)
+            )
+
+    def test_price_must_be_string(self) -> None:
+        """Reject non-string price (SPEC B.1 invariant)."""
+        with pytest.raises(L2ParseError, match="price must be string"):
+            parse_l2_snapshot_line(
+                '{"type":"l2_snapshot","v":0,"ts_ms":0,'
+                '"symbol":"X","venue":"x","depth":1,'
+                '"bids":[[100.0,"1.0"]],'  # price is float, not string
+                '"asks":[["101.0","1.0"]]}'
+            )
+
+    def test_qty_must_be_string(self) -> None:
+        """Reject non-string qty (SPEC B.1 invariant)."""
+        with pytest.raises(L2ParseError, match="qty must be string"):
+            parse_l2_snapshot_line(
+                '{"type":"l2_snapshot","v":0,"ts_ms":0,'
+                '"symbol":"X","venue":"x","depth":1,'
+                '"bids":[["100.0",1.0]],'  # qty is float, not string
+                '"asks":[["101.0","1.0"]]}'
+            )
+
+    def test_price_int_rejected(self) -> None:
+        """Reject int price (must be string per SPEC B.1)."""
+        with pytest.raises(L2ParseError, match="price must be string"):
+            parse_l2_snapshot_line(
+                '{"type":"l2_snapshot","v":0,"ts_ms":0,'
+                '"symbol":"X","venue":"x","depth":1,'
+                '"bids":[[100,"1.0"]],'  # price is int, not string
+                '"asks":[["101.0","1.0"]]}'
+            )
+
 
 class TestLoadL2Fixtures:
     """Tests for load_l2_fixtures function."""
@@ -380,7 +430,7 @@ class TestLoadL2Fixtures:
         assert "normal" in scenarios
         assert "ultra_thin" in scenarios
         assert "wall_bid" in scenarios
-        assert "thin_insufficient_for_q_0_1" in scenarios
+        assert "thin_insufficient" in scenarios
 
     def test_load_handles_empty_lines(self) -> None:
         """Empty lines should be skipped."""

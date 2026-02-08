@@ -852,7 +852,7 @@ Very thin book where `qty_ref = 0.1` would exhaust all depth.
 
 **JSONL:**
 ```json
-{"type":"l2_snapshot","v":0,"ts_ms":1770552993001,"symbol":"BTCUSDT","venue":"binance_futures_usdtm","depth":5,"bids":[["70790.00","0.010"],["70780.00","0.012"],["70770.00","0.015"],["70760.00","0.020"],["70750.00","0.030"]],"asks":[["70830.00","0.009"],["70840.00","0.011"],["70850.00","0.014"],["70860.00","0.019"],["70870.00","0.028"]],"meta":{"src":"fixture","scenario":"thin_insufficient_for_q_0_1"}}
+{"type":"l2_snapshot","v":0,"ts_ms":1770552993001,"symbol":"BTCUSDT","venue":"binance_futures_usdtm","depth":5,"bids":[["70790.00","0.010"],["70780.00","0.012"],["70770.00","0.015"],["70760.00","0.020"],["70750.00","0.030"]],"asks":[["70830.00","0.009"],["70840.00","0.011"],["70850.00","0.014"],["70860.00","0.019"],["70870.00","0.028"]],"meta":{"src":"fixture","scenario":"thin_insufficient"}}
 ```
 
 **Expected values (qty_ref=0.003):**
