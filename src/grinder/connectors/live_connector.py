@@ -31,6 +31,11 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
+from grinder.connectors.binance_ws import (
+    BinanceWsConfig,
+    BinanceWsConnector,
+    WsTransport,
+)
 from grinder.connectors.circuit_breaker import CircuitBreaker, CircuitBreakerConfig, default_trip_on
 from grinder.connectors.data_connector import (
     ConnectorState,
@@ -86,19 +91,23 @@ class LiveConnectorConfig:
         mode: Safe mode (default: READ_ONLY)
         symbols: List of symbols to subscribe to
         ws_url: WebSocket URL (default: Binance testnet for safety)
+        use_testnet: Use testnet endpoint (default True for safety)
         timeout_config: Timeout configuration
         retry_policy: Retry policy for transient failures
         circuit_breaker_config: Circuit breaker configuration
+        ws_transport: Injectable WS transport for testing (None = real WebSocket)
     """
 
     mode: SafeMode = SafeMode.READ_ONLY
     symbols: list[str] = field(default_factory=list)
     ws_url: str = "wss://testnet.binance.vision/ws"  # Testnet by default (safe)
+    use_testnet: bool = True
     timeout_config: TimeoutConfig = field(default_factory=TimeoutConfig)
     retry_policy: RetryPolicy = field(default_factory=lambda: RetryPolicy(max_attempts=3))
     circuit_breaker_config: CircuitBreakerConfig = field(
         default_factory=lambda: CircuitBreakerConfig(trip_on=default_trip_on)
     )
+    ws_transport: WsTransport | None = None  # Injectable for testing
 
 
 @dataclass
@@ -190,6 +199,21 @@ class LiveConnectorV0(DataConnector):
                 order_id_prefix="PAPER",
             )
 
+        # Real WebSocket connector for market data (LC-21)
+        self._ws_connector: BinanceWsConnector | None = None
+        self._ws_config: BinanceWsConfig | None = None
+        if self._config.symbols:
+            self._ws_config = BinanceWsConfig(
+                symbols=list(self._config.symbols),
+                use_testnet=self._config.use_testnet,
+                timeout=self._config.timeout_config,
+            )
+            self._ws_connector = BinanceWsConnector(
+                config=self._ws_config,
+                transport=self._config.ws_transport,
+                clock=lambda: float(self._clock.time()),
+            )
+
     def _now(self) -> float:
         """Get current time from clock."""
         return float(self._clock.time())
@@ -270,31 +294,28 @@ class LiveConnectorV0(DataConnector):
     async def _do_connect(self) -> None:
         """Internal connect implementation.
 
-        In v0, this is a mock that simulates connection.
-        Real implementation will establish WebSocket connection.
+        Connects real WebSocket if symbols are configured.
         """
-        await wait_for_with_op(
-            self._simulate_connect(),
-            timeout_ms=self._config.timeout_config.connect_timeout_ms,
-            op="connect",
-        )
+        # Connect real WS if configured (LC-21)
+        if self._ws_connector is not None:
+            await wait_for_with_op(
+                self._ws_connector.connect(),
+                timeout_ms=self._config.timeout_config.connect_timeout_ms,
+                op="connect",
+            )
+            # Update metrics
+            get_connector_metrics().set_ws_connected("bookTicker", True)
+        else:
+            # No symbols: minimal async yield for testing
+            await self._sleep_func(0.001)
+
         self._state = ConnectorState.CONNECTED
         logger.info(
-            "LiveConnectorV0 connected (mode=%s, symbols=%s)",
+            "LiveConnectorV0 connected (mode=%s, symbols=%s, ws=%s)",
             self._config.mode.value,
             self._config.symbols,
+            "real" if self._ws_connector else "none",
         )
-
-    async def _simulate_connect(self) -> None:
-        """Simulate WebSocket connection (v0 mock).
-
-        Real implementation will:
-        1. Connect to WebSocket
-        2. Send subscription messages
-        3. Validate handshake
-        """
-        # Minimal async yield for testing
-        await self._sleep_func(0.001)
 
     async def close(self) -> None:
         """Close WebSocket connection and release resources.
@@ -306,6 +327,14 @@ class LiveConnectorV0(DataConnector):
             return
 
         self._state = ConnectorState.CLOSED
+
+        # Close real WS if configured (LC-21)
+        if self._ws_connector is not None:
+            try:
+                await self._ws_connector.close()
+                get_connector_metrics().set_ws_connected("bookTicker", False)
+            except Exception as e:
+                logger.warning("Error closing WS connector: %s", e)
 
         # Cancel and await all tracked tasks
         if self._tasks:
@@ -344,17 +373,41 @@ class LiveConnectorV0(DataConnector):
         if self._state != ConnectorState.CONNECTED:
             raise ConnectionError(f"Cannot stream: connector state is {self._state.value}")
 
-        # V0: Mock implementation yields nothing (placeholder)
-        # Real implementation will:
-        # 1. Read from WebSocket
-        # 2. Parse messages
-        # 3. Convert to Snapshot
-        # 4. Yield with idempotency checks
+        # LC-21: Delegate to real WS connector if available
+        if self._ws_connector is not None:
+            metrics = get_connector_metrics()
+            try:
+                async for snapshot in self._ws_connector.iter_snapshots():
+                    # Check if closed during iteration
+                    if self._state == ConnectorState.CLOSED:
+                        break
 
-        # For v0, we just yield nothing (no real WebSocket)
-        # This allows tests to verify the interface works
-        return
-        yield  # Makes this an async generator
+                    # Update stats
+                    self._stats.ticks_received += 1
+                    self._last_seen_ts = snapshot.ts
+
+                    # Record metrics (use connector name, not symbol, per ADR-028)
+                    metrics.record_tick_received("bookTicker")
+                    metrics.set_last_tick_ts("bookTicker", snapshot.ts)
+
+                    yield snapshot
+
+            except ConnectorTransientError as e:
+                # WS disconnected - record reconnect metric
+                logger.warning("WS transient error in stream_ticks: %s", e)
+                metrics.record_ws_reconnect("bookTicker", "error")
+                metrics.set_ws_connected("bookTicker", False)
+                raise
+
+            except ConnectorClosedError:
+                # Normal close - don't re-raise
+                metrics.set_ws_connected("bookTicker", False)
+                return
+
+        else:
+            # No WS connector: yield nothing (v0 mock behavior)
+            return
+            yield  # Makes this an async generator
 
     async def subscribe(self, symbols: list[str]) -> None:
         """Subscribe to additional symbols.
@@ -398,15 +451,26 @@ class LiveConnectorV0(DataConnector):
         self._state = ConnectorState.RECONNECTING
         self._stats.reconnections += 1
 
+        # Record reconnect metric (LC-21)
+        if self._ws_connector is not None:
+            get_connector_metrics().record_ws_reconnect("bookTicker", "disconnect")
+            get_connector_metrics().set_ws_connected("bookTicker", False)
+
         try:
-            # Use same connect logic with retries
-            _, retry_stats = await retry_with_policy(
-                "reconnect",
-                self._do_connect,
-                self._config.retry_policy,
-                sleep_func=self._sleep_func,
-            )
-            self._stats.retries += retry_stats.retries
+            # Reconnect WS connector if available (LC-21)
+            if self._ws_connector is not None:
+                await self._ws_connector.reconnect()
+                get_connector_metrics().set_ws_connected("bookTicker", True)
+                self._state = ConnectorState.CONNECTED
+            else:
+                # Use same connect logic with retries
+                _, retry_stats = await retry_with_policy(
+                    "reconnect",
+                    self._do_connect,
+                    self._config.retry_policy,
+                    sleep_func=self._sleep_func,
+                )
+                self._stats.retries += retry_stats.retries
 
         except Exception as e:
             self._state = ConnectorState.DISCONNECTED
