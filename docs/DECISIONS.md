@@ -2701,7 +2701,7 @@
   2. L1 (bookTicker) first, not L2 (depth):
      - L1 is sufficient for grid trading (bid/ask spread awareness)
      - Lower bandwidth, simpler parsing
-     - L2 can be added later if orderbook depth needed
+     - L2 depth can be added if orderbook visibility required
   3. Idempotency via `last_seen_ts` check — no duplicate yields
   4. Injectable `ws_transport` in `LiveConnectorConfig` for testing without real WS
   5. Use `FakeWsTransport(delay_ms=2)` to ensure unique timestamps for idempotency tests
