@@ -373,7 +373,18 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - `replace_order(order_id, new_price, new_quantity)` → `OrderResult` (cancel+new)
     - Deterministic order IDs: `PAPER_{seq:08d}`
     - No network calls — pure in-memory simulation via `PaperExecutionAdapter`
-  - **Unit tests:** `tests/unit/test_live_connector.py` (35 tests)
+  - **LIVE_TRADE write-path (LC-22):**
+    - `place_order(symbol, side, price, quantity)` → delegates to `BinanceFuturesPort`
+    - `cancel_order(order_id)` → delegates to `BinanceFuturesPort`
+    - `replace_order(order_id, new_price, new_quantity)` → delegates to `BinanceFuturesPort`
+    - **3-gate safety:** ALL gates must pass for real trades:
+      1. `armed=True` (explicit arming in config)
+      2. `mode=LIVE_TRADE` (explicit mode)
+      3. `ALLOW_MAINNET_TRADE=1` env var (external safeguard)
+      4. `futures_port` must be configured (injectable for testing)
+    - Gate failure → `ConnectorNonRetryableError` with actionable message
+    - See ADR-056 for design decisions
+  - **Unit tests:** `tests/unit/test_live_connector.py` (43 tests)
   - **Integration tests:** `tests/integration/test_live_connector_integration.py` (6 tests)
   - See ADR-029 (live connector v0), ADR-030 (paper write-path v0)
 - **PaperExecutionAdapter** (`src/grinder/connectors/paper_execution.py`):

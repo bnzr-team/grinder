@@ -2726,3 +2726,47 @@
 - **Related:**
   - ADR-029: LiveConnectorV0 design
   - ADR-030: Paper write-path v0
+
+## ADR-056 — LC-22: LIVE_TRADE Write-Path for LiveConnectorV0
+
+- **Date:** 2026-02-08
+- **Status:** accepted
+- **Context:**
+  LiveConnectorV0 had write operations (`place_order`, `cancel_order`, `replace_order`)
+  wired only to PaperExecutionAdapter for PAPER mode. For production trading, we need
+  these operations to delegate to BinanceFuturesPort when in LIVE_TRADE mode.
+
+- **Decision:**
+  1. Add 3-gate safety check for LIVE_TRADE write operations (lowest level, can't be bypassed):
+     - Gate 1: `armed=True` in config (explicit arming)
+     - Gate 2: `mode=LIVE_TRADE` (explicit mode selection)
+     - Gate 3: `ALLOW_MAINNET_TRADE=1` env var (external safeguard)
+     - Gate 4: `futures_port` must be configured (injectable dependency)
+  2. All 4 gates must pass; any failure → `ConnectorNonRetryableError` with actionable message
+  3. Injectable `futures_port` via `LiveConnectorConfig.futures_port` for testing
+  4. PAPER mode unchanged (uses PaperExecutionAdapter, ignores armed flag)
+  5. READ_ONLY mode unchanged (blocks all writes)
+
+- **Gate rationale:**
+  - Gate 1 (`armed`): Prevents accidental trading from config typo
+  - Gate 2 (`mode`): Explicit intent declaration in code
+  - Gate 3 (`ALLOW_MAINNET_TRADE`): External safeguard, can be managed at infra level
+  - Gate 4 (`futures_port`): Ensures trading infrastructure is configured
+
+- **Testing:**
+  - `FakeFuturesPort` records calls without network
+  - 4 negative-path tests (one per gate failure)
+  - 4 positive-path tests (place/cancel/replace delegation + edge case)
+  - All tests use monkeypatch for env var control
+
+- **Consequences:**
+  - LIVE_TRADE mode now routes writes to BinanceFuturesPort
+  - 4 safety gates prevent accidental mainnet trading
+  - Unit tests increased from 35 to 43 (+8 for LIVE_TRADE gates)
+  - Mainnet smoke requires `ALLOW_MAINNET_TRADE=1 PYTHONPATH=src pytest tests/smoke/...`
+
+- **Related:**
+  - ADR-029: LiveConnectorV0 design
+  - ADR-030: Paper write-path v0
+  - ADR-055: LC-21 L1 WebSocket integration
+  - ADR-040: Futures USDT-M mainnet smoke (for ALLOW_MAINNET_TRADE pattern)

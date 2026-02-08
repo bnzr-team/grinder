@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 import json
 import time
+from decimal import Decimal
 
 import pytest
 
@@ -31,6 +32,7 @@ from grinder.connectors import (
 from grinder.connectors.binance_ws import FakeWsTransport
 from grinder.connectors.circuit_breaker import CircuitBreakerConfig
 from grinder.connectors.metrics import get_connector_metrics
+from grinder.core import OrderSide
 
 
 class FakeClock:
@@ -689,3 +691,380 @@ class TestBoundedTimeTesting:
         assert fake_clock.time() == 0.0
         fake_clock.advance(10.0)
         assert fake_clock.time() == 10.0
+
+
+# --- LC-22: LIVE_TRADE 3-Gate Tests ---
+
+
+class FakeFuturesPort:
+    """Fake BinanceFuturesPort for testing LIVE_TRADE delegation."""
+
+    def __init__(self) -> None:
+        self.place_order_calls: list[dict[str, object]] = []
+        self.cancel_order_calls: list[str] = []
+        self.replace_order_calls: list[dict[str, object]] = []
+
+    def place_order(
+        self,
+        symbol: str,
+        side: object,
+        price: object,
+        quantity: object,
+        level_id: int,
+        ts: int,
+        reduce_only: bool = False,  # noqa: ARG002
+    ) -> str:
+        """Record place_order call and return fake order_id."""
+        self.place_order_calls.append(
+            {
+                "symbol": symbol,
+                "side": side,
+                "price": price,
+                "quantity": quantity,
+                "level_id": level_id,
+                "ts": ts,
+            }
+        )
+        return f"grinder_{symbol}_{level_id}_{ts}"
+
+    def cancel_order(self, order_id: str) -> bool:
+        """Record cancel_order call and return success."""
+        self.cancel_order_calls.append(order_id)
+        return True
+
+    def replace_order(
+        self,
+        order_id: str,
+        new_price: object,
+        new_quantity: object,
+        ts: int,
+    ) -> str:
+        """Record replace_order call and return new order_id."""
+        self.replace_order_calls.append(
+            {
+                "order_id": order_id,
+                "new_price": new_price,
+                "new_quantity": new_quantity,
+                "ts": ts,
+            }
+        )
+        return f"grinder_replaced_{ts}"
+
+
+class TestLiveTradeGates:
+    """Tests for LC-22 LIVE_TRADE 3-gate safety checks.
+
+    Gates:
+    1. armed=True (explicit arming)
+    2. mode=LIVE_TRADE (explicit mode)
+    3. ALLOW_MAINNET_TRADE=1 env var (external safeguard)
+
+    All gates must pass for real write operations.
+    """
+
+    @pytest.fixture
+    def fake_port(self) -> FakeFuturesPort:
+        """Provide fake futures port for testing."""
+        return FakeFuturesPort()
+
+    @pytest.fixture
+    def set_allow_mainnet(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Set ALLOW_MAINNET_TRADE=1 for tests that need it."""
+        monkeypatch.setenv("ALLOW_MAINNET_TRADE", "1")
+
+    @pytest.fixture
+    def clear_allow_mainnet(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Clear ALLOW_MAINNET_TRADE env var."""
+        monkeypatch.delenv("ALLOW_MAINNET_TRADE", raising=False)
+
+    # --- Negative Path Tests: Gate Failures ---
+
+    @pytest.mark.asyncio
+    async def test_live_trade_armed_false_blocks_place_order(
+        self,
+        fake_clock: FakeClock,
+        fake_sleep: FakeSleep,
+        fake_port: FakeFuturesPort,
+        set_allow_mainnet: None,  # noqa: ARG002
+    ) -> None:
+        """Gate 1 failure: LIVE_TRADE + armed=False → block."""
+        connector = LiveConnectorV0(
+            config=LiveConnectorConfig(
+                mode=SafeMode.LIVE_TRADE,
+                armed=False,  # Gate 1 fails
+                futures_port=fake_port,  # type: ignore[arg-type]
+            ),
+            clock=fake_clock,
+            sleep_func=fake_sleep,
+        )
+        await connector.connect()
+
+        with pytest.raises(ConnectorNonRetryableError) as exc_info:
+            connector.place_order(
+                symbol="BTCUSDT",
+                side=OrderSide.BUY,
+                price=Decimal("50000"),
+                quantity=Decimal("0.001"),
+            )
+
+        # Verify specific error message
+        assert "armed=False" in str(exc_info.value)
+        assert "Set armed=True" in str(exc_info.value)
+
+        # Verify port was NOT called
+        assert len(fake_port.place_order_calls) == 0
+
+        await connector.close()
+
+    @pytest.mark.asyncio
+    async def test_live_trade_wrong_mode_blocks_place_order(
+        self,
+        fake_clock: FakeClock,
+        fake_sleep: FakeSleep,
+        fake_port: FakeFuturesPort,
+        set_allow_mainnet: None,  # noqa: ARG002
+    ) -> None:
+        """Gate 2 failure: mode≠LIVE_TRADE + armed=True → block."""
+        connector = LiveConnectorV0(
+            config=LiveConnectorConfig(
+                mode=SafeMode.PAPER,  # Gate 2 fails (not LIVE_TRADE)
+                armed=True,
+                futures_port=fake_port,  # type: ignore[arg-type]
+            ),
+            clock=fake_clock,
+            sleep_func=fake_sleep,
+        )
+        await connector.connect()
+
+        # PAPER mode uses paper adapter, NOT futures_port
+        # So place_order should go to paper adapter (which is initialized for PAPER mode)
+        # This test verifies that armed=True + PAPER mode uses paper adapter, not futures_port
+        result = connector.place_order(
+            symbol="BTCUSDT",
+            side=OrderSide.BUY,
+            price=Decimal("50000"),
+            quantity=Decimal("0.001"),
+        )
+
+        # Should succeed via paper adapter
+        assert result is not None
+
+        # Verify futures_port was NOT called
+        assert len(fake_port.place_order_calls) == 0
+
+        await connector.close()
+
+    @pytest.mark.asyncio
+    async def test_live_trade_env_var_missing_blocks_place_order(
+        self,
+        fake_clock: FakeClock,
+        fake_sleep: FakeSleep,
+        fake_port: FakeFuturesPort,
+        clear_allow_mainnet: None,  # noqa: ARG002
+    ) -> None:
+        """Gate 3 failure: LIVE_TRADE + armed=True + ALLOW_MAINNET_TRADE!=1 → block."""
+        connector = LiveConnectorV0(
+            config=LiveConnectorConfig(
+                mode=SafeMode.LIVE_TRADE,
+                armed=True,
+                futures_port=fake_port,  # type: ignore[arg-type]
+            ),
+            clock=fake_clock,
+            sleep_func=fake_sleep,
+        )
+        await connector.connect()
+
+        with pytest.raises(ConnectorNonRetryableError) as exc_info:
+            connector.place_order(
+                symbol="BTCUSDT",
+                side=OrderSide.BUY,
+                price=Decimal("50000"),
+                quantity=Decimal("0.001"),
+            )
+
+        # Verify specific error message
+        assert "ALLOW_MAINNET_TRADE=1" in str(exc_info.value)
+
+        # Verify port was NOT called
+        assert len(fake_port.place_order_calls) == 0
+
+        await connector.close()
+
+    @pytest.mark.asyncio
+    async def test_live_trade_no_port_blocks_place_order(
+        self,
+        fake_clock: FakeClock,
+        fake_sleep: FakeSleep,
+        set_allow_mainnet: None,  # noqa: ARG002
+    ) -> None:
+        """Gate 4 failure: LIVE_TRADE + armed + env=1 but futures_port=None → block."""
+        connector = LiveConnectorV0(
+            config=LiveConnectorConfig(
+                mode=SafeMode.LIVE_TRADE,
+                armed=True,
+                futures_port=None,  # Gate 4 fails
+            ),
+            clock=fake_clock,
+            sleep_func=fake_sleep,
+        )
+        await connector.connect()
+
+        with pytest.raises(ConnectorNonRetryableError) as exc_info:
+            connector.place_order(
+                symbol="BTCUSDT",
+                side=OrderSide.BUY,
+                price=Decimal("50000"),
+                quantity=Decimal("0.001"),
+            )
+
+        # Verify specific error message
+        assert "futures_port not configured" in str(exc_info.value)
+
+        await connector.close()
+
+    # --- Positive Path Tests: All Gates Pass ---
+
+    @pytest.mark.asyncio
+    async def test_live_trade_all_gates_pass_delegates_place_order(
+        self,
+        fake_clock: FakeClock,
+        fake_sleep: FakeSleep,
+        fake_port: FakeFuturesPort,
+        set_allow_mainnet: None,  # noqa: ARG002
+    ) -> None:
+        """All gates pass → place_order delegates to futures_port."""
+        connector = LiveConnectorV0(
+            config=LiveConnectorConfig(
+                mode=SafeMode.LIVE_TRADE,
+                armed=True,
+                futures_port=fake_port,  # type: ignore[arg-type]
+            ),
+            clock=fake_clock,
+            sleep_func=fake_sleep,
+        )
+        await connector.connect()
+
+        result = connector.place_order(
+            symbol="BTCUSDT",
+            side=OrderSide.BUY,
+            price=Decimal("50000"),
+            quantity=Decimal("0.001"),
+            level_id=5,
+        )
+
+        # Verify order_id returned (LIVE_TRADE returns str, not OrderResult)
+        assert isinstance(result, str)
+        assert "grinder_BTCUSDT_5_" in result
+
+        # Verify futures_port was called with correct args
+        assert len(fake_port.place_order_calls) == 1
+        call = fake_port.place_order_calls[0]
+        assert call["symbol"] == "BTCUSDT"
+        assert call["side"] == OrderSide.BUY
+        assert call["price"] == Decimal("50000")
+        assert call["quantity"] == Decimal("0.001")
+        assert call["level_id"] == 5
+
+        await connector.close()
+
+    @pytest.mark.asyncio
+    async def test_live_trade_all_gates_pass_delegates_cancel_order(
+        self,
+        fake_clock: FakeClock,
+        fake_sleep: FakeSleep,
+        fake_port: FakeFuturesPort,
+        set_allow_mainnet: None,  # noqa: ARG002
+    ) -> None:
+        """All gates pass → cancel_order delegates to futures_port."""
+        connector = LiveConnectorV0(
+            config=LiveConnectorConfig(
+                mode=SafeMode.LIVE_TRADE,
+                armed=True,
+                futures_port=fake_port,  # type: ignore[arg-type]
+            ),
+            clock=fake_clock,
+            sleep_func=fake_sleep,
+        )
+        await connector.connect()
+
+        result = connector.cancel_order("grinder_BTCUSDT_5_1234567890")
+
+        # Verify success
+        assert result is True
+
+        # Verify futures_port was called
+        assert len(fake_port.cancel_order_calls) == 1
+        assert fake_port.cancel_order_calls[0] == "grinder_BTCUSDT_5_1234567890"
+
+        await connector.close()
+
+    @pytest.mark.asyncio
+    async def test_live_trade_all_gates_pass_delegates_replace_order(
+        self,
+        fake_clock: FakeClock,
+        fake_sleep: FakeSleep,
+        fake_port: FakeFuturesPort,
+        set_allow_mainnet: None,  # noqa: ARG002
+    ) -> None:
+        """All gates pass → replace_order delegates to futures_port."""
+        connector = LiveConnectorV0(
+            config=LiveConnectorConfig(
+                mode=SafeMode.LIVE_TRADE,
+                armed=True,
+                futures_port=fake_port,  # type: ignore[arg-type]
+            ),
+            clock=fake_clock,
+            sleep_func=fake_sleep,
+        )
+        await connector.connect()
+
+        result = connector.replace_order(
+            order_id="grinder_BTCUSDT_5_1234567890",
+            new_price=Decimal("51000"),
+            new_quantity=Decimal("0.002"),
+        )
+
+        # Verify order_id returned (LIVE_TRADE returns str, not OrderResult)
+        assert isinstance(result, str)
+        assert "grinder_replaced_" in result
+
+        # Verify futures_port was called
+        assert len(fake_port.replace_order_calls) == 1
+        call = fake_port.replace_order_calls[0]
+        assert call["order_id"] == "grinder_BTCUSDT_5_1234567890"
+        assert call["new_price"] == Decimal("51000")
+        assert call["new_quantity"] == Decimal("0.002")
+
+        await connector.close()
+
+    @pytest.mark.asyncio
+    async def test_live_trade_replace_requires_both_price_and_quantity(
+        self,
+        fake_clock: FakeClock,
+        fake_sleep: FakeSleep,
+        fake_port: FakeFuturesPort,
+        set_allow_mainnet: None,  # noqa: ARG002
+    ) -> None:
+        """replace_order in LIVE_TRADE requires both new_price and new_quantity."""
+        connector = LiveConnectorV0(
+            config=LiveConnectorConfig(
+                mode=SafeMode.LIVE_TRADE,
+                armed=True,
+                futures_port=fake_port,  # type: ignore[arg-type]
+            ),
+            clock=fake_clock,
+            sleep_func=fake_sleep,
+        )
+        await connector.connect()
+
+        # Missing new_quantity
+        with pytest.raises(ConnectorNonRetryableError) as exc_info:
+            connector.replace_order(
+                order_id="grinder_BTCUSDT_5_1234567890",
+                new_price=Decimal("51000"),
+                new_quantity=None,
+            )
+
+        assert "requires both new_price and new_quantity" in str(exc_info.value)
+
+        await connector.close()
