@@ -21,6 +21,7 @@ from grinder.connectors import (
     ConnectorState,
     LiveConnectorConfig,
     LiveConnectorV0,
+    OrderResult,
     PaperOrderError,
     SafeMode,
     reset_connector_metrics,
@@ -148,6 +149,7 @@ class TestSafeModeEnforcement:
             quantity=Decimal("1"),
         )
 
+        assert isinstance(result, OrderResult)
         assert result.order_id.startswith("PAPER_")
         assert result.state == OrderState.FILLED  # V0 instant fill
 
@@ -185,6 +187,8 @@ class TestOrderLifecycle:
             quantity=Decimal("10"),
         )
 
+        assert isinstance(result1, OrderResult)
+        assert isinstance(result2, OrderResult)
         assert result1.order_id == "PAPER_00000001"
         assert result2.order_id == "PAPER_00000002"
 
@@ -209,6 +213,7 @@ class TestOrderLifecycle:
             quantity=Decimal("1.5"),
         )
 
+        assert isinstance(result, OrderResult)
         assert result.state == OrderState.FILLED
         assert result.filled_quantity == Decimal("1.5")
 
@@ -234,6 +239,7 @@ class TestOrderLifecycle:
         )
 
         # V0: Order is instantly filled, can't cancel
+        assert isinstance(result, OrderResult)
         with pytest.raises(PaperOrderError, match="Cannot cancel filled order"):
             connector.cancel_order(result.order_id)
 
@@ -259,6 +265,7 @@ class TestOrderLifecycle:
         )
 
         # V0: Order is instantly filled, can't replace
+        assert isinstance(result, OrderResult)
         with pytest.raises(PaperOrderError, match="Cannot replace order"):
             connector.replace_order(result.order_id, new_price=Decimal("55000"))
 
@@ -297,6 +304,7 @@ class TestNoNetworkCalls:
             price=Decimal("50000"),
             quantity=Decimal("1"),
         )
+        assert isinstance(result, OrderResult)
         assert result.order_id.startswith("PAPER_")
 
         await connector.close()
@@ -405,6 +413,8 @@ class TestBoundedTime:
         elapsed = time.time() - start
 
         assert elapsed < 1.0
+        assert isinstance(result1, OrderResult)
+        assert isinstance(result2, OrderResult)
         assert result1.order_id == "PAPER_00000001"
         assert result2.order_id == "PAPER_00000002"
 
@@ -459,6 +469,12 @@ class TestDeterminism:
             quantity=Decimal("5"),
         )
         await connector2.close()
+
+        # Type guards for mypy
+        assert isinstance(r1_1, OrderResult)
+        assert isinstance(r1_2, OrderResult)
+        assert isinstance(r2_1, OrderResult)
+        assert isinstance(r2_2, OrderResult)
 
         # Same IDs
         assert r1_1.order_id == r2_1.order_id == "PAPER_00000001"

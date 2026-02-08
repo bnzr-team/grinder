@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import time as time_module
 from dataclasses import dataclass, field
 from enum import Enum
@@ -63,6 +64,7 @@ if TYPE_CHECKING:
 
     from grinder.contracts import Snapshot
     from grinder.core import OrderSide
+    from grinder.execution.binance_futures_port import BinanceFuturesPort
 
 logger = logging.getLogger(__name__)
 
@@ -96,6 +98,16 @@ class LiveConnectorConfig:
         retry_policy: Retry policy for transient failures
         circuit_breaker_config: Circuit breaker configuration
         ws_transport: Injectable WS transport for testing (None = real WebSocket)
+        armed: Arming gate for LIVE_TRADE mode (default: False, must be True for real trades)
+        futures_port: Injectable BinanceFuturesPort for LIVE_TRADE mode (None = not configured)
+
+    LIVE_TRADE Mode Gates (LC-22, ADR-056):
+        All 3 gates must pass for real write operations:
+        1. armed=True (explicit arming)
+        2. mode=LIVE_TRADE (explicit mode)
+        3. ALLOW_MAINNET_TRADE=1 env var (external safeguard)
+
+        Any gate failure → ConnectorNonRetryableError with specific message.
     """
 
     mode: SafeMode = SafeMode.READ_ONLY
@@ -108,6 +120,10 @@ class LiveConnectorConfig:
         default_factory=lambda: CircuitBreakerConfig(trip_on=default_trip_on)
     )
     ws_transport: WsTransport | None = None  # Injectable for testing
+
+    # LC-22: LIVE_TRADE gates
+    armed: bool = False  # Gate 1: Must be True for real trades
+    futures_port: BinanceFuturesPort | None = None  # Injectable port for LIVE_TRADE
 
 
 @dataclass
@@ -496,6 +512,53 @@ class LiveConnectorV0(DataConnector):
                 f"but connector is in mode={self._config.mode.value}"
             )
 
+    def _check_live_trade_gates(self, op: str) -> None:
+        """Check all 3 gates for LIVE_TRADE write operations (LC-22).
+
+        Gates (all must pass):
+        1. armed=True (explicit arming)
+        2. mode=LIVE_TRADE (explicit mode)
+        3. ALLOW_MAINNET_TRADE=1 env var (external safeguard)
+
+        Args:
+            op: Operation name for error messages
+
+        Raises:
+            ConnectorNonRetryableError: If any gate fails, with specific reason.
+        """
+        # Gate 1: armed check
+        if not self._config.armed:
+            raise ConnectorNonRetryableError(
+                f"Cannot {op}: armed=False. "
+                "Set armed=True in config to enable LIVE_TRADE operations."
+            )
+
+        # Gate 2: mode check (already LIVE_TRADE if we get here, but explicit)
+        if self._config.mode != SafeMode.LIVE_TRADE:
+            raise ConnectorNonRetryableError(
+                f"Cannot {op}: mode={self._config.mode.value}, requires LIVE_TRADE. "
+                "Set mode=SafeMode.LIVE_TRADE to enable real trading."
+            )
+
+        # Gate 3: env var check
+        allow_mainnet = os.environ.get("ALLOW_MAINNET_TRADE", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        )
+        if not allow_mainnet:
+            raise ConnectorNonRetryableError(
+                f"Cannot {op}: ALLOW_MAINNET_TRADE=1 not set. "
+                "Set ALLOW_MAINNET_TRADE=1 environment variable to enable mainnet trading."
+            )
+
+        # Gate 4: futures_port must be configured
+        if self._config.futures_port is None:
+            raise ConnectorNonRetryableError(
+                f"Cannot {op}: futures_port not configured. "
+                "Set futures_port in config to enable LIVE_TRADE operations."
+            )
+
     @property
     def circuit_breaker(self) -> CircuitBreaker:
         """Get circuit breaker for testing/monitoring."""
@@ -515,12 +578,14 @@ class LiveConnectorV0(DataConnector):
         price: Decimal,
         quantity: Decimal,
         client_order_id: str | None = None,
-    ) -> OrderResult:
+        level_id: int = 0,
+        ts: int | None = None,
+    ) -> OrderResult | str:
         """Place a new order.
 
         In PAPER mode: Simulates order placement with instant fill.
         In READ_ONLY mode: Raises ConnectorNonRetryableError.
-        In LIVE_TRADE mode: Not implemented in v0.
+        In LIVE_TRADE mode (LC-22): Delegates to BinanceFuturesPort if all 3 gates pass.
 
         Args:
             symbol: Trading pair symbol (e.g., "BTCUSDT")
@@ -528,9 +593,12 @@ class LiveConnectorV0(DataConnector):
             price: Limit price
             quantity: Order quantity
             client_order_id: Optional client-provided order ID
+            level_id: Grid level identifier (for LIVE_TRADE mode)
+            ts: Current timestamp (for LIVE_TRADE mode, uses now if None)
 
         Returns:
-            OrderResult with the placed order details
+            OrderResult with the placed order details (PAPER mode)
+            str order_id (LIVE_TRADE mode)
 
         Raises:
             ConnectorNonRetryableError: If mode doesn't allow write operations
@@ -543,10 +611,21 @@ class LiveConnectorV0(DataConnector):
         # Check mode - READ_ONLY blocks all writes
         self.assert_mode(SafeMode.PAPER)
 
-        # LIVE_TRADE not implemented in v0
+        # LIVE_TRADE mode (LC-22): check 3 gates and delegate to futures_port
         if self._config.mode == SafeMode.LIVE_TRADE:
-            raise ConnectorNonRetryableError(
-                "LIVE_TRADE mode not implemented in v0. Use PAPER mode for testing."
+            self._check_live_trade_gates("place_order")
+
+            # Use current time if not provided
+            if ts is None:
+                ts = int(self._now() * 1000)
+
+            return self._config.futures_port.place_order(  # type: ignore[union-attr]
+                symbol=symbol,
+                side=side,
+                price=price,
+                quantity=quantity,
+                level_id=level_id,
+                ts=ts,
             )
 
         # PAPER mode: use paper adapter
@@ -563,18 +642,19 @@ class LiveConnectorV0(DataConnector):
 
         return self._paper_adapter.place_order(request)
 
-    def cancel_order(self, order_id: str) -> OrderResult:
+    def cancel_order(self, order_id: str) -> OrderResult | bool:
         """Cancel an existing order.
 
         In PAPER mode: Cancels the simulated order.
         In READ_ONLY mode: Raises ConnectorNonRetryableError.
-        In LIVE_TRADE mode: Not implemented in v0.
+        In LIVE_TRADE mode (LC-22): Delegates to BinanceFuturesPort if all 3 gates pass.
 
         Args:
             order_id: ID of order to cancel
 
         Returns:
-            OrderResult with the cancelled order state
+            OrderResult with the cancelled order state (PAPER mode)
+            bool indicating success (LIVE_TRADE mode)
 
         Raises:
             ConnectorNonRetryableError: If mode doesn't allow write operations
@@ -587,11 +667,11 @@ class LiveConnectorV0(DataConnector):
         # Check mode - READ_ONLY blocks all writes
         self.assert_mode(SafeMode.PAPER)
 
-        # LIVE_TRADE not implemented in v0
+        # LIVE_TRADE mode (LC-22): check 3 gates and delegate to futures_port
         if self._config.mode == SafeMode.LIVE_TRADE:
-            raise ConnectorNonRetryableError(
-                "LIVE_TRADE mode not implemented in v0. Use PAPER mode for testing."
-            )
+            self._check_live_trade_gates("cancel_order")
+
+            return self._config.futures_port.cancel_order(order_id)  # type: ignore[union-attr]
 
         # PAPER mode: use paper adapter
         if self._paper_adapter is None:
@@ -604,20 +684,23 @@ class LiveConnectorV0(DataConnector):
         order_id: str,
         new_price: Decimal | None = None,
         new_quantity: Decimal | None = None,
-    ) -> OrderResult:
+        ts: int | None = None,
+    ) -> OrderResult | str:
         """Replace an existing order with new parameters.
 
         In PAPER mode: Cancels old order and places new one (cancel+new pattern).
         In READ_ONLY mode: Raises ConnectorNonRetryableError.
-        In LIVE_TRADE mode: Not implemented in v0.
+        In LIVE_TRADE mode (LC-22): Delegates to BinanceFuturesPort if all 3 gates pass.
 
         Args:
             order_id: ID of order to replace
             new_price: New price (uses old price if None)
             new_quantity: New quantity (uses old quantity if None)
+            ts: Current timestamp (for LIVE_TRADE mode, uses now if None)
 
         Returns:
-            OrderResult with the NEW order (not the cancelled one)
+            OrderResult with the NEW order (not the cancelled one) (PAPER mode)
+            str new_order_id (LIVE_TRADE mode)
 
         Raises:
             ConnectorNonRetryableError: If mode doesn't allow write operations
@@ -630,10 +713,25 @@ class LiveConnectorV0(DataConnector):
         # Check mode - READ_ONLY blocks all writes
         self.assert_mode(SafeMode.PAPER)
 
-        # LIVE_TRADE not implemented in v0
+        # LIVE_TRADE mode (LC-22): check 3 gates and delegate to futures_port
         if self._config.mode == SafeMode.LIVE_TRADE:
-            raise ConnectorNonRetryableError(
-                "LIVE_TRADE mode not implemented in v0. Use PAPER mode for testing."
+            self._check_live_trade_gates("replace_order")
+
+            # Use current time if not provided
+            if ts is None:
+                ts = int(self._now() * 1000)
+
+            # For replace, both price and quantity are required for futures_port
+            if new_price is None or new_quantity is None:
+                raise ConnectorNonRetryableError(
+                    "replace_order in LIVE_TRADE mode requires both new_price and new_quantity"
+                )
+
+            return self._config.futures_port.replace_order(  # type: ignore[union-attr]
+                order_id=order_id,
+                new_price=new_price,
+                new_quantity=new_quantity,
+                ts=ts,
             )
 
         # PAPER mode: use paper adapter
