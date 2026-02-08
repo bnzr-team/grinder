@@ -67,6 +67,29 @@ DEFAULT_LEVERAGE = 3
 class RequestsHttpClient:
     """Simple requests-based HTTP client for BinanceFuturesPort."""
 
+    def request(
+        self,
+        method: str,
+        url: str,
+        params: dict | None = None,
+        headers: dict | None = None,
+        timeout_ms: int = 10000,
+    ) -> HttpResponse:
+        """Make HTTP request matching BinanceFuturesPort interface."""
+        timeout_sec = timeout_ms / 1000.0
+        resp = requests.request(
+            method=method,
+            url=url,
+            params=params,
+            headers=headers,
+            timeout=timeout_sec,
+        )
+        try:
+            json_data = resp.json()
+        except Exception:
+            json_data = {"raw": resp.text}
+        return HttpResponse(status_code=resp.status_code, json_data=json_data)
+
     def get(
         self,
         url: str,
@@ -75,26 +98,6 @@ class RequestsHttpClient:
         timeout: float = 10.0,
     ) -> HttpResponse:
         resp = requests.get(url, params=params, headers=headers, timeout=timeout)
-        return HttpResponse(status_code=resp.status_code, json_data=resp.json())
-
-    def post(
-        self,
-        url: str,
-        data: dict | None = None,
-        headers: dict | None = None,
-        timeout: float = 10.0,
-    ) -> HttpResponse:
-        resp = requests.post(url, data=data, headers=headers, timeout=timeout)
-        return HttpResponse(status_code=resp.status_code, json_data=resp.json())
-
-    def delete(
-        self,
-        url: str,
-        params: dict | None = None,
-        headers: dict | None = None,
-        timeout: float = 10.0,
-    ) -> HttpResponse:
-        resp = requests.delete(url, params=params, headers=headers, timeout=timeout)
         return HttpResponse(status_code=resp.status_code, json_data=resp.json())
 
 
