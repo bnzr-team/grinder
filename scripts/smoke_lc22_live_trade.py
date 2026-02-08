@@ -254,7 +254,9 @@ async def smoke_test(dry_run: bool, symbol: str) -> int:
 
         # Far from market (50% below)
         order_price = (current_price * Decimal("0.50")).quantize(Decimal("0.01"))
-        order_qty = Decimal("0.001")  # Minimum qty for BTCUSDT
+        # Binance requires notional >= $100, calculate min qty
+        min_notional = Decimal("105")  # $105 to be safe above $100 min
+        order_qty = (min_notional / order_price).quantize(Decimal("0.001"), rounding="ROUND_UP")
 
         print(f"\n## Placing order via LiveConnectorV0.place_order()")
         print(f"  symbol: {symbol}")
