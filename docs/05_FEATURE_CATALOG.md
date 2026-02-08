@@ -4,6 +4,51 @@
 
 ---
 
+## Implementation Status
+
+> **SSOT Notice**: This catalog describes both implemented and planned features.
+> Check this table before assuming a feature is available.
+
+| Feature | Status | Engine | Notes |
+|---------|--------|--------|-------|
+| `mid_price` | **Implemented** | FeatureEngine v1 | L1-based mid price |
+| `spread_bps` | **Implemented** | FeatureEngine v1 | L1 spread in bps (int) |
+| `imbalance_l1_bps` | **Implemented** | FeatureEngine v1 | L1 queue imbalance |
+| `thin_l1` | **Implemented** | FeatureEngine v1 | Boolean thin-book flag |
+| `atr` | **Implemented** | FeatureEngine v1 | ATR from mid-bars |
+| `natr_bps` | **Implemented** | FeatureEngine v1 | Normalized ATR in bps |
+| `sum_abs_returns_bps` | **Implemented** | FeatureEngine v1 | Range horizon feature |
+| `net_return_bps` | **Implemented** | FeatureEngine v1 | Range horizon feature |
+| `range_score` | **Implemented** | FeatureEngine v1 | Chop detection score |
+| `impact_buy_topN_bps` | **Planned (M7)** | FeatureEngine v2 | L2 VWAP slippage |
+| `impact_sell_topN_bps` | **Planned (M7)** | FeatureEngine v2 | L2 VWAP slippage |
+| `wall_bid_score_topN_x1000` | **Planned (M7)** | FeatureEngine v2 | L2 wall detection |
+| `wall_ask_score_topN_x1000` | **Planned (M7)** | FeatureEngine v2 | L2 wall detection |
+| `depth_imbalance_topN_bps` | **Planned (M7)** | FeatureEngine v2 | L2 depth imbalance |
+| `microprice` | Unscheduled | — | Spec only |
+| `microprice_dev_bps` | Unscheduled | — | Spec only |
+| `cvd` | Unscheduled | — | Spec only |
+| `cvd_change_*` | Unscheduled | — | Spec only |
+| `ofi_*` | Unscheduled | — | Spec only |
+| `beta_btc` | Unscheduled | — | Spec only |
+| `residual_ret` | Unscheduled | — | Spec only |
+| `funding_rate` | Unscheduled | — | Spec only |
+| `oi_change_*` | Unscheduled | — | Spec only |
+| `depth_imb_*` | Unscheduled | — | Spec only |
+| `depth_slope_*` | Unscheduled | — | Spec only |
+| `liq_*` | Unscheduled | — | Spec only |
+| `tox_score` | Unscheduled | — | Spec only |
+
+**Status legend:**
+- **Implemented**: Code exists, tests pass, determinism verified
+- **Planned (M7)**: Scheduled for M7 milestone (L2 FeatureEngine v2)
+- **Unscheduled**: Spec/wishlist only, no implementation timeline
+
+> **Reference**: See `src/grinder/features/engine.py` for FeatureEngine v1 implementation.
+> See `docs/smart_grid/SPEC_V2_0.md` §B for L2 feature formulas (M7).
+
+---
+
 ## 5.1 Feature Registry
 
 ```python

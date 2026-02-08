@@ -592,3 +592,286 @@ This version introduces ML as an offline-trained, deterministic inference layer.
 ### Required fixtures / tests
 - `ml_regime_eval_suite`: fixtures spanning regimes with expected regime labels/probability bounds.
 - `ml_inference_determinism`: asserts stable outputs across runs.
+
+---
+
+## v2.0 Addendum B: L2 Snapshot JSONL v0 Protocol
+
+This section defines the SSOT contract for L2 order book snapshot fixtures and the L2 feature formulas for FeatureEngine v2.
+
+### B.1 L2 Snapshot JSONL v0 Schema
+
+```json
+{
+  "type": "l2_snapshot",
+  "v": 0,
+  "ts_ms": 1770552988001,
+  "symbol": "BTCUSDT",
+  "venue": "binance_futures_usdtm",
+  "depth": 5,
+  "bids": [["70810.90", "0.120"], ["70810.50", "0.250"], ...],
+  "asks": [["70811.10", "0.110"], ["70811.50", "0.230"], ...],
+  "meta": {"src": "fixture", "scenario": "normal"}
+}
+```
+
+#### Field definitions
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `type` | string | Always `"l2_snapshot"` |
+| `v` | int | Schema version (0 for this spec) |
+| `ts_ms` | int | Timestamp in milliseconds since epoch |
+| `symbol` | string | Trading pair (e.g., `"BTCUSDT"`) |
+| `venue` | string | Exchange identifier (e.g., `"binance_futures_usdtm"`) |
+| `depth` | int | Number of levels on each side |
+| `bids` | array | List of `[price_str, qty_str]` tuples, descending by price |
+| `asks` | array | List of `[price_str, qty_str]` tuples, ascending by price |
+| `meta` | object | Optional metadata (`src`, `scenario`, etc.) |
+
+#### Invariants (MUST)
+
+1. **bids**: prices strictly descending (`bids[i][0] > bids[i+1][0]`)
+2. **asks**: prices strictly ascending (`asks[i][0] < asks[i+1][0]`)
+3. **qty > 0**: all quantities must be positive (no zero-qty levels)
+4. **Strings for determinism**: prices and quantities are strings to avoid float parsing drift
+5. **depth = len(bids) = len(asks)**: consistent depth on both sides
+
+#### Parsing
+
+```python
+for side in ("bids", "asks"):
+    for price_str, qty_str in data[side]:
+        price = Decimal(price_str)
+        qty = Decimal(qty_str)
+```
+
+---
+
+### B.2 FeatureEngine v2: L2 Features
+
+FeatureEngine v2 adds the following L2-derived features (topN = depth from snapshot):
+
+| Feature Key | Type | Unit | Description |
+|-------------|------|------|-------------|
+| `impact_buy_topN_bps` | int | bps | VWAP slippage for buying `qty_ref` (from best ask) |
+| `impact_sell_topN_bps` | int | bps | VWAP slippage for selling `qty_ref` (from best bid) |
+| `wall_bid_score_topN_x1000` | int | x1000 | Wall detection score on bid side |
+| `wall_ask_score_topN_x1000` | int | x1000 | Wall detection score on ask side |
+| `depth_imbalance_topN_bps` | int | bps | Bid-ask depth imbalance in bps |
+
+#### Constants
+
+| Constant | Value | Description |
+|----------|-------|-------------|
+| `QTY_REF_BASELINE` | `0.003` | Reference quantity for impact calculation |
+| `IMPACT_INSUFFICIENT_DEPTH_BPS` | `500` | Sentinel when depth exhausted before filling `qty_ref` |
+
+---
+
+### B.3 Impact-Lite Formula (VWAP Slippage)
+
+Walk-the-book algorithm to compute VWAP slippage in basis points from best price.
+
+#### Algorithm (buy side)
+
+```python
+def compute_impact_buy_bps(asks: list[tuple[Decimal, Decimal]], qty_ref: Decimal) -> int:
+    """
+    Compute buy-side VWAP slippage in bps from best ask.
+
+    Args:
+        asks: [(price, qty), ...] sorted ascending by price
+        qty_ref: Reference quantity to fill
+
+    Returns:
+        Impact in integer bps, or IMPACT_INSUFFICIENT_DEPTH_BPS if depth exhausted
+    """
+    if not asks:
+        return IMPACT_INSUFFICIENT_DEPTH_BPS
+
+    best_ask = asks[0][0]
+    remaining = qty_ref
+    cost = Decimal("0")
+
+    for price, qty in asks:
+        if remaining <= 0:
+            break
+        fill = min(remaining, qty)
+        cost += fill * price
+        remaining -= fill
+
+    if remaining > 0:
+        # Insufficient depth
+        return IMPACT_INSUFFICIENT_DEPTH_BPS
+
+    vwap = cost / qty_ref
+    slippage_bps = (vwap - best_ask) / best_ask * 10000
+    return round(slippage_bps)
+```
+
+#### Algorithm (sell side)
+
+```python
+def compute_impact_sell_bps(bids: list[tuple[Decimal, Decimal]], qty_ref: Decimal) -> int:
+    """
+    Compute sell-side VWAP slippage in bps from best bid.
+
+    Args:
+        bids: [(price, qty), ...] sorted descending by price
+        qty_ref: Reference quantity to fill
+
+    Returns:
+        Impact in integer bps, or IMPACT_INSUFFICIENT_DEPTH_BPS if depth exhausted
+    """
+    if not bids:
+        return IMPACT_INSUFFICIENT_DEPTH_BPS
+
+    best_bid = bids[0][0]
+    remaining = qty_ref
+    proceeds = Decimal("0")
+
+    for price, qty in bids:
+        if remaining <= 0:
+            break
+        fill = min(remaining, qty)
+        proceeds += fill * price
+        remaining -= fill
+
+    if remaining > 0:
+        # Insufficient depth
+        return IMPACT_INSUFFICIENT_DEPTH_BPS
+
+    vwap = proceeds / qty_ref
+    slippage_bps = (best_bid - vwap) / best_bid * 10000
+    return round(slippage_bps)
+```
+
+---
+
+### B.4 Wall Score Formula
+
+Wall score detects unusually large orders relative to the book.
+
+```python
+def compute_wall_score_x1000(levels: list[tuple[Decimal, Decimal]]) -> int:
+    """
+    Compute wall score as max_qty / median_qty, stored as x1000 integer.
+
+    Args:
+        levels: [(price, qty), ...] for one side of the book
+
+    Returns:
+        Wall score * 1000, rounded to integer
+    """
+    if len(levels) < 3:
+        return 1000  # Default: no wall detected
+
+    quantities = sorted([qty for _, qty in levels])
+    n = len(quantities)
+
+    if n % 2 == 1:
+        median_qty = quantities[n // 2]
+    else:
+        median_qty = (quantities[n // 2 - 1] + quantities[n // 2]) / 2
+
+    if median_qty <= 0:
+        return 1000
+
+    max_qty = max(qty for _, qty in levels)
+    wall_score = max_qty / median_qty
+    return round(wall_score * 1000)
+```
+
+---
+
+### B.5 Reference Fixtures (4 scenarios)
+
+All fixtures use `QTY_REF_BASELINE = 0.003` for impact calculations.
+
+#### B.5.1 Scenario: `normal`
+
+Healthy order book with sufficient liquidity at all levels.
+
+**JSONL:**
+```json
+{"type":"l2_snapshot","v":0,"ts_ms":1770552988001,"symbol":"BTCUSDT","venue":"binance_futures_usdtm","depth":5,"bids":[["70810.90","0.120"],["70810.50","0.250"],["70810.00","0.600"],["70809.50","0.900"],["70809.00","1.200"]],"asks":[["70811.10","0.110"],["70811.50","0.230"],["70812.00","0.550"],["70812.50","0.850"],["70813.00","1.100"]],"meta":{"src":"fixture","scenario":"normal"}}
+```
+
+**Expected values (qty_ref=0.003):**
+| Feature | Value | Rationale |
+|---------|-------|-----------|
+| `impact_buy_topN_bps` | `0` | Entire qty fits in top ask level (0.110 > 0.003) |
+| `impact_sell_topN_bps` | `0` | Entire qty fits in top bid level (0.120 > 0.003) |
+| `wall_bid_score_topN_x1000` | ~1000-2000 | No extreme wall |
+| `wall_ask_score_topN_x1000` | ~1000-2000 | No extreme wall |
+
+---
+
+#### B.5.2 Scenario: `ultra_thin`
+
+Extremely thin top levels designed to give exactly `impact_buy_topN_bps = 2` at `qty_ref = 0.003`.
+
+**JSONL:**
+```json
+{"type":"l2_snapshot","v":0,"ts_ms":1770553003001,"symbol":"BTCUSDT","venue":"binance_futures_usdtm","depth":5,"bids":[["70829.50","0.001"],["70808.25","0.002"],["70800.00","0.010"],["70790.00","0.015"],["70780.00","0.020"]],"asks":[["70830.00","0.001"],["70851.25","0.002"],["70860.00","0.010"],["70870.00","0.015"],["70880.00","0.020"]],"meta":{"src":"fixture","scenario":"ultra_thin"}}
+```
+
+**Expected values (qty_ref=0.003):**
+| Feature | Value | Rationale |
+|---------|-------|-----------|
+| `impact_buy_topN_bps` | `2` | Fills 0.001 @ 70830.00, 0.002 @ 70851.25; VWAP ≈ 70844.17, slippage ≈ 2 bps |
+| `impact_sell_topN_bps` | `2` | Fills 0.001 @ 70829.50, 0.002 @ 70808.25; VWAP ≈ 70815.33, slippage ≈ 2 bps |
+| `wall_bid_score_topN_x1000` | ~2000-3000 | Moderate variation |
+| `wall_ask_score_topN_x1000` | ~2000-3000 | Moderate variation |
+
+---
+
+#### B.5.3 Scenario: `wall_bid`
+
+Large bid wall at second level (2.5 BTC vs ~0.12-0.18 at other levels).
+
+**JSONL:**
+```json
+{"type":"l2_snapshot","v":0,"ts_ms":1770552998001,"symbol":"BTCUSDT","venue":"binance_futures_usdtm","depth":5,"bids":[["70810.90","0.120"],["70810.50","2.500"],["70810.00","0.140"],["70809.50","0.160"],["70809.00","0.180"]],"asks":[["70811.10","0.110"],["70811.50","0.130"],["70812.00","0.150"],["70812.50","0.170"],["70813.00","0.190"]],"meta":{"src":"fixture","scenario":"wall_bid"}}
+```
+
+**Expected values (qty_ref=0.003):**
+| Feature | Value | Rationale |
+|---------|-------|-----------|
+| `impact_buy_topN_bps` | `0` | Qty fits in top ask level |
+| `impact_sell_topN_bps` | `0` | Qty fits in top bid level |
+| `wall_bid_score_topN_x1000` | `15625` | max=2.500, median=0.160, ratio=15.625 |
+| `wall_ask_score_topN_x1000` | ~1267 | max=0.190, median=0.150, ratio≈1.267 |
+
+---
+
+#### B.5.4 Scenario: `thin_insufficient`
+
+Very thin book where `qty_ref = 0.1` would exhaust all depth.
+
+**JSONL:**
+```json
+{"type":"l2_snapshot","v":0,"ts_ms":1770552993001,"symbol":"BTCUSDT","venue":"binance_futures_usdtm","depth":5,"bids":[["70790.00","0.010"],["70780.00","0.012"],["70770.00","0.015"],["70760.00","0.020"],["70750.00","0.030"]],"asks":[["70830.00","0.009"],["70840.00","0.011"],["70850.00","0.014"],["70860.00","0.019"],["70870.00","0.028"]],"meta":{"src":"fixture","scenario":"thin_insufficient_for_q_0_1"}}
+```
+
+**Expected values (qty_ref=0.003):**
+| Feature | Value | Rationale |
+|---------|-------|-----------|
+| `impact_buy_topN_bps` | `0` | 0.003 < 0.009 (top ask qty) |
+| `impact_sell_topN_bps` | `0` | 0.003 < 0.010 (top bid qty) |
+
+**Expected values (qty_ref=0.1):**
+| Feature | Value | Rationale |
+|---------|-------|-----------|
+| `impact_buy_topN_bps` | `500` | Total ask depth = 0.081 < 0.1 → INSUFFICIENT |
+| `impact_sell_topN_bps` | `500` | Total bid depth = 0.087 < 0.1 → INSUFFICIENT |
+
+---
+
+### B.6 Determinism Requirements
+
+1. **Parsing**: Use `Decimal(str)` for exact parsing, never `float()`
+2. **Rounding**: All bps values via `round()` to nearest integer
+3. **Sorting**: Invariants ensure stable order (no sort needed at runtime)
+4. **Fixtures**: SHA256 digest of fixture file must be stable across CI runs
