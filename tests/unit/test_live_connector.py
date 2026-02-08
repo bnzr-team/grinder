@@ -11,6 +11,8 @@ Tests cover:
 
 from __future__ import annotations
 
+import asyncio
+import json
 import time
 
 import pytest
@@ -26,7 +28,9 @@ from grinder.connectors import (
     SafeMode,
     reset_connector_metrics,
 )
+from grinder.connectors.binance_ws import FakeWsTransport
 from grinder.connectors.circuit_breaker import CircuitBreakerConfig
+from grinder.connectors.metrics import get_connector_metrics
 
 
 class FakeClock:
@@ -71,6 +75,15 @@ def fake_clock() -> FakeClock:
 def fake_sleep() -> FakeSleep:
     """Provide fake sleep for tests."""
     return FakeSleep()
+
+
+@pytest.fixture
+def fake_ws_transport() -> FakeWsTransport:
+    """Provide fake WS transport for tests with symbols.
+
+    Uses delay_ms=2 to ensure different timestamps for idempotency checks.
+    """
+    return FakeWsTransport(messages=[], delay_ms=2)
 
 
 # --- SafeMode Tests ---
@@ -207,6 +220,164 @@ class TestLiveConnectorStream:
         await connector.close()
 
 
+# --- LC-21: Stream Ticks with Real WS Tests ---
+
+
+class TestStreamTicksWithWs:
+    """Tests for stream_ticks with real WS connector (LC-21)."""
+
+    @pytest.mark.asyncio
+    async def test_stream_ticks_yields_snapshots_from_ws(self, fake_sleep: FakeSleep) -> None:
+        """stream_ticks yields snapshots from WS connector when messages available."""
+        # Prepare fake bookTicker messages
+        messages = [
+            json.dumps({"s": "BTCUSDT", "b": "50000.00", "B": "1.5", "a": "50001.00", "A": "2.0"}),
+            json.dumps({"s": "BTCUSDT", "b": "50002.00", "B": "1.2", "a": "50003.00", "A": "1.8"}),
+        ]
+        # delay_ms=2 ensures different timestamps for idempotency checks
+        transport = FakeWsTransport(messages=messages, delay_ms=2)
+
+        # Use real time module for WS connector timestamps (not FakeClock)
+        # This is needed because BinanceWsConnector uses clock for idempotency
+        connector = LiveConnectorV0(
+            config=LiveConnectorConfig(
+                symbols=["BTCUSDT"],
+                ws_transport=transport,
+            ),
+            clock=time,  # Use real time for proper timestamps
+            sleep_func=fake_sleep,
+        )
+        await connector.connect()
+
+        # Collect snapshots with timeout to prevent hanging
+        snapshots = []
+        try:
+            async with asyncio.timeout(5):
+                async for snapshot in connector.stream_ticks():
+                    snapshots.append(snapshot)
+                    if len(snapshots) >= 2:
+                        await connector.close()
+                        break
+        except TimeoutError:
+            await connector.close()
+
+        # Verify snapshots
+        assert len(snapshots) == 2
+        assert snapshots[0].symbol == "BTCUSDT"
+        assert snapshots[0].bid_price == 50000
+        assert snapshots[1].bid_price == 50002
+
+    @pytest.mark.asyncio
+    async def test_stream_ticks_updates_stats(self, fake_sleep: FakeSleep) -> None:
+        """stream_ticks updates connector stats."""
+        messages = [
+            json.dumps({"s": "BTCUSDT", "b": "50000.00", "B": "1.5", "a": "50001.00", "A": "2.0"}),
+        ]
+        transport = FakeWsTransport(messages=messages, delay_ms=2)
+
+        # Use real time for proper timestamps
+        connector = LiveConnectorV0(
+            config=LiveConnectorConfig(
+                symbols=["BTCUSDT"],
+                ws_transport=transport,
+            ),
+            clock=time,
+            sleep_func=fake_sleep,
+        )
+        await connector.connect()
+
+        # Stream one message with timeout
+        try:
+            async with asyncio.timeout(5):
+                async for _ in connector.stream_ticks():
+                    await connector.close()
+                    break
+        except TimeoutError:
+            await connector.close()
+
+        # Verify stats updated
+        assert connector.stats.ticks_received == 1
+        assert connector.last_seen_ts is not None
+
+    @pytest.mark.asyncio
+    async def test_stream_ticks_records_metrics(self, fake_sleep: FakeSleep) -> None:
+        """stream_ticks records WS metrics."""
+        messages = [
+            json.dumps({"s": "BTCUSDT", "b": "50000.00", "B": "1.5", "a": "50001.00", "A": "2.0"}),
+        ]
+        transport = FakeWsTransport(messages=messages, delay_ms=2)
+
+        # Use real time for proper timestamps
+        connector = LiveConnectorV0(
+            config=LiveConnectorConfig(
+                symbols=["BTCUSDT"],
+                ws_transport=transport,
+            ),
+            clock=time,
+            sleep_func=fake_sleep,
+        )
+        await connector.connect()
+
+        # Stream one message with timeout
+        try:
+            async with asyncio.timeout(5):
+                async for _ in connector.stream_ticks():
+                    await connector.close()
+                    break
+        except TimeoutError:
+            await connector.close()
+
+        # Verify metrics (use connector name, not symbol, per ADR-028)
+        metrics = get_connector_metrics()
+        assert metrics.ticks_received.get("bookTicker", 0) == 1
+        assert metrics.last_tick_ts.get("bookTicker") is not None
+
+    @pytest.mark.asyncio
+    async def test_stream_ticks_graceful_stop_on_close(self, fake_sleep: FakeSleep) -> None:
+        """stream_ticks stops gracefully when connector closed."""
+        # Many messages to simulate long stream (different bid prices for idempotency)
+        messages = [
+            json.dumps(
+                {
+                    "s": "BTCUSDT",
+                    "b": f"{50000 + i}.00",
+                    "B": "1.5",
+                    "a": f"{50001 + i}.00",
+                    "A": "2.0",
+                }
+            )
+            for i in range(100)
+        ]
+        transport = FakeWsTransport(messages=messages, delay_ms=2)
+
+        # Use real time for proper timestamps
+        connector = LiveConnectorV0(
+            config=LiveConnectorConfig(
+                symbols=["BTCUSDT"],
+                ws_transport=transport,
+            ),
+            clock=time,
+            sleep_func=fake_sleep,
+        )
+        await connector.connect()
+
+        # Stream with timeout
+        snapshots = []
+        try:
+            async with asyncio.timeout(5):
+                async for snapshot in connector.stream_ticks():
+                    snapshots.append(snapshot)
+                    if len(snapshots) >= 3:
+                        await connector.close()
+                        break
+        except TimeoutError:
+            await connector.close()
+
+        # Verify we got some snapshots before close
+        assert len(snapshots) >= 3
+        assert connector.state == ConnectorState.CLOSED
+
+
 # --- Subscribe Tests ---
 
 
@@ -215,11 +386,14 @@ class TestLiveConnectorSubscribe:
 
     @pytest.mark.asyncio
     async def test_subscribe_adds_symbols(
-        self, fake_clock: FakeClock, fake_sleep: FakeSleep
+        self, fake_clock: FakeClock, fake_sleep: FakeSleep, fake_ws_transport: FakeWsTransport
     ) -> None:
         """subscribe adds symbols to config."""
         connector = LiveConnectorV0(
-            config=LiveConnectorConfig(symbols=["BTCUSDT"]),
+            config=LiveConnectorConfig(
+                symbols=["BTCUSDT"],
+                ws_transport=fake_ws_transport,
+            ),
             clock=fake_clock,
             sleep_func=fake_sleep,
         )

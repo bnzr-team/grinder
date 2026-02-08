@@ -2686,3 +2686,43 @@
   - Unit tests: TestHALeaderOnlyRemediation (7 tests)
   - HA smoke test: Verifies only leader has is_leader=1
   - Integration: docker-compose.ha.yml with 2 instances
+
+
+## ADR-055 — LC-21: L1 WebSocket Integration for LiveConnectorV0
+
+- **Date:** 2026-02-08
+- **Status:** accepted
+- **Context:**
+  LiveConnectorV0 had `stream_ticks()` as a placeholder that yielded nothing. For production
+  market data ingestion, we need real L1 bookTicker data from Binance WebSocket.
+
+- **Decision:**
+  1. Wire `stream_ticks()` to `BinanceWsConnector.iter_snapshots()` for real L1 data
+  2. L1 (bookTicker) first, not L2 (depth):
+     - L1 is sufficient for grid trading (bid/ask spread awareness)
+     - Lower bandwidth, simpler parsing
+     - L2 depth can be added if orderbook visibility required
+  3. Idempotency via `last_seen_ts` check — no duplicate yields
+  4. Injectable `ws_transport` in `LiveConnectorConfig` for testing without real WS
+  5. Use `FakeWsTransport(delay_ms=2)` to ensure unique timestamps for idempotency tests
+  6. Add 4 WebSocket metrics:
+     - `grinder_ws_connected` (gauge): 1=connected, 0=disconnected
+     - `grinder_ws_reconnect_total` (counter): reconnection events
+     - `grinder_ticks_received_total` (counter): ticks per connector (ADR-028 compliant)
+     - `grinder_last_tick_ts` (gauge): last tick timestamp per connector
+
+- **Testing without flaky:**
+  - `FakeWsTransport` injectable via `ws_transport` config field
+  - `delay_ms=2` ensures real-time timestamp differences for idempotency
+  - No network calls in unit tests
+  - Bounded-time execution (no real sleeps)
+
+- **Consequences:**
+  - `stream_ticks()` now yields real `Snapshot` objects from Binance bookTicker stream
+  - SafeMode still enforced (READ_ONLY default)
+  - No LIVE_TRADE enablement (out of scope for LC-21)
+  - Unit tests increased from 31 to 35 (+4 for stream_ticks with WS)
+
+- **Related:**
+  - ADR-029: LiveConnectorV0 design
+  - ADR-030: Paper write-path v0

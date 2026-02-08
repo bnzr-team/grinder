@@ -360,17 +360,20 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - **Bounded-time testing:**
     - Injectable `clock` and `sleep_func` parameters
     - Tests complete in milliseconds with FakeClock/FakeSleep
-  - **V0 scope (mock implementation):**
-    - `stream_ticks()` yields nothing (placeholder for real WebSocket)
+  - **V1 scope (LC-21: real WebSocket):**
+    - `stream_ticks()` wired to `BinanceWsConnector` for L1 bookTicker data
+    - Yields `Snapshot` objects with bid/ask/ts from real WebSocket frames
+    - Idempotency via `last_seen_ts` check (no duplicate yields)
     - Contract verified, hardening wired, tests pass
-    - Real WebSocket integration in v1
+    - **Metrics:** `grinder_ws_connected`, `grinder_ws_reconnect_total`, `grinder_ticks_received_total`, `grinder_last_tick_ts`
+    - **Testing:** `FakeWsTransport` injectable for bounded-time tests (delay_ms=2 for unique timestamps)
   - **Paper write-path (PAPER mode only):**
     - `place_order(symbol, side, price, quantity)` → `OrderResult` (instant fill v0)
     - `cancel_order(order_id)` → `OrderResult` (error if filled)
     - `replace_order(order_id, new_price, new_quantity)` → `OrderResult` (cancel+new)
     - Deterministic order IDs: `PAPER_{seq:08d}`
     - No network calls — pure in-memory simulation via `PaperExecutionAdapter`
-  - **Unit tests:** `tests/unit/test_live_connector.py` (31 tests)
+  - **Unit tests:** `tests/unit/test_live_connector.py` (35 tests)
   - **Integration tests:** `tests/integration/test_live_connector_integration.py` (6 tests)
   - See ADR-029 (live connector v0), ADR-030 (paper write-path v0)
 - **PaperExecutionAdapter** (`src/grinder/connectors/paper_execution.py`):
@@ -1267,7 +1270,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
 ## Planned next
 - Расширить тесты до >50% coverage.
 - Adaptive Controller v1 (EMA-based adaptive step, trend detection, DRAWDOWN mode).
-- Live Connector v1 (real WebSocket integration for LiveConnectorV0).
+- ~~Live Connector v1~~ ✅ Done (LC-21: stream_ticks wired to BinanceWsConnector).
 
 ## Smart Grid Spec Version
 

@@ -43,6 +43,12 @@ METRIC_CIRCUIT_STATE = "grinder_circuit_state"
 METRIC_CIRCUIT_REJECTED = "grinder_circuit_rejected_total"
 METRIC_CIRCUIT_TRIPS = "grinder_circuit_trips_total"
 
+# WebSocket metrics (LC-21)
+METRIC_WS_CONNECTED = "grinder_ws_connected"
+METRIC_WS_RECONNECT_TOTAL = "grinder_ws_reconnect_total"
+METRIC_TICKS_RECEIVED_TOTAL = "grinder_ticks_received_total"
+METRIC_LAST_TICK_TS = "grinder_last_tick_ts"
+
 # Label keys
 LABEL_OP = "op"
 LABEL_REASON = "reason"
@@ -73,6 +79,12 @@ class ConnectorMetrics:
     circuit_states: dict[str, CircuitMetricState] = field(default_factory=dict)
     circuit_rejected: dict[str, int] = field(default_factory=dict)
     circuit_trips: dict[tuple[str, str], int] = field(default_factory=dict)
+
+    # WebSocket metrics (LC-21)
+    ws_connected: dict[str, bool] = field(default_factory=dict)
+    ws_reconnect_total: dict[tuple[str, str], int] = field(default_factory=dict)
+    ticks_received: dict[str, int] = field(default_factory=dict)
+    last_tick_ts: dict[str, int] = field(default_factory=dict)
 
     # --- H2 Retries ---
 
@@ -120,9 +132,47 @@ class ConnectorMetrics:
         key = (op, reason)
         self.circuit_trips[key] = self.circuit_trips.get(key, 0) + 1
 
+    # --- WebSocket Metrics (LC-21) ---
+
+    def set_ws_connected(self, connector: str, connected: bool) -> None:
+        """Set WebSocket connection state.
+
+        Args:
+            connector: Connector name (e.g., "bookTicker", "userdata")
+            connected: Whether connected (True) or disconnected (False)
+        """
+        self.ws_connected[connector] = connected
+
+    def record_ws_reconnect(self, connector: str, reason: str = "disconnect") -> None:
+        """Record WebSocket reconnection event.
+
+        Args:
+            connector: Connector name
+            reason: Reconnection reason (disconnect, timeout, error)
+        """
+        key = (connector, reason)
+        self.ws_reconnect_total[key] = self.ws_reconnect_total.get(key, 0) + 1
+
+    def record_tick_received(self, connector: str) -> None:
+        """Record tick received for a connector.
+
+        Args:
+            connector: Connector name (e.g., "bookTicker")
+        """
+        self.ticks_received[connector] = self.ticks_received.get(connector, 0) + 1
+
+    def set_last_tick_ts(self, connector: str, ts: int) -> None:
+        """Set timestamp of last tick for a connector.
+
+        Args:
+            connector: Connector name
+            ts: Timestamp in milliseconds
+        """
+        self.last_tick_ts[connector] = ts
+
     # --- Prometheus Export ---
 
-    def to_prometheus_lines(self) -> list[str]:  # noqa: PLR0912
+    def to_prometheus_lines(self) -> list[str]:  # noqa: PLR0912, PLR0915
         """Generate Prometheus text format lines.
 
         Returns:
@@ -233,6 +283,61 @@ class ConnectorMetrics:
                 )
         else:
             lines.append(f'{METRIC_CIRCUIT_TRIPS}{{{LABEL_OP}="none",{LABEL_REASON}="none"}} 0')
+
+        # WebSocket connected (gauge)
+        lines.extend(
+            [
+                f"# HELP {METRIC_WS_CONNECTED} WebSocket connection state (1=connected, 0=disconnected)",
+                f"# TYPE {METRIC_WS_CONNECTED} gauge",
+            ]
+        )
+        if self.ws_connected:
+            for connector, connected in sorted(self.ws_connected.items()):
+                value = 1 if connected else 0
+                lines.append(f'{METRIC_WS_CONNECTED}{{connector="{connector}"}} {value}')
+        else:
+            lines.append(f'{METRIC_WS_CONNECTED}{{connector="none"}} 0')
+
+        # WebSocket reconnects (counter)
+        lines.extend(
+            [
+                f"# HELP {METRIC_WS_RECONNECT_TOTAL} Total WebSocket reconnection events",
+                f"# TYPE {METRIC_WS_RECONNECT_TOTAL} counter",
+            ]
+        )
+        if self.ws_reconnect_total:
+            for (connector, reason), count in sorted(self.ws_reconnect_total.items()):
+                lines.append(
+                    f'{METRIC_WS_RECONNECT_TOTAL}{{connector="{connector}",{LABEL_REASON}="{reason}"}} {count}'
+                )
+        else:
+            lines.append(f'{METRIC_WS_RECONNECT_TOTAL}{{connector="none",{LABEL_REASON}="none"}} 0')
+
+        # Ticks received (counter)
+        lines.extend(
+            [
+                f"# HELP {METRIC_TICKS_RECEIVED_TOTAL} Total ticks received per connector",
+                f"# TYPE {METRIC_TICKS_RECEIVED_TOTAL} counter",
+            ]
+        )
+        if self.ticks_received:
+            for connector, count in sorted(self.ticks_received.items()):
+                lines.append(f'{METRIC_TICKS_RECEIVED_TOTAL}{{connector="{connector}"}} {count}')
+        else:
+            lines.append(f'{METRIC_TICKS_RECEIVED_TOTAL}{{connector="none"}} 0')
+
+        # Last tick timestamp (gauge)
+        lines.extend(
+            [
+                f"# HELP {METRIC_LAST_TICK_TS} Timestamp of last tick per connector (ms)",
+                f"# TYPE {METRIC_LAST_TICK_TS} gauge",
+            ]
+        )
+        if self.last_tick_ts:
+            for connector, ts in sorted(self.last_tick_ts.items()):
+                lines.append(f'{METRIC_LAST_TICK_TS}{{connector="{connector}"}} {ts}')
+        else:
+            lines.append(f'{METRIC_LAST_TICK_TS}{{connector="none"}} 0')
 
         return lines
 
