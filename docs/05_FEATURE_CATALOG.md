@@ -20,10 +20,11 @@
 | `sum_abs_returns_bps` | **Implemented** | FeatureEngine v1 | Range horizon feature |
 | `net_return_bps` | **Implemented** | FeatureEngine v1 | Range horizon feature |
 | `range_score` | **Implemented** | FeatureEngine v1 | Chop detection score |
-| `impact_buy_bps` | **Planned (M7)** | FeatureEngine v2 | L2 VWAP slippage |
-| `impact_sell_bps` | **Planned (M7)** | FeatureEngine v2 | L2 VWAP slippage |
-| `wall_bid_score_x1000` | **Planned (M7)** | FeatureEngine v2 | L2 wall detection |
-| `wall_ask_score_x1000` | **Planned (M7)** | FeatureEngine v2 | L2 wall detection |
+| `impact_buy_topN_bps` | **Planned (M7)** | FeatureEngine v2 | L2 VWAP slippage |
+| `impact_sell_topN_bps` | **Planned (M7)** | FeatureEngine v2 | L2 VWAP slippage |
+| `wall_bid_score_topN_x1000` | **Planned (M7)** | FeatureEngine v2 | L2 wall detection |
+| `wall_ask_score_topN_x1000` | **Planned (M7)** | FeatureEngine v2 | L2 wall detection |
+| `depth_imbalance_topN_bps` | **Planned (M7)** | FeatureEngine v2 | L2 depth imbalance |
 | `microprice` | Unscheduled | — | Spec only |
 | `microprice_dev_bps` | Unscheduled | — | Spec only |
 | `cvd` | Unscheduled | — | Spec only |

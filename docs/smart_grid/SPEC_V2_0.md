@@ -650,14 +650,15 @@ for side in ("bids", "asks"):
 
 ### B.2 FeatureEngine v2: L2 Features
 
-FeatureEngine v2 adds the following L2-derived features:
+FeatureEngine v2 adds the following L2-derived features (topN = depth from snapshot):
 
 | Feature Key | Type | Unit | Description |
 |-------------|------|------|-------------|
-| `impact_buy_bps` | int | bps | VWAP slippage for buying `qty_ref` (from best ask) |
-| `impact_sell_bps` | int | bps | VWAP slippage for selling `qty_ref` (from best bid) |
-| `wall_bid_score_x1000` | int | x1000 | Wall detection score on bid side |
-| `wall_ask_score_x1000` | int | x1000 | Wall detection score on ask side |
+| `impact_buy_topN_bps` | int | bps | VWAP slippage for buying `qty_ref` (from best ask) |
+| `impact_sell_topN_bps` | int | bps | VWAP slippage for selling `qty_ref` (from best bid) |
+| `wall_bid_score_topN_x1000` | int | x1000 | Wall detection score on bid side |
+| `wall_ask_score_topN_x1000` | int | x1000 | Wall detection score on ask side |
+| `depth_imbalance_topN_bps` | int | bps | Bid-ask depth imbalance in bps |
 
 #### Constants
 
@@ -800,16 +801,16 @@ Healthy order book with sufficient liquidity at all levels.
 **Expected values (qty_ref=0.003):**
 | Feature | Value | Rationale |
 |---------|-------|-----------|
-| `impact_buy_bps` | `0` | Entire qty fits in top ask level (0.110 > 0.003) |
-| `impact_sell_bps` | `0` | Entire qty fits in top bid level (0.120 > 0.003) |
-| `wall_bid_score_x1000` | ~1000-2000 | No extreme wall |
-| `wall_ask_score_x1000` | ~1000-2000 | No extreme wall |
+| `impact_buy_topN_bps` | `0` | Entire qty fits in top ask level (0.110 > 0.003) |
+| `impact_sell_topN_bps` | `0` | Entire qty fits in top bid level (0.120 > 0.003) |
+| `wall_bid_score_topN_x1000` | ~1000-2000 | No extreme wall |
+| `wall_ask_score_topN_x1000` | ~1000-2000 | No extreme wall |
 
 ---
 
 #### B.5.2 Scenario: `ultra_thin`
 
-Extremely thin top levels designed to give exactly `impact_buy_bps = 2` at `qty_ref = 0.003`.
+Extremely thin top levels designed to give exactly `impact_buy_topN_bps = 2` at `qty_ref = 0.003`.
 
 **JSONL:**
 ```json
@@ -819,10 +820,10 @@ Extremely thin top levels designed to give exactly `impact_buy_bps = 2` at `qty_
 **Expected values (qty_ref=0.003):**
 | Feature | Value | Rationale |
 |---------|-------|-----------|
-| `impact_buy_bps` | `2` | Fills 0.001 @ 70830.00, 0.002 @ 70851.25; VWAP ≈ 70844.17, slippage ≈ 2 bps |
-| `impact_sell_bps` | `2` | Fills 0.001 @ 70829.50, 0.002 @ 70808.25; VWAP ≈ 70815.33, slippage ≈ 2 bps |
-| `wall_bid_score_x1000` | ~2000-3000 | Moderate variation |
-| `wall_ask_score_x1000` | ~2000-3000 | Moderate variation |
+| `impact_buy_topN_bps` | `2` | Fills 0.001 @ 70830.00, 0.002 @ 70851.25; VWAP ≈ 70844.17, slippage ≈ 2 bps |
+| `impact_sell_topN_bps` | `2` | Fills 0.001 @ 70829.50, 0.002 @ 70808.25; VWAP ≈ 70815.33, slippage ≈ 2 bps |
+| `wall_bid_score_topN_x1000` | ~2000-3000 | Moderate variation |
+| `wall_ask_score_topN_x1000` | ~2000-3000 | Moderate variation |
 
 ---
 
@@ -838,10 +839,10 @@ Large bid wall at second level (2.5 BTC vs ~0.12-0.18 at other levels).
 **Expected values (qty_ref=0.003):**
 | Feature | Value | Rationale |
 |---------|-------|-----------|
-| `impact_buy_bps` | `0` | Qty fits in top ask level |
-| `impact_sell_bps` | `0` | Qty fits in top bid level |
-| `wall_bid_score_x1000` | `15625` | max=2.500, median=0.160, ratio=15.625 |
-| `wall_ask_score_x1000` | ~1267 | max=0.190, median=0.150, ratio≈1.267 |
+| `impact_buy_topN_bps` | `0` | Qty fits in top ask level |
+| `impact_sell_topN_bps` | `0` | Qty fits in top bid level |
+| `wall_bid_score_topN_x1000` | `15625` | max=2.500, median=0.160, ratio=15.625 |
+| `wall_ask_score_topN_x1000` | ~1267 | max=0.190, median=0.150, ratio≈1.267 |
 
 ---
 
@@ -857,14 +858,14 @@ Very thin book where `qty_ref = 0.1` would exhaust all depth.
 **Expected values (qty_ref=0.003):**
 | Feature | Value | Rationale |
 |---------|-------|-----------|
-| `impact_buy_bps` | `0` | 0.003 < 0.009 (top ask qty) |
-| `impact_sell_bps` | `0` | 0.003 < 0.010 (top bid qty) |
+| `impact_buy_topN_bps` | `0` | 0.003 < 0.009 (top ask qty) |
+| `impact_sell_topN_bps` | `0` | 0.003 < 0.010 (top bid qty) |
 
 **Expected values (qty_ref=0.1):**
 | Feature | Value | Rationale |
 |---------|-------|-----------|
-| `impact_buy_bps` | `500` | Total ask depth = 0.081 < 0.1 → INSUFFICIENT |
-| `impact_sell_bps` | `500` | Total bid depth = 0.087 < 0.1 → INSUFFICIENT |
+| `impact_buy_topN_bps` | `500` | Total ask depth = 0.081 < 0.1 → INSUFFICIENT |
+| `impact_sell_topN_bps` | `500` | Total bid depth = 0.087 < 0.1 → INSUFFICIENT |
 
 ---
 
