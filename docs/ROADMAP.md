@@ -6,13 +6,13 @@ This file tracks **plan + progress**.
 - **Why key choices were made:** `docs/DECISIONS.md`
 - Specs in `docs/*` describe **target behavior** unless `STATE.md` says implemented.
 
-Last updated: 2026-02-07
+Last updated: 2026-02-08
 
 ---
 
 ## 0) Current Main Truth State
 
-This section reflects **what is verified and merged on main** as of PR #104.
+This section reflects **what is verified and merged on main** as of PR #117.
 
 ### Completed Milestones
 
@@ -21,6 +21,9 @@ This section reflects **what is verified and merged on main** as of PR #104.
 | M1 — Vertical Slice v0.1 | ✅ Done | 2026-01-31 |
 | M2 — Beta v0.5 | ✅ Done | 2026-02-01 |
 | M3 — Live Reconciliation | ✅ Done | 2026-02-07 |
+| M4 — Ops Hardening | ✅ Done | 2026-02-07 |
+| M5 — Observability Polish | ✅ Done | 2026-02-07 |
+| M6 — HA Leader Election | ✅ Done | 2026-02-08 |
 
 ### Stage D/E E2E Mainnet Verification
 
@@ -30,16 +33,31 @@ This section reflects **what is verified and merged on main** as of PR #104.
 | Stage E | ✅ E2E mainnet | `execute_flatten` — position flattened | PR #103 → `9572fd7` |
 | Docs | ✅ Runbook-ready | STATE.md updated with tight budgets | PR #104 → `4434284` |
 
+### M4–M6 Post-Stage-E Completion
+
+| Milestone | Description | PR |
+|-----------|-------------|-----|
+| M4.1 | Artifacts run-dir + fixed filenames | PR #107 → `83630e4` |
+| M4.2 | Budget state lifecycle (`--reset-budget`) | PR #108 → `4e47814` |
+| M4.3 | Low-notional runbook (exchangeInfo procedure) | PR #109 → `6c03f1b` |
+| M5 | Dashboards + alerts for reconcile actions/budgets | PR #110 → `49c4b21` |
+| M6 | HA Leader-Only Remediation (LC-20) | PR #111 → `b7b6ab8` |
+| M6 fixes | Smoke determinism + docs | PR #112–#115 |
+| Docs | README SSOT alignment (M1-M6 status) | PR #117 → `e501357` |
+
 ### Key Achievements (LC-* series)
 
 - **LC-12:** `parse_client_order_id()` — fixed `split("_")` bug for cancel routing
 - **LC-18:** 5-mode staged rollout (detect_only → plan_only → blocked → execute_cancel_all → execute_flatten)
+- **LC-20:** HA leader-only remediation — Redis-backed leader election with TTL locks
 - **Connector hardening:** Timeouts, retries, idempotency, circuit breaker, connector metrics (see STATE.md)
 - **Safety gates verified:**
   - `ALLOW_MAINNET_TRADE=1` hard gate for execute modes
   - `REMEDIATION_*_ALLOWLIST` for strategy + symbol filtering
   - Budget caps: `MAX_CALLS_PER_DAY`, `MAX_NOTIONAL_PER_DAY`
 - **Metrics contract:** SSOT in `live_contract.py`, graceful without redis
+- **HA metrics:** `grinder_ha_is_leader` gauge, `action_blocked_total{reason="not_leader"}`
+- **Ops hygiene:** Artifacts run-dir, budget lifecycle, low-notional runbook
 
 ---
 
@@ -135,9 +153,11 @@ See ADR-053 for rationale.
 
 ---
 
-## 3) Planned Milestones (Post-Stage-E)
+## 3) Completed Milestones (Post-Stage-E) — M4/M5/M6
 
-### M4 — Ops Hardening (P1/P2)
+> **Note:** M4, M5, M6 were completed in PR #107–#115, #117. Below is preserved for historical reference.
+
+### M4 — Ops Hardening (P1/P2) — ✅ Done 2026-02-07
 **Goal:** Operational hygiene for production readiness
 
 #### M4.1 — Artifacts Hygiene
@@ -195,7 +215,7 @@ See ADR-053 for rationale.
 
 ---
 
-### M5 — Observability Polish
+### M5 — Observability Polish — ✅ Done 2026-02-07
 **Goal:** Production-grade dashboards and alerting
 
 **Deliverables:**
@@ -219,7 +239,7 @@ See ADR-053 for rationale.
 
 ---
 
-### M6 — HA / Leader Election (LC-20)
+### M6 — HA / Leader Election (LC-20) — ✅ Done 2026-02-08
 **Goal:** Safe multi-instance deployment where only leader can remediate
 
 **Deliverables:**
