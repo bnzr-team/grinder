@@ -34,6 +34,7 @@ import sys
 import time
 import traceback
 from decimal import Decimal
+from typing import Any
 
 # Guard: Import errors should fail clearly
 try:
@@ -73,8 +74,8 @@ class RequestsHttpClient:
         self,
         method: str,
         url: str,
-        params: dict | None = None,
-        headers: dict | None = None,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
         timeout_ms: int = 10000,
     ) -> HttpResponse:
         """Make HTTP request matching BinanceFuturesPort interface."""
@@ -95,8 +96,8 @@ class RequestsHttpClient:
     def get(
         self,
         url: str,
-        params: dict | None = None,
-        headers: dict | None = None,
+        params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
         timeout: float = 10.0,
     ) -> HttpResponse:
         resp = requests.get(url, params=params, headers=headers, timeout=timeout)
@@ -249,7 +250,9 @@ async def smoke_test(dry_run: bool, symbol: str) -> int:  # noqa: PLR0911, PLR09
             f"{BINANCE_FUTURES_MAINNET_URL}/fapi/v1/ticker/price",
             params={"symbol": symbol},
         )
-        current_price = Decimal(str(price_resp.json_data["price"]))
+        # Ticker endpoint returns single dict, cast from list type
+        ticker_data: dict[str, Any] = price_resp.json_data  # type: ignore[assignment]
+        current_price = Decimal(str(ticker_data["price"]))
         print(f"Current {symbol} price: {current_price}")
 
         # Far from market (50% below)
@@ -282,7 +285,8 @@ async def smoke_test(dry_run: bool, symbol: str) -> int:  # noqa: PLR0911, PLR09
         # Small delay
         await asyncio.sleep(1)
 
-        # Cancel the order
+        # Cancel the order - LIVE_TRADE mode returns str order_id
+        assert isinstance(order_id, str), f"Expected str order_id, got {type(order_id)}"
         print("\n## Cancelling order via LiveConnectorV0.cancel_order()")
         print(f"  order_id: {order_id}")
 
