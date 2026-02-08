@@ -54,6 +54,7 @@ from grinder.execution.binance_futures_port import (
     BinanceFuturesPortConfig,
 )
 from grinder.execution.binance_port import HttpResponse
+from grinder.reconcile.identity import OrderIdentityConfig
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -200,6 +201,13 @@ async def smoke_test(dry_run: bool, symbol: str) -> int:
 
     print("\n## Creating BinanceFuturesPort")
 
+    # Use short strategy_id to fit Binance 36-char limit
+    # Format: grinder_s_BTCUSDT_1_1739016774000_1 = 35 chars
+    identity_config = OrderIdentityConfig(
+        prefix="grinder_",
+        strategy_id="s",  # Short ID for smoke test
+    )
+
     # Create futures port
     port_config = BinanceFuturesPortConfig(
         mode=SafeMode.LIVE_TRADE,
@@ -212,6 +220,7 @@ async def smoke_test(dry_run: bool, symbol: str) -> int:
         max_orders_per_run=1,
         max_open_orders=1,
         target_leverage=DEFAULT_LEVERAGE,
+        identity_config=identity_config,
     )
 
     http_client = RequestsHttpClient()
