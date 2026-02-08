@@ -214,7 +214,7 @@ async def smoke_test(dry_run: bool, symbol: str) -> int:
     http_client = RequestsHttpClient()
     futures_port = BinanceFuturesPort(config=port_config, http_client=http_client)
 
-    print(f"Port created: url={futures_port._config.base_url}")
+    print(f"Port created: url={futures_port.config.base_url}")
 
     # Create LiveConnectorV0 with LIVE_TRADE mode
     print("\n## Creating LiveConnectorV0 with LIVE_TRADE mode")
