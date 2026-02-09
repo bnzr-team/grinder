@@ -11,9 +11,11 @@ See: docs/17_ADAPTIVE_SMART_GRID_V1.md §17.8-17.10, ADR-022
 from __future__ import annotations
 
 from decimal import Decimal
+from typing import Any
 
 from grinder.controller.regime import Regime
 from grinder.core import GridMode, MarketRegime, ResetAction
+from grinder.features.l2_types import L2FeatureSnapshot
 from grinder.policies.grid.adaptive import (
     AdaptiveGridConfig,
     AdaptiveGridPolicy,
@@ -664,3 +666,313 @@ class TestDdAllocatorIntegration:
         # Total worst-case across all symbols should not exceed portfolio budget
         portfolio_budget_usd = equity * portfolio_dd_budget
         assert total_worst_case <= portfolio_budget_usd
+
+
+class TestL2Gating:
+    """Tests for L2 gating (M7-03, ADR-057).
+
+    Verifies L2-based entry blocking:
+    - Insufficient depth: hard block on affected side
+    - Impact threshold: pause entries when VWAP slippage >= threshold
+    """
+
+    def _base_features(self) -> dict[str, Any]:
+        """Return base L1 features for tests."""
+        return {
+            "mid_price": Decimal("70810"),
+            "natr_bps": 100,
+            "spread_bps": 10,
+            "thin_l1": Decimal("1.0"),
+            "net_return_bps": 50,
+            "range_score": 10,
+            "warmup_bars": 20,
+            "ts": 1000,
+            "symbol": "BTCUSDT",
+        }
+
+    def test_l2_gating_disabled_ignores_l2_features(self) -> None:
+        """When l2_gating_enabled=False, L2 features are ignored (v1 behavior)."""
+        config = AdaptiveGridConfig(l2_gating_enabled=False)
+        policy = AdaptiveGridPolicy(config)
+
+        # Create L2 features with both sides blocked
+        l2_features = L2FeatureSnapshot(
+            ts_ms=1000,
+            symbol="BTCUSDT",
+            venue="binance_futures_usdtm",
+            depth=5,
+            depth_bid_qty_topN=Decimal("0.01"),
+            depth_ask_qty_topN=Decimal("0.01"),
+            depth_imbalance_topN_bps=0,
+            impact_buy_topN_bps=500,  # Above any threshold
+            impact_sell_topN_bps=500,
+            impact_buy_topN_insufficient_depth=1,  # Hard block
+            impact_sell_topN_insufficient_depth=1,
+            wall_bid_score_topN_x1000=1000,
+            wall_ask_score_topN_x1000=1000,
+            qty_ref=Decimal("0.003"),
+        )
+
+        plan = policy.evaluate(self._base_features(), l2_features=l2_features)
+
+        # Should NOT be blocked - L2 gating is disabled
+        assert plan.levels_up > 0
+        assert plan.levels_down > 0
+        assert "L2_BLOCK_BUY" not in plan.reason_codes
+        assert "L2_BLOCK_SELL" not in plan.reason_codes
+
+    def test_l2_gating_none_features_no_block(self) -> None:
+        """When l2_features=None, no L2 gating is applied."""
+        config = AdaptiveGridConfig(l2_gating_enabled=True)
+        policy = AdaptiveGridPolicy(config)
+
+        plan = policy.evaluate(self._base_features(), l2_features=None)
+
+        # Should NOT be blocked - no L2 data
+        assert plan.levels_up > 0
+        assert plan.levels_down > 0
+
+    def test_insufficient_depth_blocks_buy_side(self) -> None:
+        """Insufficient depth on buy side blocks buy entries."""
+        config = AdaptiveGridConfig(l2_gating_enabled=True)
+        policy = AdaptiveGridPolicy(config)
+
+        l2_features = L2FeatureSnapshot(
+            ts_ms=1000,
+            symbol="BTCUSDT",
+            venue="binance_futures_usdtm",
+            depth=5,
+            depth_bid_qty_topN=Decimal("0.087"),
+            depth_ask_qty_topN=Decimal("0.081"),
+            depth_imbalance_topN_bps=0,
+            impact_buy_topN_bps=500,  # Insufficient depth sentinel
+            impact_sell_topN_bps=0,
+            impact_buy_topN_insufficient_depth=1,  # Insufficient depth flag
+            impact_sell_topN_insufficient_depth=0,
+            wall_bid_score_topN_x1000=1000,
+            wall_ask_score_topN_x1000=1000,
+            qty_ref=Decimal("0.1"),
+        )
+
+        plan = policy.evaluate(self._base_features(), l2_features=l2_features)
+
+        # Buy side blocked, sell side allowed
+        assert plan.levels_down == 0  # Buy side = levels_down
+        assert plan.levels_up > 0  # Sell side = levels_up
+        assert "L2_INSUFFICIENT_DEPTH_BUY" in plan.reason_codes
+        assert "L2_BLOCK_BUY" in plan.reason_codes
+
+    def test_insufficient_depth_blocks_sell_side(self) -> None:
+        """Insufficient depth on sell side blocks sell entries."""
+        config = AdaptiveGridConfig(l2_gating_enabled=True)
+        policy = AdaptiveGridPolicy(config)
+
+        l2_features = L2FeatureSnapshot(
+            ts_ms=1000,
+            symbol="BTCUSDT",
+            venue="binance_futures_usdtm",
+            depth=5,
+            depth_bid_qty_topN=Decimal("0.087"),
+            depth_ask_qty_topN=Decimal("0.081"),
+            depth_imbalance_topN_bps=0,
+            impact_buy_topN_bps=0,
+            impact_sell_topN_bps=500,  # Insufficient depth sentinel
+            impact_buy_topN_insufficient_depth=0,
+            impact_sell_topN_insufficient_depth=1,  # Insufficient depth flag
+            wall_bid_score_topN_x1000=1000,
+            wall_ask_score_topN_x1000=1000,
+            qty_ref=Decimal("0.1"),
+        )
+
+        plan = policy.evaluate(self._base_features(), l2_features=l2_features)
+
+        # Sell side blocked, buy side allowed
+        assert plan.levels_up == 0  # Sell side = levels_up
+        assert plan.levels_down > 0  # Buy side = levels_down
+        assert "L2_INSUFFICIENT_DEPTH_SELL" in plan.reason_codes
+        assert "L2_BLOCK_SELL" in plan.reason_codes
+
+    def test_both_insufficient_depth_full_pause(self) -> None:
+        """Insufficient depth on both sides causes full pause."""
+        config = AdaptiveGridConfig(l2_gating_enabled=True)
+        policy = AdaptiveGridPolicy(config)
+
+        l2_features = L2FeatureSnapshot(
+            ts_ms=1000,
+            symbol="BTCUSDT",
+            venue="binance_futures_usdtm",
+            depth=5,
+            depth_bid_qty_topN=Decimal("0.05"),
+            depth_ask_qty_topN=Decimal("0.05"),
+            depth_imbalance_topN_bps=0,
+            impact_buy_topN_bps=500,
+            impact_sell_topN_bps=500,
+            impact_buy_topN_insufficient_depth=1,
+            impact_sell_topN_insufficient_depth=1,
+            wall_bid_score_topN_x1000=1000,
+            wall_ask_score_topN_x1000=1000,
+            qty_ref=Decimal("0.1"),
+        )
+
+        plan = policy.evaluate(self._base_features(), l2_features=l2_features)
+
+        # Full pause
+        assert plan.levels_up == 0
+        assert plan.levels_down == 0
+        assert plan.reset_action == ResetAction.HARD
+        assert "L2_INSUFFICIENT_DEPTH_BUY" in plan.reason_codes
+        assert "L2_INSUFFICIENT_DEPTH_SELL" in plan.reason_codes
+
+    def test_impact_threshold_blocks_buy_side(self) -> None:
+        """Impact >= threshold blocks buy entries."""
+        config = AdaptiveGridConfig(
+            l2_gating_enabled=True,
+            l2_impact_threshold_bps=2,  # Low threshold for test
+        )
+        policy = AdaptiveGridPolicy(config)
+
+        # ultra_thin scenario: impact_buy=2 bps
+        l2_features = L2FeatureSnapshot(
+            ts_ms=1000,
+            symbol="BTCUSDT",
+            venue="binance_futures_usdtm",
+            depth=5,
+            depth_bid_qty_topN=Decimal("0.048"),
+            depth_ask_qty_topN=Decimal("0.048"),
+            depth_imbalance_topN_bps=0,
+            impact_buy_topN_bps=2,  # Exactly at threshold
+            impact_sell_topN_bps=0,
+            impact_buy_topN_insufficient_depth=0,
+            impact_sell_topN_insufficient_depth=0,
+            wall_bid_score_topN_x1000=2000,
+            wall_ask_score_topN_x1000=2000,
+            qty_ref=Decimal("0.003"),
+        )
+
+        plan = policy.evaluate(self._base_features(), l2_features=l2_features)
+
+        # Buy side blocked (impact >= threshold)
+        assert plan.levels_down == 0
+        assert plan.levels_up > 0
+        assert "L2_IMPACT_BUY_HIGH" in plan.reason_codes
+        assert "L2_BLOCK_BUY" in plan.reason_codes
+
+    def test_impact_below_threshold_no_block(self) -> None:
+        """Impact < threshold does not block."""
+        config = AdaptiveGridConfig(
+            l2_gating_enabled=True,
+            l2_impact_threshold_bps=3,  # Threshold above impact
+        )
+        policy = AdaptiveGridPolicy(config)
+
+        # ultra_thin scenario: impact_buy=2 bps, but threshold is 3
+        l2_features = L2FeatureSnapshot(
+            ts_ms=1000,
+            symbol="BTCUSDT",
+            venue="binance_futures_usdtm",
+            depth=5,
+            depth_bid_qty_topN=Decimal("0.048"),
+            depth_ask_qty_topN=Decimal("0.048"),
+            depth_imbalance_topN_bps=0,
+            impact_buy_topN_bps=2,  # Below threshold
+            impact_sell_topN_bps=2,
+            impact_buy_topN_insufficient_depth=0,
+            impact_sell_topN_insufficient_depth=0,
+            wall_bid_score_topN_x1000=2000,
+            wall_ask_score_topN_x1000=2000,
+            qty_ref=Decimal("0.003"),
+        )
+
+        plan = policy.evaluate(self._base_features(), l2_features=l2_features)
+
+        # Neither side blocked
+        assert plan.levels_up > 0
+        assert plan.levels_down > 0
+        assert "L2_IMPACT_BUY_HIGH" not in plan.reason_codes
+        assert "L2_IMPACT_SELL_HIGH" not in plan.reason_codes
+
+    def test_normal_scenario_no_gating(self) -> None:
+        """Normal scenario with sufficient depth and low impact passes through."""
+        config = AdaptiveGridConfig(
+            l2_gating_enabled=True,
+            l2_impact_threshold_bps=200,  # Default threshold
+        )
+        policy = AdaptiveGridPolicy(config)
+
+        # normal scenario: impact=0, sufficient depth
+        l2_features = L2FeatureSnapshot(
+            ts_ms=1000,
+            symbol="BTCUSDT",
+            venue="binance_futures_usdtm",
+            depth=5,
+            depth_bid_qty_topN=Decimal("3.07"),
+            depth_ask_qty_topN=Decimal("2.84"),
+            depth_imbalance_topN_bps=38,
+            impact_buy_topN_bps=0,
+            impact_sell_topN_bps=0,
+            impact_buy_topN_insufficient_depth=0,
+            impact_sell_topN_insufficient_depth=0,
+            wall_bid_score_topN_x1000=2000,
+            wall_ask_score_topN_x1000=1833,
+            qty_ref=Decimal("0.003"),
+        )
+
+        plan = policy.evaluate(self._base_features(), l2_features=l2_features)
+
+        # No blocking
+        assert plan.levels_up > 0
+        assert plan.levels_down > 0
+        assert "L2_BLOCK_BUY" not in plan.reason_codes
+        assert "L2_BLOCK_SELL" not in plan.reason_codes
+
+    def test_v1_v2_regression_without_l2_features(self) -> None:
+        """v1 and v2 produce identical plans when l2_features=None."""
+        v1_config = AdaptiveGridConfig(l2_gating_enabled=False)
+        v2_config = AdaptiveGridConfig(l2_gating_enabled=True)
+
+        v1_policy = AdaptiveGridPolicy(v1_config)
+        v2_policy = AdaptiveGridPolicy(v2_config)
+
+        features = self._base_features()
+
+        v1_plan = v1_policy.evaluate(features, l2_features=None)
+        v2_plan = v2_policy.evaluate(features, l2_features=None)
+
+        # Plans should be identical (ignoring l2_gating_enabled in reason codes)
+        assert v1_plan.levels_up == v2_plan.levels_up
+        assert v1_plan.levels_down == v2_plan.levels_down
+        assert v1_plan.spacing_bps == v2_plan.spacing_bps
+        assert v1_plan.center_price == v2_plan.center_price
+        assert v1_plan.regime == v2_plan.regime
+
+    def test_insufficient_depth_takes_priority_over_impact(self) -> None:
+        """Insufficient depth reason is reported, not impact, when both apply."""
+        config = AdaptiveGridConfig(
+            l2_gating_enabled=True,
+            l2_impact_threshold_bps=100,
+        )
+        policy = AdaptiveGridPolicy(config)
+
+        # Both insufficient and high impact on buy side
+        l2_features = L2FeatureSnapshot(
+            ts_ms=1000,
+            symbol="BTCUSDT",
+            venue="binance_futures_usdtm",
+            depth=5,
+            depth_bid_qty_topN=Decimal("0.05"),
+            depth_ask_qty_topN=Decimal("0.05"),
+            depth_imbalance_topN_bps=0,
+            impact_buy_topN_bps=500,  # Above threshold, but also insufficient
+            impact_sell_topN_bps=0,
+            impact_buy_topN_insufficient_depth=1,  # Insufficient depth
+            impact_sell_topN_insufficient_depth=0,
+            wall_bid_score_topN_x1000=1000,
+            wall_ask_score_topN_x1000=1000,
+            qty_ref=Decimal("0.1"),
+        )
+
+        plan = policy.evaluate(self._base_features(), l2_features=l2_features)
+
+        # Insufficient depth reported, not impact (insufficient takes priority)
+        assert "L2_INSUFFICIENT_DEPTH_BUY" in plan.reason_codes
+        assert "L2_IMPACT_BUY_HIGH" not in plan.reason_codes  # Not added since already blocked

@@ -2770,3 +2770,58 @@
   - ADR-030: Paper write-path v0
   - ADR-055: LC-21 L1 WebSocket integration
   - ADR-040: Futures USDT-M mainnet smoke (for ALLOW_MAINNET_TRADE pattern)
+
+---
+
+## ADR-057 — L2 Gating Semantics (M7-03)
+
+**Status:** Accepted
+**Date:** 2026-02-09
+**Deciders:** Core team
+**Scope:** AdaptiveGridPolicy L2 gating for entry blocking
+
+### Context
+
+M7-02 added L2FeatureSnapshot with computed L2 features (impact, wall scores, insufficient depth flags). M7-03 wires these features into AdaptiveGridPolicy to gate entries based on order book conditions.
+
+### Decision
+
+1. **Feature flag:** `AdaptiveGridConfig.l2_gating_enabled: bool = False` (default OFF)
+   - Preserves v1 behavior when disabled or when l2_features=None
+   - Enables incremental rollout without breaking existing deployments
+
+2. **Insufficient depth gate (hard block):**
+   - When `impact_buy_topN_insufficient_depth == 1`: block buy-side entries (levels_down=0)
+   - When `impact_sell_topN_insufficient_depth == 1`: block sell-side entries (levels_up=0)
+   - Rationale: insufficient depth means we cannot reliably execute at reasonable slippage
+
+3. **Impact threshold gate (soft block):**
+   - `l2_impact_threshold_bps: int = 200` (default)
+   - When `impact_buy_topN_bps >= threshold`: block buy-side entries
+   - When `impact_sell_topN_bps >= threshold`: block sell-side entries
+   - Rationale: high VWAP slippage indicates adverse execution conditions
+
+4. **Priority:** Insufficient depth takes precedence (checked first)
+   - Reason codes reflect the root cause (e.g., `L2_INSUFFICIENT_DEPTH_BUY`)
+   - Avoids duplicate reason codes when both conditions apply
+
+5. **Reason codes added:**
+   - `L2_INSUFFICIENT_DEPTH_BUY`: buy-side depth exhausted
+   - `L2_INSUFFICIENT_DEPTH_SELL`: sell-side depth exhausted
+   - `L2_IMPACT_BUY_HIGH`: buy-side impact >= threshold
+   - `L2_IMPACT_SELL_HIGH`: sell-side impact >= threshold
+   - `L2_BLOCK_BUY`: summary code when buy-side blocked
+   - `L2_BLOCK_SELL`: summary code when sell-side blocked
+
+### Consequences
+
+- v1 behavior unchanged when `l2_gating_enabled=False` or `l2_features=None`
+- Grid can now adapt to order book liquidity conditions
+- Entry blocking is deterministic and auditable via reason codes
+- Tests cover all 4 fixture scenarios (normal, ultra_thin, wall_bid, thin_insufficient)
+
+### Related
+
+- SPEC_V2_0.md §B.2: L2 feature definitions
+- ADR-022: AdaptiveGridPolicy v1
+- ADR-032: DdAllocator

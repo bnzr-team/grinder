@@ -1323,7 +1323,11 @@ Comprehensive adaptive grid system design:
     - **Formulas:** step=max(5, 0.3*NATR*regime_mult), width=clamp(2.0*NATR*sqrt(H/TF), 20, 500), levels=clamp(ceil(width/step), 2, 20)
     - **Regime multipliers:** RANGE=1.0, VOL_SHOCK=1.5, THIN_BOOK=2.0, TREND asymmetric (1.3× on against-trend side)
     - **Units:** All thresholds/multipliers as integer bps (×100 scale) for determinism
-    - **NOT included:** DD allocator, L2 features (auto-sizing now available via ASM-P2-01)
+    - **Auto-sizing:** Available via ASM-P2-01 (opt-in `auto_sizing_enabled=True`)
+    - **L2 gating (M7-03):** Optional L2-based entry blocking (opt-in `l2_gating_enabled=False` default)
+      - Insufficient depth: blocks entries when order book depth exhausted
+      - Impact threshold: blocks entries when VWAP slippage >= `l2_impact_threshold_bps` (default 200)
+      - See ADR-057
     - **Fixture:** `sample_day_adaptive` — paper digest `1b8af993a8435ee6`
   - ✅ **Top-K v1 (ASM-P1-06):** Feature-based symbol selection (see ADR-023)
     - **Opt-in:** `topk_v1_enabled=False` default (backward compat with existing digests)
