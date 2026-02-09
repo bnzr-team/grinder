@@ -265,7 +265,7 @@ class TestFixtureScenarios:
         """Load and index all fixture snapshots by scenario."""
         path = FIXTURES_DIR / "l2_scenarios.jsonl"
         all_snapshots = load_l2_fixtures(str(path))
-        return {s.meta.get("scenario"): s for s in all_snapshots}
+        return {str(s.meta["scenario"]): s for s in all_snapshots}
 
     def test_normal_impact_zero(self, snapshots: dict[str, L2Snapshot]) -> None:
         """normal scenario: impact = 0 at qty_ref = 0.003.
