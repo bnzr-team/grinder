@@ -945,6 +945,50 @@ class TestL2Gating:
         assert v1_plan.center_price == v2_plan.center_price
         assert v1_plan.regime == v2_plan.regime
 
+    def test_v1_regression_with_blocking_l2_features_passed(self) -> None:
+        """v1 behavior: identical plan regardless of l2_features content (P0 regression).
+
+        When l2_gating_enabled=False, the presence or content of l2_features
+        must NOT affect the resulting plan. This proves v1 behavior unchanged.
+        """
+        config = AdaptiveGridConfig(l2_gating_enabled=False)
+        policy = AdaptiveGridPolicy(config)
+        features = self._base_features()
+
+        # Plan without l2_features
+        plan_without_l2 = policy.evaluate(features, l2_features=None)
+
+        # Plan with l2_features that WOULD block if gating enabled
+        blocking_l2 = L2FeatureSnapshot(
+            ts_ms=1000,
+            symbol="BTCUSDT",
+            venue="binance_futures_usdtm",
+            depth=5,
+            depth_bid_qty_topN=Decimal("0.01"),
+            depth_ask_qty_topN=Decimal("0.01"),
+            depth_imbalance_topN_bps=0,
+            impact_buy_topN_bps=500,  # Would block
+            impact_sell_topN_bps=500,  # Would block
+            impact_buy_topN_insufficient_depth=1,  # Would block
+            impact_sell_topN_insufficient_depth=1,  # Would block
+            wall_bid_score_topN_x1000=1000,
+            wall_ask_score_topN_x1000=1000,
+            qty_ref=Decimal("0.003"),
+        )
+        plan_with_blocking_l2 = policy.evaluate(features, l2_features=blocking_l2)
+
+        # Plans must be IDENTICAL - v1 ignores l2_features entirely
+        assert plan_without_l2.levels_up == plan_with_blocking_l2.levels_up
+        assert plan_without_l2.levels_down == plan_with_blocking_l2.levels_down
+        assert plan_without_l2.spacing_bps == plan_with_blocking_l2.spacing_bps
+        assert plan_without_l2.center_price == plan_with_blocking_l2.center_price
+        assert plan_without_l2.regime == plan_with_blocking_l2.regime
+        assert plan_without_l2.size_schedule == plan_with_blocking_l2.size_schedule
+        assert plan_without_l2.reset_action == plan_with_blocking_l2.reset_action
+        # Neither should have L2 reason codes
+        assert all("L2_" not in code for code in plan_without_l2.reason_codes)
+        assert all("L2_" not in code for code in plan_with_blocking_l2.reason_codes)
+
     def test_insufficient_depth_takes_priority_over_impact(self) -> None:
         """Insufficient depth reason is reported, not impact, when both apply."""
         config = AdaptiveGridConfig(
