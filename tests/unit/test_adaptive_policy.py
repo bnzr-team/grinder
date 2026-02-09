@@ -13,6 +13,8 @@ from __future__ import annotations
 from decimal import Decimal
 from typing import Any
 
+import pytest
+
 from grinder.controller.regime import Regime
 from grinder.core import GridMode, MarketRegime, ResetAction
 from grinder.features.l2_types import L2FeatureSnapshot
@@ -1020,3 +1022,124 @@ class TestL2Gating:
         # Insufficient depth reported, not impact (insufficient takes priority)
         assert "L2_INSUFFICIENT_DEPTH_BUY" in plan.reason_codes
         assert "L2_IMPACT_BUY_HIGH" not in plan.reason_codes  # Not added since already blocked
+
+
+class TestDdBudgetRatioWiring:
+    """Tests for DD budget ratio application in AdaptiveGridPolicy (M7-04, ADR-058)."""
+
+    def _base_features(self) -> dict[str, Any]:
+        """Return base features for testing."""
+        return {
+            "mid_price": Decimal("70810"),
+            "natr_bps": 100,
+            "spread_bps": 5,
+            "imbalance_l1_bps": 100,
+            "thin_l1": Decimal("1.0"),
+            "sum_abs_returns_bps": 200,
+            "net_return_bps": 50,
+            "range_score": 10,
+            "warmup_bars": 20,
+            "ts": 1000,
+            "symbol": "BTCUSDT",
+        }
+
+    def test_dd_budget_ratio_none_is_noop_v1_regression(self) -> None:
+        """dd_budget_ratio=None does not change plan (v1 behavior, backwards-compat)."""
+        config = AdaptiveGridConfig()
+        policy = AdaptiveGridPolicy(config)
+        features = self._base_features()
+
+        # Plan without dd_budget_ratio
+        plan_baseline = policy.evaluate(features)
+
+        # Plan with dd_budget_ratio=None (explicit)
+        plan_with_none = policy.evaluate(features, dd_budget_ratio=None)
+
+        # Plans must be IDENTICAL
+        assert plan_baseline.levels_up == plan_with_none.levels_up
+        assert plan_baseline.levels_down == plan_with_none.levels_down
+        assert plan_baseline.spacing_bps == plan_with_none.spacing_bps
+        assert plan_baseline.center_price == plan_with_none.center_price
+        assert plan_baseline.size_schedule == plan_with_none.size_schedule
+        assert plan_baseline.reset_action == plan_with_none.reset_action
+        # Neither should have DD reason codes
+        assert all("DD_" not in code for code in plan_baseline.reason_codes)
+        assert all("DD_" not in code for code in plan_with_none.reason_codes)
+
+    def test_dd_budget_ratio_one_is_noop(self) -> None:
+        """dd_budget_ratio=1 does not change plan (no scaling)."""
+        config = AdaptiveGridConfig()
+        policy = AdaptiveGridPolicy(config)
+        features = self._base_features()
+
+        plan_baseline = policy.evaluate(features)
+        plan_with_one = policy.evaluate(features, dd_budget_ratio=Decimal("1"))
+
+        # Plans must be IDENTICAL
+        assert plan_baseline.levels_up == plan_with_one.levels_up
+        assert plan_baseline.levels_down == plan_with_one.levels_down
+        assert plan_baseline.size_schedule == plan_with_one.size_schedule
+        # No DD reason codes emitted for ratio=1
+        assert all("DD_" not in code for code in plan_with_one.reason_codes)
+
+    def test_dd_budget_ratio_scales_qty_and_rounds_deterministically(self) -> None:
+        """dd_budget_ratio=0.5 scales size_schedule deterministically."""
+        config = AdaptiveGridConfig()
+        policy = AdaptiveGridPolicy(config)
+        features = self._base_features()
+
+        plan_baseline = policy.evaluate(features)
+        plan_scaled = policy.evaluate(features, dd_budget_ratio=Decimal("0.5"))
+
+        # Levels should be unchanged
+        assert plan_baseline.levels_up == plan_scaled.levels_up
+        assert plan_baseline.levels_down == plan_scaled.levels_down
+
+        # Size schedule should be scaled by 0.5
+        assert len(plan_baseline.size_schedule) == len(plan_scaled.size_schedule)
+        for baseline_qty, scaled_qty in zip(
+            plan_baseline.size_schedule, plan_scaled.size_schedule, strict=True
+        ):
+            expected = (baseline_qty * Decimal("0.5")).quantize(Decimal("0.00000001"))
+            assert scaled_qty == expected
+
+        # DD_SCALE_APPLIED reason code should be present
+        assert "DD_SCALE_APPLIED" in plan_scaled.reason_codes
+
+    def test_dd_budget_ratio_zero_blocks_entries_bilateral(self) -> None:
+        """dd_budget_ratio=0 blocks all new entries on both sides."""
+        config = AdaptiveGridConfig()
+        policy = AdaptiveGridPolicy(config)
+        features = self._base_features()
+
+        plan_baseline = policy.evaluate(features)
+        plan_blocked = policy.evaluate(features, dd_budget_ratio=Decimal("0"))
+
+        # Baseline should have levels
+        assert plan_baseline.levels_up > 0
+        assert plan_baseline.levels_down > 0
+
+        # Blocked plan should have zero levels
+        assert plan_blocked.levels_up == 0
+        assert plan_blocked.levels_down == 0
+        assert plan_blocked.size_schedule == []
+
+        # DD_BLOCK_ENTRIES reason code should be present
+        assert "DD_BLOCK_ENTRIES" in plan_blocked.reason_codes
+
+        # Reset action should be HARD (full pause)
+        assert plan_blocked.reset_action == ResetAction.HARD
+
+    def test_dd_budget_ratio_out_of_range_rejected(self) -> None:
+        """dd_budget_ratio outside [0..1] raises ValueError."""
+        config = AdaptiveGridConfig()
+        policy = AdaptiveGridPolicy(config)
+        features = self._base_features()
+
+        # Negative value
+        with pytest.raises(ValueError, match=r"dd_budget_ratio must be in \[0\.\.1\]"):
+            policy.evaluate(features, dd_budget_ratio=Decimal("-0.01"))
+
+        # Value > 1
+        with pytest.raises(ValueError, match=r"dd_budget_ratio must be in \[0\.\.1\]"):
+            policy.evaluate(features, dd_budget_ratio=Decimal("1.01"))
