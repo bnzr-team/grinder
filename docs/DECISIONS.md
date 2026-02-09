@@ -2770,3 +2770,74 @@
   - ADR-030: Paper write-path v0
   - ADR-055: LC-21 L1 WebSocket integration
   - ADR-040: Futures USDT-M mainnet smoke (for ALLOW_MAINNET_TRADE pattern)
+
+---
+
+## ADR-057 — L2 Gating Semantics (M7-03)
+
+**Status:** Accepted
+**Date:** 2026-02-09
+**Deciders:** Core team
+**Scope:** AdaptiveGridPolicy L2 gating for entry blocking
+
+### Context
+
+M7-02 added L2FeatureSnapshot with computed L2 features (impact, wall scores, insufficient depth flags). M7-03 wires these features into AdaptiveGridPolicy to gate entries based on order book conditions.
+
+### Decision
+
+1. **Feature flag:** `AdaptiveGridConfig.l2_gating_enabled: bool = False` (default OFF)
+   - Preserves v1 behavior when disabled or when l2_features=None
+   - Enables incremental rollout without breaking existing deployments
+
+2. **Blocking semantics (entries only, not exits):**
+   - **Blocking = no NEW entry orders** on the affected side
+   - Existing positions are unaffected: reduce-only orders and exits are still allowed
+   - Policy produces `GridPlan` (entry intents); execution layer handles order placement
+   - When buy-side blocked: `levels_down=0` (no new buy entries)
+   - When sell-side blocked: `levels_up=0` (no new sell entries)
+   - Full pause (both sides blocked): `ResetAction.HARD` triggered
+
+3. **Insufficient depth gate (hard block):**
+   - When `impact_buy_topN_insufficient_depth == 1`: block buy-side entries (levels_down=0)
+   - When `impact_sell_topN_insufficient_depth == 1`: block sell-side entries (levels_up=0)
+   - Rationale: insufficient depth means we cannot reliably compute VWAP slippage
+
+4. **Impact threshold gate (soft block):**
+   - `l2_impact_threshold_bps: int = 200` (default)
+   - When `impact_buy_topN_bps >= threshold`: block buy-side entries
+   - When `impact_sell_topN_bps >= threshold`: block sell-side entries
+   - **Threshold rationale (200 bps):**
+     - Based on typical grid step of 50-100 bps: 2x step = 200 bps slippage makes entry unprofitable
+     - Empirical observation: BTCUSDT normal depth gives 0-5 bps impact for 0.003 BTC qty_ref
+     - 200 bps is 40-200x normal, indicating severely degraded liquidity
+     - Conservative default; can be tuned per-symbol/venue in production
+
+5. **Priority:** Insufficient depth takes precedence (checked first)
+   - Reason codes reflect the root cause (e.g., `L2_INSUFFICIENT_DEPTH_BUY`)
+   - Avoids duplicate reason codes when both conditions apply
+
+6. **Reason codes (SSOT contract):**
+
+| Code | Meaning | When Emitted |
+|------|---------|--------------|
+| `L2_INSUFFICIENT_DEPTH_BUY` | Buy-side depth exhausted; cannot compute impact | `impact_buy_topN_insufficient_depth == 1` |
+| `L2_INSUFFICIENT_DEPTH_SELL` | Sell-side depth exhausted; cannot compute impact | `impact_sell_topN_insufficient_depth == 1` |
+| `L2_IMPACT_BUY_HIGH` | Buy-side VWAP slippage exceeds threshold | `impact_buy_topN_bps >= threshold` (and not insufficient) |
+| `L2_IMPACT_SELL_HIGH` | Sell-side VWAP slippage exceeds threshold | `impact_sell_topN_bps >= threshold` (and not insufficient) |
+| `L2_BLOCK_BUY` | Summary: buy-side blocked (any L2 reason) | Added when `block_buy_side=True` |
+| `L2_BLOCK_SELL` | Summary: sell-side blocked (any L2 reason) | Added when `block_sell_side=True` |
+
+### Consequences
+
+- v1 behavior unchanged when `l2_gating_enabled=False` or `l2_features=None`
+- Grid can now adapt to order book liquidity conditions
+- Entry blocking is deterministic and auditable via reason codes
+- Existing positions unaffected (reduce-only allowed)
+- Tests cover all 4 fixture scenarios (normal, ultra_thin, wall_bid, thin_insufficient)
+
+### Related
+
+- SPEC_V2_0.md §B.2: L2 feature definitions
+- ADR-022: AdaptiveGridPolicy v1
+- ADR-032: DdAllocator

@@ -1,4 +1,4 @@
-"""Adaptive Grid Policy v1 (L1-only, deterministic).
+"""Adaptive Grid Policy v1/v2 (L1 + optional L2 gating, deterministic).
 
 Computes dynamic grid parameters from FeatureSnapshot:
 - step_bps: from NATR + regime multipliers
@@ -12,7 +12,11 @@ Uses Regime classifier for behavior adjustment:
 - THIN_BOOK: pause or minimal grid
 - TOXIC/EMERGENCY: pause trading
 
-See: docs/17_ADAPTIVE_SMART_GRID_V1.md §17.8-17.10, ADR-022
+v2 additions (M7-03, l2_gating_enabled=True):
+- L2 insufficient depth gate: blocks entries when depth exhausted
+- L2 impact threshold gate: pauses entries when VWAP slippage exceeds threshold
+
+See: docs/17_ADAPTIVE_SMART_GRID_V1.md §17.8-17.10, ADR-022, ADR-057
 """
 
 from __future__ import annotations
@@ -28,6 +32,7 @@ from grinder.policies.base import GridPlan, GridPolicy
 from grinder.sizing import AutoSizer, AutoSizerConfig, GridShape
 
 if TYPE_CHECKING:
+    from grinder.features.l2_types import L2FeatureSnapshot
     from grinder.features.types import FeatureSnapshot
     from grinder.gating.types import GatingResult
 
@@ -99,6 +104,11 @@ class AdaptiveGridConfig:
     adverse_move: Decimal | None = None  # Worst-case price move as decimal (0.25 = 25%)
     auto_sizer_config: AutoSizerConfig = field(default_factory=AutoSizerConfig)
 
+    # L2 gating (M7-03, ADR-057) - when enabled, uses L2 features for entry gating
+    # Default OFF to preserve v1 behavior
+    l2_gating_enabled: bool = False
+    l2_impact_threshold_bps: int = 200  # PAUSE entries when impact >= this threshold
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to JSON-serializable dict."""
         return {
@@ -120,7 +130,33 @@ class AdaptiveGridConfig:
             "equity": str(self.equity) if self.equity else None,
             "dd_budget": str(self.dd_budget) if self.dd_budget else None,
             "adverse_move": str(self.adverse_move) if self.adverse_move else None,
+            "l2_gating_enabled": self.l2_gating_enabled,
+            "l2_impact_threshold_bps": self.l2_impact_threshold_bps,
         }
+
+
+@dataclass(frozen=True)
+class L2GateResult:
+    """Result of L2 gating evaluation (M7-03, ADR-057).
+
+    Determines whether to pause or block entries based on L2 features.
+
+    Attributes:
+        should_pause: True if both sides should be paused (full grid pause)
+        block_buy_side: True if buy-side entries should be blocked
+        block_sell_side: True if sell-side entries should be blocked
+        reason_codes: List of reason codes explaining the gate decision
+    """
+
+    should_pause: bool = False
+    block_buy_side: bool = False
+    block_sell_side: bool = False
+    reason_codes: list[str] = field(default_factory=list)
+
+    @classmethod
+    def no_gate(cls) -> L2GateResult:
+        """Return a result that allows all entries (no gating)."""
+        return cls()
 
 
 def _regime_to_market_regime(regime: Regime) -> MarketRegime:
@@ -302,6 +338,7 @@ class AdaptiveGridPolicy(GridPolicy):
         features: dict[str, Any],
         kill_switch_active: bool = False,
         toxicity_result: GatingResult | None = None,
+        l2_features: L2FeatureSnapshot | None = None,
     ) -> GridPlan:
         """Evaluate features and return adaptive grid plan.
 
@@ -316,6 +353,7 @@ class AdaptiveGridPolicy(GridPolicy):
                 - warmup_bars: Number of completed bars
             kill_switch_active: Whether kill-switch is triggered
             toxicity_result: Result from toxicity gate
+            l2_features: Optional L2 feature snapshot for v2 gating (M7-03)
 
         Returns:
             GridPlan with adaptive configuration
@@ -348,6 +386,10 @@ class AdaptiveGridPolicy(GridPolicy):
                 reason=f"REGIME_{regime_decision.regime.value}",
             )
 
+        # L2 gating (M7-03, ADR-057)
+        # When enabled, check L2 features for entry blocking conditions
+        l2_gate_result = self._evaluate_l2_gate(l2_features)
+
         # Compute adaptive parameters
         step_bps = compute_step_bps(natr_bps, regime_decision.regime, self.config)
         width_up_bps, width_down_bps = compute_width_bps(
@@ -373,17 +415,50 @@ class AdaptiveGridPolicy(GridPolicy):
         if regime_decision.regime in (Regime.TREND_UP, Regime.TREND_DOWN):
             reason_codes.append("ASYMMETRIC_GRID")
 
+        # Apply L2 gating (M7-03): pause or reduce levels based on L2 conditions
+        final_levels_up = levels_up
+        final_levels_down = levels_down
+        reset_action = ResetAction.NONE
+
+        if l2_gate_result.should_pause:
+            # Full pause: zero levels on both sides
+            final_levels_up = 0
+            final_levels_down = 0
+            reset_action = ResetAction.HARD
+            reason_codes.extend(l2_gate_result.reason_codes)
+        else:
+            # Apply side-specific blocking (add detailed reason codes)
+            if l2_gate_result.block_buy_side:
+                final_levels_down = 0
+                reason_codes.extend(l2_gate_result.reason_codes)
+                reason_codes.append("L2_BLOCK_BUY")
+            if l2_gate_result.block_sell_side:
+                final_levels_up = 0
+                # Only add reason codes if not already added (avoid duplicates)
+                if not l2_gate_result.block_buy_side:
+                    reason_codes.extend(l2_gate_result.reason_codes)
+                reason_codes.append("L2_BLOCK_SELL")
+
+        # Recompute size schedule if levels changed
+        final_max_levels = max(final_levels_up, final_levels_down)
+        if final_max_levels != max_levels:
+            size_schedule = self._compute_size_schedule(
+                max_levels=final_max_levels,
+                step_bps=step_bps,
+                price=mid_price,
+            )
+
         return GridPlan(
             mode=GridMode.BILATERAL,
             center_price=mid_price,
             spacing_bps=float(step_bps),
-            levels_up=levels_up,
-            levels_down=levels_down,
+            levels_up=final_levels_up,
+            levels_down=final_levels_down,
             size_schedule=size_schedule,
             skew_bps=0.0,
             regime=_regime_to_market_regime(regime_decision.regime),
             width_bps=float(avg_width_bps),
-            reset_action=ResetAction.NONE,
+            reset_action=reset_action,
             reason_codes=reason_codes,
         )
 
@@ -421,6 +496,74 @@ class AdaptiveGridPolicy(GridPolicy):
             net_return_bps=features.get("net_return_bps", 0),
             range_score=features.get("range_score", 10),
             warmup_bars=features.get("warmup_bars", 0),
+        )
+
+    def _evaluate_l2_gate(
+        self,
+        l2_features: L2FeatureSnapshot | None,
+    ) -> L2GateResult:
+        """Evaluate L2 features for entry gating (M7-03, ADR-057).
+
+        When l2_gating_enabled=True, checks:
+        1. Insufficient depth: blocks entries on the affected side
+        2. Impact threshold: pauses entries when VWAP slippage >= threshold
+
+        Args:
+            l2_features: L2 feature snapshot, or None if not available
+
+        Returns:
+            L2GateResult with blocking decisions and reason codes
+
+        Semantics:
+        - If l2_gating_enabled=False: no gating (v1 behavior)
+        - If l2_features is None: no gating (L2 data unavailable)
+        - insufficient_depth=1: HARD block on that side (insufficient liquidity)
+        - impact >= threshold: PAUSE entries (high slippage risk)
+        """
+        # v1 behavior: no L2 gating
+        if not self.config.l2_gating_enabled:
+            return L2GateResult.no_gate()
+
+        # No L2 data available
+        if l2_features is None:
+            return L2GateResult.no_gate()
+
+        reason_codes: list[str] = []
+        block_buy = False
+        block_sell = False
+        should_pause = False
+
+        # Check insufficient depth (hard block) - priority over impact threshold
+        if l2_features.impact_buy_topN_insufficient_depth == 1:
+            block_buy = True
+            reason_codes.append("L2_INSUFFICIENT_DEPTH_BUY")
+
+        if l2_features.impact_sell_topN_insufficient_depth == 1:
+            block_sell = True
+            reason_codes.append("L2_INSUFFICIENT_DEPTH_SELL")
+
+        # Check impact threshold (soft gate - pause entries)
+        threshold = self.config.l2_impact_threshold_bps
+
+        # High buy impact - block buy side entries (if not already blocked)
+        if l2_features.impact_buy_topN_bps >= threshold and not block_buy:
+            block_buy = True
+            reason_codes.append("L2_IMPACT_BUY_HIGH")
+
+        # High sell impact - block sell side entries (if not already blocked)
+        if l2_features.impact_sell_topN_bps >= threshold and not block_sell:
+            block_sell = True
+            reason_codes.append("L2_IMPACT_SELL_HIGH")
+
+        # If both sides blocked, it's a full pause
+        if block_buy and block_sell:
+            should_pause = True
+
+        return L2GateResult(
+            should_pause=should_pause,
+            block_buy_side=block_buy,
+            block_sell_side=block_sell,
+            reason_codes=reason_codes,
         )
 
     def _create_pause_plan(
