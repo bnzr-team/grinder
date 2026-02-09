@@ -598,9 +598,7 @@ class AdaptiveGridPolicy(GridPolicy):
         if dd_budget_ratio is not None and (
             dd_budget_ratio < Decimal("0") or dd_budget_ratio > Decimal("1")
         ):
-            raise ValueError(
-                f"dd_budget_ratio must be in [0..1], got {dd_budget_ratio}"
-            )
+            raise ValueError(f"dd_budget_ratio must be in [0..1], got {dd_budget_ratio}")
 
     def _apply_dd_budget_ratio(
         self,
