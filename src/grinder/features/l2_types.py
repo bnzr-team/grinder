@@ -3,6 +3,8 @@
 Provides L2FeatureSnapshot - a frozen dataclass containing all L2-derived features
 computed from an L2 order book snapshot.
 
+Field names match SSOT contract in SPEC_V2_0.md §B.2 exactly (*_topN_* naming).
+
 See: docs/smart_grid/SPEC_V2_0.md Addendum B
 """
 
@@ -31,6 +33,7 @@ class L2FeatureSnapshot:
     """Computed L2 features for a symbol at a point in time.
 
     All integer fields use basis points (bps) or x1000 for determinism.
+    Field names match SPEC_V2_0.md §B.2 exactly (*_topN_* naming).
 
     Attributes:
         ts_ms: Timestamp when snapshot was taken (ms)
@@ -38,20 +41,20 @@ class L2FeatureSnapshot:
         venue: Exchange venue
         depth: Number of levels per side (topN)
 
-        # Depth features
-        depth_bid_qty: Total bid-side quantity
-        depth_ask_qty: Total ask-side quantity
-        depth_imbalance_bps: Bid-ask depth imbalance in bps [-10000, 10000]
+        # Depth features (§B.2)
+        depth_bid_qty_topN: Total bid-side quantity across topN levels
+        depth_ask_qty_topN: Total ask-side quantity across topN levels
+        depth_imbalance_topN_bps: Bid-ask depth imbalance in bps [-10000, 10000]
 
-        # Impact features (VWAP slippage)
-        impact_buy_bps: Buy impact in bps (slippage from best ask)
-        impact_sell_bps: Sell impact in bps (slippage from best bid)
-        impact_buy_insufficient_depth: 1 if buy depth exhausted, 0 otherwise
-        impact_sell_insufficient_depth: 1 if sell depth exhausted, 0 otherwise
+        # Impact features (VWAP slippage) (§B.2, §B.3)
+        impact_buy_topN_bps: Buy impact in bps (slippage from best ask)
+        impact_sell_topN_bps: Sell impact in bps (slippage from best bid)
+        impact_buy_topN_insufficient_depth: 1 if buy depth exhausted, 0 otherwise
+        impact_sell_topN_insufficient_depth: 1 if sell depth exhausted, 0 otherwise
 
-        # Wall features
-        wall_bid_score_x1000: Bid wall score * 1000
-        wall_ask_score_x1000: Ask wall score * 1000
+        # Wall features (§B.2, §B.4)
+        wall_bid_score_topN_x1000: Bid wall score * 1000
+        wall_ask_score_topN_x1000: Ask wall score * 1000
 
         # Config
         qty_ref: Reference quantity used for impact calculation
@@ -63,19 +66,19 @@ class L2FeatureSnapshot:
     depth: int
 
     # Depth features
-    depth_bid_qty: Decimal
-    depth_ask_qty: Decimal
-    depth_imbalance_bps: int
+    depth_bid_qty_topN: Decimal
+    depth_ask_qty_topN: Decimal
+    depth_imbalance_topN_bps: int
 
     # Impact features
-    impact_buy_bps: int
-    impact_sell_bps: int
-    impact_buy_insufficient_depth: int
-    impact_sell_insufficient_depth: int
+    impact_buy_topN_bps: int
+    impact_sell_topN_bps: int
+    impact_buy_topN_insufficient_depth: int
+    impact_sell_topN_insufficient_depth: int
 
     # Wall features
-    wall_bid_score_x1000: int
-    wall_ask_score_x1000: int
+    wall_bid_score_topN_x1000: int
+    wall_ask_score_topN_x1000: int
 
     # Config
     qty_ref: Decimal
@@ -87,15 +90,15 @@ class L2FeatureSnapshot:
             "symbol": self.symbol,
             "venue": self.venue,
             "depth": self.depth,
-            "depth_bid_qty": str(self.depth_bid_qty),
-            "depth_ask_qty": str(self.depth_ask_qty),
-            "depth_imbalance_bps": self.depth_imbalance_bps,
-            "impact_buy_bps": self.impact_buy_bps,
-            "impact_sell_bps": self.impact_sell_bps,
-            "impact_buy_insufficient_depth": self.impact_buy_insufficient_depth,
-            "impact_sell_insufficient_depth": self.impact_sell_insufficient_depth,
-            "wall_bid_score_x1000": self.wall_bid_score_x1000,
-            "wall_ask_score_x1000": self.wall_ask_score_x1000,
+            "depth_bid_qty_topN": str(self.depth_bid_qty_topN),
+            "depth_ask_qty_topN": str(self.depth_ask_qty_topN),
+            "depth_imbalance_topN_bps": self.depth_imbalance_topN_bps,
+            "impact_buy_topN_bps": self.impact_buy_topN_bps,
+            "impact_sell_topN_bps": self.impact_sell_topN_bps,
+            "impact_buy_topN_insufficient_depth": self.impact_buy_topN_insufficient_depth,
+            "impact_sell_topN_insufficient_depth": self.impact_sell_topN_insufficient_depth,
+            "wall_bid_score_topN_x1000": self.wall_bid_score_topN_x1000,
+            "wall_ask_score_topN_x1000": self.wall_ask_score_topN_x1000,
             "qty_ref": str(self.qty_ref),
         }
 
@@ -107,15 +110,15 @@ class L2FeatureSnapshot:
             symbol=d["symbol"],
             venue=d["venue"],
             depth=d["depth"],
-            depth_bid_qty=Decimal(d["depth_bid_qty"]),
-            depth_ask_qty=Decimal(d["depth_ask_qty"]),
-            depth_imbalance_bps=d["depth_imbalance_bps"],
-            impact_buy_bps=d["impact_buy_bps"],
-            impact_sell_bps=d["impact_sell_bps"],
-            impact_buy_insufficient_depth=d["impact_buy_insufficient_depth"],
-            impact_sell_insufficient_depth=d["impact_sell_insufficient_depth"],
-            wall_bid_score_x1000=d["wall_bid_score_x1000"],
-            wall_ask_score_x1000=d["wall_ask_score_x1000"],
+            depth_bid_qty_topN=Decimal(d["depth_bid_qty_topN"]),
+            depth_ask_qty_topN=Decimal(d["depth_ask_qty_topN"]),
+            depth_imbalance_topN_bps=d["depth_imbalance_topN_bps"],
+            impact_buy_topN_bps=d["impact_buy_topN_bps"],
+            impact_sell_topN_bps=d["impact_sell_topN_bps"],
+            impact_buy_topN_insufficient_depth=d["impact_buy_topN_insufficient_depth"],
+            impact_sell_topN_insufficient_depth=d["impact_sell_topN_insufficient_depth"],
+            wall_bid_score_topN_x1000=d["wall_bid_score_topN_x1000"],
+            wall_ask_score_topN_x1000=d["wall_ask_score_topN_x1000"],
             qty_ref=Decimal(d["qty_ref"]),
         )
 
@@ -157,14 +160,14 @@ class L2FeatureSnapshot:
             symbol=snapshot.symbol,
             venue=snapshot.venue,
             depth=snapshot.depth,
-            depth_bid_qty=depth_bid_qty,
-            depth_ask_qty=depth_ask_qty,
-            depth_imbalance_bps=depth_imbalance_bps,
-            impact_buy_bps=impact_buy_bps,
-            impact_sell_bps=impact_sell_bps,
-            impact_buy_insufficient_depth=impact_buy_insufficient,
-            impact_sell_insufficient_depth=impact_sell_insufficient,
-            wall_bid_score_x1000=wall_bid_score,
-            wall_ask_score_x1000=wall_ask_score,
+            depth_bid_qty_topN=depth_bid_qty,
+            depth_ask_qty_topN=depth_ask_qty,
+            depth_imbalance_topN_bps=depth_imbalance_bps,
+            impact_buy_topN_bps=impact_buy_bps,
+            impact_sell_topN_bps=impact_sell_bps,
+            impact_buy_topN_insufficient_depth=impact_buy_insufficient,
+            impact_sell_topN_insufficient_depth=impact_sell_insufficient,
+            wall_bid_score_topN_x1000=wall_bid_score,
+            wall_ask_score_topN_x1000=wall_ask_score,
             qty_ref=qty_ref,
         )

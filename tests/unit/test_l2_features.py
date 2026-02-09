@@ -6,6 +6,7 @@ Tests L2 feature computation per SPEC_V2_0.md Addendum B:
 - Depth imbalance
 
 Uses 4 fixture scenarios: normal, ultra_thin, wall_bid, thin_insufficient
+Field names match SSOT contract (*_topN_* naming per SPEC B.2).
 
 See: docs/smart_grid/SPEC_V2_0.md, Addendum B
 """
@@ -241,15 +242,15 @@ class TestL2FeatureSnapshot:
             symbol="BTCUSDT",
             venue="binance",
             depth=5,
-            depth_bid_qty=Decimal("10"),
-            depth_ask_qty=Decimal("8"),
-            depth_imbalance_bps=1111,
-            impact_buy_bps=5,
-            impact_sell_bps=3,
-            impact_buy_insufficient_depth=0,
-            impact_sell_insufficient_depth=0,
-            wall_bid_score_x1000=1500,
-            wall_ask_score_x1000=1200,
+            depth_bid_qty_topN=Decimal("10"),
+            depth_ask_qty_topN=Decimal("8"),
+            depth_imbalance_topN_bps=1111,
+            impact_buy_topN_bps=5,
+            impact_sell_topN_bps=3,
+            impact_buy_topN_insufficient_depth=0,
+            impact_sell_topN_insufficient_depth=0,
+            wall_bid_score_topN_x1000=1500,
+            wall_ask_score_topN_x1000=1200,
             qty_ref=Decimal("0.003"),
         )
         d = snapshot.to_dict()
@@ -268,20 +269,20 @@ class TestFixtureScenarios:
         return {str(s.meta["scenario"]): s for s in all_snapshots}
 
     def test_normal_impact_zero(self, snapshots: dict[str, L2Snapshot]) -> None:
-        """normal scenario: impact = 0 at qty_ref = 0.003.
+        """normal scenario: impact_*_topN_bps = 0 at qty_ref = 0.003.
 
         Per SPEC B.5.1: Entire qty fits in top ask level (0.110 > 0.003).
         """
         snap = snapshots["normal"]
         features = L2FeatureSnapshot.from_l2_snapshot(snap)
 
-        assert features.impact_buy_bps == 0
-        assert features.impact_sell_bps == 0
-        assert features.impact_buy_insufficient_depth == 0
-        assert features.impact_sell_insufficient_depth == 0
+        assert features.impact_buy_topN_bps == 0
+        assert features.impact_sell_topN_bps == 0
+        assert features.impact_buy_topN_insufficient_depth == 0
+        assert features.impact_sell_topN_insufficient_depth == 0
 
     def test_ultra_thin_impact_2(self, snapshots: dict[str, L2Snapshot]) -> None:
-        """ultra_thin scenario: impact = 2 at qty_ref = 0.003.
+        """ultra_thin scenario: impact_*_topN_bps = 2 at qty_ref = 0.003.
 
         Per SPEC B.5.2:
         Buy: fills 0.001 @ 70830.00, 0.002 @ 70851.25; VWAP ≈ 70844.17, slippage ≈ 2 bps
@@ -290,50 +291,50 @@ class TestFixtureScenarios:
         snap = snapshots["ultra_thin"]
         features = L2FeatureSnapshot.from_l2_snapshot(snap)
 
-        assert features.impact_buy_bps == 2
-        assert features.impact_sell_bps == 2
-        assert features.impact_buy_insufficient_depth == 0
-        assert features.impact_sell_insufficient_depth == 0
+        assert features.impact_buy_topN_bps == 2
+        assert features.impact_sell_topN_bps == 2
+        assert features.impact_buy_topN_insufficient_depth == 0
+        assert features.impact_sell_topN_insufficient_depth == 0
 
     def test_wall_bid_score_15625(self, snapshots: dict[str, L2Snapshot]) -> None:
-        """wall_bid scenario: wall_bid_score = 15625.
+        """wall_bid scenario: wall_bid_score_topN_x1000 = 15625.
 
         Per SPEC B.5.3:
         - max=2.500, median=0.160, ratio=15.625 -> 15625 x1000
-        - wall_ask_score: max=0.190, median=0.150, ratio≈1.267 -> 1267 x1000
+        - wall_ask_score_topN_x1000: max=0.190, median=0.150, ratio≈1.267 -> 1267 x1000
         """
         snap = snapshots["wall_bid"]
         features = L2FeatureSnapshot.from_l2_snapshot(snap)
 
-        assert features.wall_bid_score_x1000 == 15625
-        assert features.wall_ask_score_x1000 == 1267
+        assert features.wall_bid_score_topN_x1000 == 15625
+        assert features.wall_ask_score_topN_x1000 == 1267
 
         # Impact should be 0 at default qty_ref
-        assert features.impact_buy_bps == 0
-        assert features.impact_sell_bps == 0
+        assert features.impact_buy_topN_bps == 0
+        assert features.impact_sell_topN_bps == 0
 
     def test_thin_insufficient_at_qty_0_1(self, snapshots: dict[str, L2Snapshot]) -> None:
         """thin_insufficient scenario: insufficient at qty_ref = 0.1.
 
         Per SPEC B.5.4:
-        - At qty_ref=0.003: impact = 0 (0.003 < 0.009 top ask)
+        - At qty_ref=0.003: impact_*_topN_bps = 0 (0.003 < 0.009 top ask)
         - At qty_ref=0.1: INSUFFICIENT (total depth < 0.1)
         """
         snap = snapshots["thin_insufficient"]
 
         # At default qty_ref = 0.003
         features_default = L2FeatureSnapshot.from_l2_snapshot(snap)
-        assert features_default.impact_buy_bps == 0
-        assert features_default.impact_sell_bps == 0
-        assert features_default.impact_buy_insufficient_depth == 0
-        assert features_default.impact_sell_insufficient_depth == 0
+        assert features_default.impact_buy_topN_bps == 0
+        assert features_default.impact_sell_topN_bps == 0
+        assert features_default.impact_buy_topN_insufficient_depth == 0
+        assert features_default.impact_sell_topN_insufficient_depth == 0
 
         # At qty_ref = 0.1
         features_large = L2FeatureSnapshot.from_l2_snapshot(snap, Decimal("0.1"))
-        assert features_large.impact_buy_bps == IMPACT_INSUFFICIENT_DEPTH_BPS
-        assert features_large.impact_sell_bps == IMPACT_INSUFFICIENT_DEPTH_BPS
-        assert features_large.impact_buy_insufficient_depth == 1
-        assert features_large.impact_sell_insufficient_depth == 1
+        assert features_large.impact_buy_topN_bps == IMPACT_INSUFFICIENT_DEPTH_BPS
+        assert features_large.impact_sell_topN_bps == IMPACT_INSUFFICIENT_DEPTH_BPS
+        assert features_large.impact_buy_topN_insufficient_depth == 1
+        assert features_large.impact_sell_topN_insufficient_depth == 1
 
 
 class TestDeterminism:
