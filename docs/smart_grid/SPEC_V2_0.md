@@ -654,11 +654,15 @@ FeatureEngine v2 adds the following L2-derived features (topN = depth from snaps
 
 | Feature Key | Type | Unit | Description |
 |-------------|------|------|-------------|
+| `depth_bid_qty_topN` | Decimal | qty | Total bid-side quantity across topN levels |
+| `depth_ask_qty_topN` | Decimal | qty | Total ask-side quantity across topN levels |
+| `depth_imbalance_topN_bps` | int | bps | Bid-ask depth imbalance in bps [-10000, 10000] |
 | `impact_buy_topN_bps` | int | bps | VWAP slippage for buying `qty_ref` (from best ask) |
 | `impact_sell_topN_bps` | int | bps | VWAP slippage for selling `qty_ref` (from best bid) |
+| `impact_buy_topN_insufficient_depth` | int | flag | 1 if buy depth exhausted before filling `qty_ref`, 0 otherwise |
+| `impact_sell_topN_insufficient_depth` | int | flag | 1 if sell depth exhausted before filling `qty_ref`, 0 otherwise |
 | `wall_bid_score_topN_x1000` | int | x1000 | Wall detection score on bid side |
 | `wall_ask_score_topN_x1000` | int | x1000 | Wall detection score on ask side |
-| `depth_imbalance_topN_bps` | int | bps | Bid-ask depth imbalance in bps |
 
 #### Constants
 
