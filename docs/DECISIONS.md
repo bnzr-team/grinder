@@ -2841,3 +2841,74 @@ M7-02 added L2FeatureSnapshot with computed L2 features (impact, wall scores, in
 - SPEC_V2_0.md §B.2: L2 feature definitions
 - ADR-022: AdaptiveGridPolicy v1
 - ADR-032: DdAllocator
+
+## ADR-058 — M7-04: Apply DD budget ratio in AdaptiveGridPolicy (single-symbol, policy-level)
+
+**Status:** Accepted
+**Date:** 2026-02-09
+**Deciders:** Core team
+**Scope:** AdaptiveGridPolicy DD budget ratio wiring for single-symbol sizing
+
+### Context
+
+We have a portfolio-level DD allocator (`DdAllocator.allocate()`), which outputs per-symbol
+`dd_budget_ratio` in range [0..1]. The allocator operates at the portfolio/orchestration layer.
+
+We need Smart Grid v2.0 to respect per-symbol DD budget constraints without coupling
+`AdaptiveGridPolicy` to portfolio selection/TopK orchestration.
+
+### Decision
+
+1. **Policy input contract:**
+   - `AdaptiveGridPolicy.evaluate()` accepts an optional, pre-computed `dd_budget_ratio: Decimal | None`
+   - Expected range: [0..1], validated at entry (ValueError if out of range)
+   - The policy does NOT call DdAllocator directly and does not know about portfolios/candidates
+   - The orchestration layer (or tests) computes allocations and passes the per-symbol ratio
+
+2. **Default behavior unchanged:**
+   - When `dd_budget_ratio is None`: no DD scaling is applied (v1-equivalent behavior)
+
+3. **Semantics (SSOT):**
+   - `dd_budget_ratio is None` → no DD scaling (v1 behavior)
+   - `dd_budget_ratio == 1` → no scaling
+   - `0 < dd_budget_ratio < 1` → scale per-level entry sizing:
+     - `qty_per_level = qty_per_level * dd_budget_ratio` (exact Decimal multiplication)
+     - **No rounding in policy** — symbol-specific lot size rounding at execution layer
+   - `dd_budget_ratio == 0` → **block NEW entries** on both sides:
+     - `levels_up = 0`, `levels_down = 0`
+     - reduce-only / existing-position management is unaffected
+     - `ResetAction.HARD` triggered
+
+4. **Determinism:**
+   - Uses `Decimal` for dd_budget_ratio and sizing computations
+   - Policy outputs exact scaled values (no precision loss)
+   - Lot size rounding deferred to execution layer where stepSize is known
+   - No floats, no locale-dependent formatting
+
+5. **Reason codes (SSOT table):**
+
+| Code | Condition | Effect |
+|------|-----------|--------|
+| `DD_SCALE_APPLIED` | 0 < ratio < 1 | qty scaled (exact Decimal) |
+| `DD_BLOCK_ENTRIES` | ratio == 0 | levels_up=0 and levels_down=0 |
+
+Note: No reason code emitted for ratio=None or ratio=1 (unchanged behavior).
+
+### Non-goals
+
+- Portfolio orchestration / TopK selection is out of scope
+- Changing DD allocator math is out of scope
+- Live L2 streaming and execution walk-the-book are out of scope
+
+### Consequences
+
+- v1 behavior unchanged when `dd_budget_ratio is None`
+- Policy remains pure and testable (no knowledge of portfolio layer)
+- DD budget constraints can be applied without architectural coupling
+- Entry blocking is deterministic and auditable via reason codes
+
+### Related
+
+- ADR-032: DdAllocator
+- ADR-057: L2 gating semantics
+- ADR-022: AdaptiveGridPolicy v1

@@ -1328,6 +1328,12 @@ Comprehensive adaptive grid system design:
       - Insufficient depth: blocks entries when order book depth exhausted
       - Impact threshold: blocks entries when VWAP slippage >= `l2_impact_threshold_bps` (default 200)
       - See ADR-057
+    - **DD budget ratio (M7-04):** Optional DD budget ratio application (policy-level, single-symbol)
+      - `dd_budget_ratio: Decimal | None` parameter in `evaluate()`
+      - ratio=0: blocks all new entries (reduce-only allowed)
+      - 0 < ratio < 1: scales size_schedule by ratio
+      - ratio=1 or None: no scaling (v1 behavior)
+      - See ADR-058
     - **Fixture:** `sample_day_adaptive` — paper digest `1b8af993a8435ee6`
   - ✅ **Top-K v1 (ASM-P1-06):** Feature-based symbol selection (see ADR-023)
     - **Opt-in:** `topk_v1_enabled=False` default (backward compat with existing digests)

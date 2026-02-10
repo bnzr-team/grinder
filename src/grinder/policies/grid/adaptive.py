@@ -1,4 +1,4 @@
-"""Adaptive Grid Policy v1/v2 (L1 + optional L2 gating, deterministic).
+"""Adaptive Grid Policy v1/v2 (L1 + optional L2 gating + DD ratio, deterministic).
 
 Computes dynamic grid parameters from FeatureSnapshot:
 - step_bps: from NATR + regime multipliers
@@ -16,7 +16,10 @@ v2 additions (M7-03, l2_gating_enabled=True):
 - L2 insufficient depth gate: blocks entries when depth exhausted
 - L2 impact threshold gate: pauses entries when VWAP slippage exceeds threshold
 
-See: docs/17_ADAPTIVE_SMART_GRID_V1.md §17.8-17.10, ADR-022, ADR-057
+v2 additions (M7-04, dd_budget_ratio):
+- DD budget ratio: scales entry sizing or blocks entries when ratio=0
+
+See: docs/17_ADAPTIVE_SMART_GRID_V1.md §17.8-17.10, ADR-022, ADR-057, ADR-058
 """
 
 from __future__ import annotations
@@ -339,6 +342,7 @@ class AdaptiveGridPolicy(GridPolicy):
         kill_switch_active: bool = False,
         toxicity_result: GatingResult | None = None,
         l2_features: L2FeatureSnapshot | None = None,
+        dd_budget_ratio: Decimal | None = None,
     ) -> GridPlan:
         """Evaluate features and return adaptive grid plan.
 
@@ -354,10 +358,20 @@ class AdaptiveGridPolicy(GridPolicy):
             kill_switch_active: Whether kill-switch is triggered
             toxicity_result: Result from toxicity gate
             l2_features: Optional L2 feature snapshot for v2 gating (M7-03)
+            dd_budget_ratio: Pre-computed DD budget ratio [0..1] from DdAllocator (M7-04).
+                - None: no DD scaling (v1 behavior)
+                - 1.0: no scaling
+                - 0 < ratio < 1: scale size_schedule by ratio
+                - 0.0: block all new entries
 
         Returns:
             GridPlan with adaptive configuration
+
+        Raises:
+            ValueError: If dd_budget_ratio is out of range [0..1]
         """
+        # Validate dd_budget_ratio (M7-04, ADR-058)
+        self._validate_dd_budget_ratio(dd_budget_ratio)
         mid_price = features.get("mid_price")
         if mid_price is None:
             raise KeyError("mid_price is required in features")
@@ -447,6 +461,19 @@ class AdaptiveGridPolicy(GridPolicy):
                 step_bps=step_bps,
                 price=mid_price,
             )
+
+        # Apply DD budget ratio (M7-04, ADR-058)
+        final_levels_up, final_levels_down, size_schedule, dd_reason_codes = (
+            self._apply_dd_budget_ratio(
+                levels_up=final_levels_up,
+                levels_down=final_levels_down,
+                size_schedule=size_schedule,
+                dd_budget_ratio=dd_budget_ratio,
+            )
+        )
+        reason_codes.extend(dd_reason_codes)
+        if dd_budget_ratio == Decimal("0"):
+            reset_action = ResetAction.HARD
 
         return GridPlan(
             mode=GridMode.BILATERAL,
@@ -565,6 +592,62 @@ class AdaptiveGridPolicy(GridPolicy):
             block_sell_side=block_sell,
             reason_codes=reason_codes,
         )
+
+    def _validate_dd_budget_ratio(self, dd_budget_ratio: Decimal | None) -> None:
+        """Validate dd_budget_ratio is in [0..1] range (M7-04, ADR-058)."""
+        if dd_budget_ratio is not None and (
+            dd_budget_ratio < Decimal("0") or dd_budget_ratio > Decimal("1")
+        ):
+            raise ValueError(f"dd_budget_ratio must be in [0..1], got {dd_budget_ratio}")
+
+    def _apply_dd_budget_ratio(
+        self,
+        levels_up: int,
+        levels_down: int,
+        size_schedule: list[Decimal],
+        dd_budget_ratio: Decimal | None,
+    ) -> tuple[int, int, list[Decimal], list[str]]:
+        """Apply DD budget ratio to grid sizing (M7-04, ADR-058).
+
+        Pure helper function for deterministic DD ratio application.
+
+        Args:
+            levels_up: Number of sell-side levels
+            levels_down: Number of buy-side levels
+            size_schedule: Per-level sizing quantities
+            dd_budget_ratio: Pre-computed ratio from DdAllocator [0..1] or None
+
+        Returns:
+            Tuple of (levels_up, levels_down, size_schedule, reason_codes)
+
+        Semantics:
+        - None: no scaling (v1 behavior, no reason codes)
+        - 1.0: no scaling (DD_RATIO_NONE not emitted for ratio=1)
+        - 0 < ratio < 1: scale size_schedule quantities
+        - 0.0: block all new entries (levels = 0)
+        """
+        reason_codes: list[str] = []
+
+        # No DD ratio provided: v1 behavior
+        if dd_budget_ratio is None:
+            return levels_up, levels_down, size_schedule, reason_codes
+
+        # Ratio is exactly 1: no scaling needed
+        if dd_budget_ratio == Decimal("1"):
+            return levels_up, levels_down, size_schedule, reason_codes
+
+        # Ratio is 0: block all new entries
+        if dd_budget_ratio == Decimal("0"):
+            reason_codes.append("DD_BLOCK_ENTRIES")
+            return 0, 0, [], reason_codes
+
+        # 0 < ratio < 1: scale size_schedule
+        # Note: No rounding here - policy outputs exact Decimal values.
+        # Symbol-specific lot size rounding happens at execution layer.
+        scaled_schedule = [qty * dd_budget_ratio for qty in size_schedule]
+
+        reason_codes.append("DD_SCALE_APPLIED")
+        return levels_up, levels_down, scaled_schedule, reason_codes
 
     def _create_pause_plan(
         self,
