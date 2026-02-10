@@ -1347,6 +1347,12 @@ Comprehensive adaptive grid system design:
       - LOT_SIZE filter parsing for stepSize/minQty
       - Cache location: `var/cache/exchange_info_futures.json`
       - See ADR-060
+    - **ExecutionEngineConfig (M7-07):** Wiring ConstraintProvider with explicit enablement
+      - `ExecutionEngineConfig(constraints_enabled=False)` — default OFF for safety
+      - `constraint_provider` parameter for lazy loading
+      - Symbol constraints only applied when `constraints_enabled=True`
+      - Backward compatible: existing code unchanged
+      - See ADR-061
     - **Fixture:** `sample_day_adaptive` — paper digest `1b8af993a8435ee6`
   - ✅ **Top-K v1 (ASM-P1-06):** Feature-based symbol selection (see ADR-023)
     - **Opt-in:** `topk_v1_enabled=False` default (backward compat with existing digests)

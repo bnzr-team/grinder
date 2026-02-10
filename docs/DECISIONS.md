@@ -3068,3 +3068,96 @@ engine = ExecutionEngine(port=port, symbol_constraints=constraints)
 
 - ADR-059: ExecutionEngine qty constraints
 - ADR-058: DD budget ratio (policy-level)
+
+## ADR-061 — M7-07: ExecutionEngineConfig with constraints_enabled flag
+
+**Status:** Accepted
+**Date:** 2026-02-10
+**Deciders:** Core team
+**Scope:** Wiring ConstraintProvider to ExecutionEngine with explicit enablement
+
+### Context
+
+ADR-059/060 introduced symbol constraints and ConstraintProvider, but constraints
+were applied automatically whenever `symbol_constraints` dict was non-empty.
+
+For safe rollout, we need:
+1. An explicit config flag to enable/disable constraint application
+2. Lazy loading of constraints from provider
+3. Backward compatibility (default = disabled)
+
+### Decision
+
+1. **ExecutionEngineConfig dataclass:**
+   ```python
+   @dataclass(frozen=True)
+   class ExecutionEngineConfig:
+       constraints_enabled: bool = False  # Default OFF for safety
+   ```
+
+2. **Engine accepts config and provider:**
+   ```python
+   engine = ExecutionEngine(
+       port=port,
+       config=ExecutionEngineConfig(constraints_enabled=True),
+       constraint_provider=provider,  # Lazy loading
+   )
+   ```
+
+3. **Constraint application logic:**
+   - If `config.constraints_enabled=False`: pass-through (no rounding, no minQty check)
+   - If `config.constraints_enabled=True`: apply floor_to_step + minQty validation
+   - Constraints lazy-loaded from provider on first use
+
+4. **Priority order:**
+   - `symbol_constraints` dict (direct) takes precedence over provider
+   - Allows test fixtures to override provider
+
+5. **Backward compatibility:**
+   - Default config = `constraints_enabled=False`
+   - Existing code without config = no behavior change
+   - M7-05/06 tests updated to pass `config=ExecutionEngineConfig(constraints_enabled=True)`
+
+### API Contract
+
+```python
+from grinder.execution import (
+    ExecutionEngine,
+    ExecutionEngineConfig,
+    ConstraintProvider,
+)
+
+# Explicit enablement (recommended for production)
+config = ExecutionEngineConfig(constraints_enabled=True)
+provider = ConstraintProvider.from_cache(cache_path)
+engine = ExecutionEngine(port=port, config=config, constraint_provider=provider)
+
+# Direct constraints (for tests)
+engine = ExecutionEngine(
+    port=port,
+    symbol_constraints=constraints,
+    config=ExecutionEngineConfig(constraints_enabled=True),
+)
+
+# Disabled (default, backward compatible)
+engine = ExecutionEngine(port=port)  # No constraints applied
+```
+
+### Non-goals
+
+- Runtime toggle of constraints_enabled
+- Per-symbol enable/disable
+- Hot-reload of constraints
+
+### Consequences
+
+- Safe rollout: constraints can be loaded but not applied until explicitly enabled
+- Lazy loading: provider not called until first order placement
+- Backward compatible: existing code works unchanged
+- Tests must explicitly enable constraints to test constraint behavior
+
+### Related
+
+- ADR-059: ExecutionEngine qty constraints (implementation)
+- ADR-060: ConstraintProvider (loading)
+- ADR-058: DD budget ratio (policy-level)

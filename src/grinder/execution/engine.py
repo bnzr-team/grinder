@@ -26,8 +26,22 @@ from grinder.execution.types import (
 )
 
 if TYPE_CHECKING:
+    from grinder.execution.constraint_provider import ConstraintProvider
     from grinder.execution.port import ExchangePort
     from grinder.policies.base import GridPlan
+
+
+@dataclass(frozen=True)
+class ExecutionEngineConfig:
+    """Configuration for ExecutionEngine (M7-07, ADR-061).
+
+    Attributes:
+        constraints_enabled: Whether to apply symbol qty constraints.
+            When False (default), constraints are ignored even if provided.
+            When True, step_size rounding and min_qty validation are applied.
+    """
+
+    constraints_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -104,6 +118,8 @@ class ExecutionEngine:
         price_precision: int = 2,
         quantity_precision: int = 3,
         symbol_constraints: dict[str, SymbolConstraints] | None = None,
+        config: ExecutionEngineConfig | None = None,
+        constraint_provider: ConstraintProvider | None = None,
     ) -> None:
         """Initialize execution engine.
 
@@ -111,12 +127,39 @@ class ExecutionEngine:
             port: Exchange port for order operations
             price_precision: Decimal places for price rounding
             quantity_precision: Decimal places for quantity rounding
-            symbol_constraints: Per-symbol step_size/min_qty constraints (M7-05)
+            symbol_constraints: Per-symbol step_size/min_qty constraints (M7-05).
+                Takes precedence over constraint_provider if both provided.
+            config: Engine configuration (M7-07). Defaults to constraints_enabled=False.
+            constraint_provider: Provider for lazy-loading constraints (M7-07).
+                Only used if symbol_constraints is not provided.
         """
         self._port = port
         self._price_precision = price_precision
         self._quantity_precision = quantity_precision
-        self._symbol_constraints = symbol_constraints or {}
+        self._config = config or ExecutionEngineConfig()
+        self._constraint_provider = constraint_provider
+        self._symbol_constraints: dict[str, SymbolConstraints] | None = symbol_constraints
+        self._constraints_loaded = symbol_constraints is not None
+
+    def _get_symbol_constraints(self) -> dict[str, SymbolConstraints]:
+        """Get symbol constraints, loading from provider if needed (M7-07).
+
+        Lazy loading: constraints are loaded on first access if a provider
+        is configured and symbol_constraints wasn't passed directly.
+
+        Returns:
+            Dict mapping symbol -> SymbolConstraints (may be empty)
+        """
+        if self._constraints_loaded:
+            return self._symbol_constraints or {}
+
+        # Lazy load from provider
+        if self._constraint_provider is not None:
+            self._symbol_constraints = self._constraint_provider.get_constraints()
+        else:
+            self._symbol_constraints = {}
+        self._constraints_loaded = True
+        return self._symbol_constraints
 
     def _round_price(self, price: Decimal) -> Decimal:
         """Round price to configured precision."""
@@ -135,6 +178,8 @@ class ExecutionEngine:
         1. Floor to step_size (lot size rounding)
         2. Validate against min_qty
 
+        Constraints are only applied if config.constraints_enabled=True (M7-07).
+
         Args:
             qty: Raw quantity from policy
             symbol: Trading symbol for constraint lookup
@@ -142,9 +187,14 @@ class ExecutionEngine:
         Returns:
             (rounded_qty, reason_code) - reason_code is None if valid,
             or "EXEC_QTY_BELOW_MIN_QTY" if qty rounds to below minimum.
-            If no constraints configured, returns (qty, None) unchanged.
+            If constraints disabled or not configured, returns (qty, None) unchanged.
         """
-        constraints = self._symbol_constraints.get(symbol)
+        # M7-07: Check config flag first
+        if not self._config.constraints_enabled:
+            return qty, None
+
+        symbol_constraints = self._get_symbol_constraints()
+        constraints = symbol_constraints.get(symbol)
         if constraints is None:
             return qty, None
 

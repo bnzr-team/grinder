@@ -26,6 +26,7 @@ from grinder.execution.constraint_provider import (
 )
 from grinder.execution.engine import (
     ExecutionEngine,
+    ExecutionEngineConfig,
     ExecutionResult,
     GridLevel,
     SymbolConstraints,
@@ -51,6 +52,7 @@ __all__ = [
     "ExchangePort",
     "ExecutionAction",
     "ExecutionEngine",
+    "ExecutionEngineConfig",
     "ExecutionEvent",
     "ExecutionMetrics",
     "ExecutionResult",

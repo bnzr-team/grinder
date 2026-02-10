@@ -11,6 +11,7 @@ Tests verify the requirements from docs/ROADMAP.md DoD for PR-017:
 from __future__ import annotations
 
 from decimal import Decimal
+from pathlib import Path
 
 import pytest
 
@@ -23,7 +24,8 @@ from grinder.execution import (
     NoOpExchangePort,
     OrderRecord,
 )
-from grinder.execution.engine import SymbolConstraints, floor_to_step
+from grinder.execution.constraint_provider import ConstraintProvider
+from grinder.execution.engine import ExecutionEngineConfig, SymbolConstraints, floor_to_step
 from grinder.execution.metrics import ExecutionMetrics
 from grinder.policies.base import GridPlan
 
@@ -971,7 +973,8 @@ class TestApplyQtyConstraints:
                 min_qty=Decimal("0.01"),
             )
         }
-        engine = ExecutionEngine(port=port, symbol_constraints=constraints)
+        config = ExecutionEngineConfig(constraints_enabled=True)
+        engine = ExecutionEngine(port=port, symbol_constraints=constraints, config=config)
 
         # 0.005 floored to 0.001 = 0.005, which is < 0.01
         rounded_qty, reason = engine._apply_qty_constraints(Decimal("0.005"), "BTCUSDT")
@@ -988,7 +991,8 @@ class TestApplyQtyConstraints:
                 min_qty=Decimal("0.01"),
             )
         }
-        engine = ExecutionEngine(port=port, symbol_constraints=constraints)
+        config = ExecutionEngineConfig(constraints_enabled=True)
+        engine = ExecutionEngine(port=port, symbol_constraints=constraints, config=config)
 
         # 0.02345 floored to 0.001 = 0.023, which is >= 0.01
         rounded_qty, reason = engine._apply_qty_constraints(Decimal("0.02345"), "BTCUSDT")
@@ -999,7 +1003,8 @@ class TestApplyQtyConstraints:
     def test_apply_constraints_no_constraints(self) -> None:
         """Test passes through when no constraints configured for symbol."""
         port = NoOpExchangePort()
-        engine = ExecutionEngine(port=port, symbol_constraints={})
+        config = ExecutionEngineConfig(constraints_enabled=True)
+        engine = ExecutionEngine(port=port, symbol_constraints={}, config=config)
 
         qty, reason = engine._apply_qty_constraints(Decimal("0.00001"), "BTCUSDT")
 
@@ -1019,7 +1024,8 @@ class TestEngineSkipsOrderBelowMin:
                 min_qty=Decimal("0.1"),  # High min to trigger skip
             )
         }
-        engine = ExecutionEngine(port=port, symbol_constraints=constraints)
+        config = ExecutionEngineConfig(constraints_enabled=True)
+        engine = ExecutionEngine(port=port, symbol_constraints=constraints, config=config)
 
         # Plan with very small qty that will be below min
         plan = GridPlan(
@@ -1051,3 +1057,180 @@ class TestEngineSkipsOrderBelowMin:
 
         # State should have no open orders (all skipped)
         assert len(result.state.open_orders) == 0
+
+
+# --- Tests: M7-07 Constraints Config Flag ---
+
+
+class TestConstraintsEnabledFlag:
+    """Tests for ExecutionEngineConfig.constraints_enabled (M7-07, ADR-061)."""
+
+    def test_constraints_disabled_by_default(self) -> None:
+        """Test constraints are NOT applied when config is default (disabled)."""
+        port = NoOpExchangePort()
+        constraints = {
+            "BTCUSDT": SymbolConstraints(
+                step_size=Decimal("0.001"),
+                min_qty=Decimal("0.1"),  # High min that would trigger skip if enabled
+            )
+        }
+        # No config = default = constraints_enabled=False
+        engine = ExecutionEngine(port=port, symbol_constraints=constraints)
+
+        # Plan with qty below min_qty
+        plan = GridPlan(
+            mode=GridMode.BILATERAL,
+            center_price=Decimal("50000"),
+            spacing_bps=10.0,
+            levels_up=1,
+            levels_down=1,
+            size_schedule=[Decimal("0.05")],  # Would be skipped if constraints enabled
+            reason_codes=["TEST"],
+        )
+
+        empty_state = ExecutionState(open_orders={}, last_plan_digest="", tick_counter=0)
+        result = engine.evaluate(plan, "BTCUSDT", empty_state, ts=1000)
+
+        # With constraints disabled, orders should be placed (no skipping)
+        assert len(result.state.open_orders) == 2
+        skipped_events = [e for e in result.events if e.event_type == "ORDER_SKIPPED"]
+        assert len(skipped_events) == 0
+
+    def test_constraints_disabled_explicit(self) -> None:
+        """Test constraints NOT applied when explicitly disabled."""
+        port = NoOpExchangePort()
+        constraints = {
+            "BTCUSDT": SymbolConstraints(
+                step_size=Decimal("0.001"),
+                min_qty=Decimal("0.1"),
+            )
+        }
+        config = ExecutionEngineConfig(constraints_enabled=False)
+        engine = ExecutionEngine(port=port, symbol_constraints=constraints, config=config)
+
+        # _apply_qty_constraints should pass through
+        qty, reason = engine._apply_qty_constraints(Decimal("0.05"), "BTCUSDT")
+
+        assert qty == Decimal("0.05")  # Not rounded
+        assert reason is None  # Not rejected
+
+    def test_constraints_enabled_applies_constraints(self) -> None:
+        """Test constraints ARE applied when explicitly enabled."""
+        port = NoOpExchangePort()
+        constraints = {
+            "BTCUSDT": SymbolConstraints(
+                step_size=Decimal("0.001"),
+                min_qty=Decimal("0.1"),
+            )
+        }
+        config = ExecutionEngineConfig(constraints_enabled=True)
+        engine = ExecutionEngine(port=port, symbol_constraints=constraints, config=config)
+
+        # _apply_qty_constraints should round and reject
+        qty, reason = engine._apply_qty_constraints(Decimal("0.05"), "BTCUSDT")
+
+        assert qty == Decimal("0.050")  # Rounded to step
+        assert reason == "EXEC_QTY_BELOW_MIN_QTY"  # Rejected
+
+    def test_backward_compatible_no_constraints_no_config(self) -> None:
+        """Test backward compatibility: no constraints, no config = pass-through."""
+        port = NoOpExchangePort()
+        engine = ExecutionEngine(port=port)
+
+        # Plan should work exactly as before
+        plan = GridPlan(
+            mode=GridMode.BILATERAL,
+            center_price=Decimal("50000"),
+            spacing_bps=10.0,
+            levels_up=1,
+            levels_down=1,
+            size_schedule=[Decimal("0.001")],  # Valid qty for default precision
+            reason_codes=["TEST"],
+        )
+
+        empty_state = ExecutionState(open_orders={}, last_plan_digest="", tick_counter=0)
+        result = engine.evaluate(plan, "BTCUSDT", empty_state, ts=1000)
+
+        # Orders placed with original qty (only basic precision rounding)
+        assert len(result.state.open_orders) == 2
+
+
+class TestConstraintProviderLazyLoading:
+    """Tests for constraint_provider lazy loading (M7-07, ADR-061)."""
+
+    def test_lazy_load_from_provider(self) -> None:
+        """Test constraints are lazy loaded from provider when needed."""
+        # Create provider from fixture
+        fixture_path = (
+            Path(__file__).parent.parent
+            / "fixtures"
+            / "exchange_info"
+            / "binance_futures_usdt.json"
+        )
+        provider = ConstraintProvider.from_cache(fixture_path)
+
+        # Engine with provider and constraints enabled
+        port = NoOpExchangePort()
+        config = ExecutionEngineConfig(constraints_enabled=True)
+        engine = ExecutionEngine(port=port, config=config, constraint_provider=provider)
+
+        # Constraints should not be loaded yet (lazy)
+        assert engine._constraints_loaded is False
+
+        # Plan that triggers constraint check
+        plan = GridPlan(
+            mode=GridMode.BILATERAL,
+            center_price=Decimal("50000"),
+            spacing_bps=10.0,
+            levels_up=1,
+            levels_down=1,
+            size_schedule=[Decimal("0.0015")],  # Will floor to 0.001
+            reason_codes=["TEST"],
+        )
+
+        empty_state = ExecutionState(open_orders={}, last_plan_digest="", tick_counter=0)
+        result = engine.evaluate(plan, "BTCUSDT", empty_state, ts=1000)
+
+        # Constraints should now be loaded
+        assert engine._constraints_loaded is True
+
+        # Qty should be floored to step_size (0.001)
+        placed_orders = list(result.state.open_orders.values())
+        assert len(placed_orders) == 2
+        for order in placed_orders:
+            assert order.quantity == Decimal("0.001")
+
+    def test_symbol_constraints_takes_precedence_over_provider(self) -> None:
+        """Test symbol_constraints dict takes precedence over provider."""
+        # Create provider from fixture (has BTC step_size=0.001)
+        fixture_path = (
+            Path(__file__).parent.parent
+            / "fixtures"
+            / "exchange_info"
+            / "binance_futures_usdt.json"
+        )
+        provider = ConstraintProvider.from_cache(fixture_path)
+
+        # Create engine with both direct constraints AND provider
+        # Direct constraints use step_size=0.01 (different from provider's 0.001)
+        port = NoOpExchangePort()
+        direct_constraints = {
+            "BTCUSDT": SymbolConstraints(
+                step_size=Decimal("0.01"),  # Different from fixture
+                min_qty=Decimal("0.01"),
+            )
+        }
+        config = ExecutionEngineConfig(constraints_enabled=True)
+        engine = ExecutionEngine(
+            port=port,
+            symbol_constraints=direct_constraints,
+            config=config,
+            constraint_provider=provider,
+        )
+
+        # Constraints already loaded (from direct dict)
+        assert engine._constraints_loaded is True
+
+        # Should use direct constraints, not provider
+        qty, _reason = engine._apply_qty_constraints(Decimal("0.025"), "BTCUSDT")
+        assert qty == Decimal("0.02")  # Floored to 0.01 step, not 0.001
