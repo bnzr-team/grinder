@@ -28,20 +28,35 @@ from grinder.execution.types import (
 if TYPE_CHECKING:
     from grinder.execution.constraint_provider import ConstraintProvider
     from grinder.execution.port import ExchangePort
+    from grinder.features.l2_types import L2FeatureSnapshot
     from grinder.policies.base import GridPlan
 
 
 @dataclass(frozen=True)
 class ExecutionEngineConfig:
-    """Configuration for ExecutionEngine (M7-07, ADR-061).
+    """Configuration for ExecutionEngine (M7-07, ADR-061; M7-09, ADR-062).
 
     Attributes:
         constraints_enabled: Whether to apply symbol qty constraints.
             When False (default), constraints are ignored even if provided.
             When True, step_size rounding and min_qty validation are applied.
+
+        l2_execution_guard_enabled: Whether to apply L2-based guards on PLACE actions.
+            When False (default), L2 features are ignored.
+            When True, checks for stale data, insufficient depth, and high impact.
+
+        l2_execution_max_age_ms: Maximum age in ms for L2 snapshot before considered stale.
+            Only used when l2_execution_guard_enabled=True.
+
+        l2_execution_impact_threshold_bps: Impact threshold in bps to skip order.
+            Orders with impact >= threshold will be skipped.
+            Only used when l2_execution_guard_enabled=True.
     """
 
     constraints_enabled: bool = False
+    l2_execution_guard_enabled: bool = False
+    l2_execution_max_age_ms: int = 1500
+    l2_execution_impact_threshold_bps: int = 50
 
 
 @dataclass(frozen=True)
@@ -120,6 +135,7 @@ class ExecutionEngine:
         symbol_constraints: dict[str, SymbolConstraints] | None = None,
         config: ExecutionEngineConfig | None = None,
         constraint_provider: ConstraintProvider | None = None,
+        l2_features: dict[str, L2FeatureSnapshot] | None = None,
     ) -> None:
         """Initialize execution engine.
 
@@ -132,6 +148,8 @@ class ExecutionEngine:
             config: Engine configuration (M7-07). Defaults to constraints_enabled=False.
             constraint_provider: Provider for lazy-loading constraints (M7-07).
                 Only used if symbol_constraints is not provided.
+            l2_features: Per-symbol L2 feature snapshots for execution guards (M7-09).
+                Only used when config.l2_execution_guard_enabled=True.
         """
         self._port = port
         self._price_precision = price_precision
@@ -140,6 +158,7 @@ class ExecutionEngine:
         self._constraint_provider = constraint_provider
         self._symbol_constraints: dict[str, SymbolConstraints] | None = symbol_constraints
         self._constraints_loaded = symbol_constraints is not None
+        self._l2_features: dict[str, L2FeatureSnapshot] | None = l2_features
 
     def _get_symbol_constraints(self) -> dict[str, SymbolConstraints]:
         """Get symbol constraints, loading from provider if needed (M7-07).
@@ -206,6 +225,70 @@ class ExecutionEngine:
             return rounded_qty, "EXEC_QTY_BELOW_MIN_QTY"
 
         return rounded_qty, None
+
+    def _apply_l2_guard(
+        self,
+        symbol: str,
+        side: OrderSide,
+        ts: int,
+    ) -> tuple[bool, str | None]:
+        """Apply L2-based execution guard for PLACE actions (M7-09, ADR-062).
+
+        Single point of application for L2 guards:
+        1. Check for stale L2 data (ts - snapshot.ts_ms > max_age_ms)
+        2. Check for insufficient depth on the relevant side
+        3. Check for impact above threshold on the relevant side
+
+        Guards are only applied if config.l2_execution_guard_enabled=True.
+
+        Args:
+            symbol: Trading symbol
+            side: Order side (BUY/SELL) to check appropriate L2 metrics
+            ts: Current timestamp in ms
+
+        Returns:
+            (should_skip, reason_code) - should_skip=True means skip the order,
+            reason_code is one of:
+                - "EXEC_L2_STALE": L2 data too old
+                - "EXEC_L2_INSUFFICIENT_DEPTH_BUY/SELL": Not enough depth
+                - "EXEC_L2_IMPACT_BUY_HIGH/SELL_HIGH": Impact above threshold
+            Returns (False, None) if guard passes or is disabled.
+        """
+        # M7-09: Pass-through checks (config disabled, no features, no symbol)
+        if not self._config.l2_execution_guard_enabled or self._l2_features is None:
+            return False, None
+
+        snapshot = self._l2_features.get(symbol)
+        if snapshot is None:
+            return False, None
+
+        # Guard 1: Check staleness
+        age_ms = ts - snapshot.ts_ms
+        if age_ms > self._config.l2_execution_max_age_ms:
+            return True, "EXEC_L2_STALE"
+
+        # Guard 2 & 3: Check depth and impact for the order side
+        threshold = self._config.l2_execution_impact_threshold_bps
+        return self._check_l2_side_guards(snapshot, side, threshold)
+
+    def _check_l2_side_guards(
+        self,
+        snapshot: L2FeatureSnapshot,
+        side: OrderSide,
+        threshold: int,
+    ) -> tuple[bool, str | None]:
+        """Check L2 depth and impact guards for a specific side."""
+        if side == OrderSide.BUY:
+            if snapshot.impact_buy_topN_insufficient_depth == 1:
+                return True, "EXEC_L2_INSUFFICIENT_DEPTH_BUY"
+            if snapshot.impact_buy_topN_bps >= threshold:
+                return True, "EXEC_L2_IMPACT_BUY_HIGH"
+        else:
+            if snapshot.impact_sell_topN_insufficient_depth == 1:
+                return True, "EXEC_L2_INSUFFICIENT_DEPTH_SELL"
+            if snapshot.impact_sell_topN_bps >= threshold:
+                return True, "EXEC_L2_IMPACT_SELL_HIGH"
+        return False, None
 
     def _compute_plan_digest(self, plan: GridPlan) -> str:
         """Compute deterministic digest of a plan."""
@@ -511,6 +594,26 @@ class ExecutionEngine:
 
             elif action.action_type == ActionType.PLACE:
                 if action.side and action.price and action.quantity:
+                    # M7-09: Apply L2 guard first (before qty constraints)
+                    l2_skip, l2_reason = self._apply_l2_guard(action.symbol, action.side, ts)
+                    if l2_skip and l2_reason:
+                        # Skip order - L2 guard triggered
+                        events.append(
+                            ExecutionEvent(
+                                ts=ts,
+                                event_type="ORDER_SKIPPED",
+                                symbol=action.symbol,
+                                details={
+                                    "reason": l2_reason,
+                                    "level_id": action.level_id,
+                                    "side": action.side.value,
+                                    "price": str(action.price),
+                                    "quantity": str(action.quantity),
+                                },
+                            )
+                        )
+                        continue
+
                     # M7-05: Apply symbol constraints (step_size, min_qty)
                     final_qty, constraint_reason = self._apply_qty_constraints(
                         action.quantity, action.symbol

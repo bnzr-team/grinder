@@ -27,6 +27,7 @@ from grinder.execution import (
 from grinder.execution.constraint_provider import ConstraintProvider
 from grinder.execution.engine import ExecutionEngineConfig, SymbolConstraints, floor_to_step
 from grinder.execution.metrics import ExecutionMetrics
+from grinder.features.l2_types import L2FeatureSnapshot
 from grinder.policies.base import GridPlan
 
 # --- Fixtures ---
@@ -1234,3 +1235,283 @@ class TestConstraintProviderLazyLoading:
         # Should use direct constraints, not provider
         qty, _reason = engine._apply_qty_constraints(Decimal("0.025"), "BTCUSDT")
         assert qty == Decimal("0.02")  # Floored to 0.01 step, not 0.001
+
+
+class TestL2ExecutionGuard:
+    """Tests for L2 execution guard (M7-09, ADR-062)."""
+
+    @pytest.fixture
+    def fresh_l2_snapshot(self) -> L2FeatureSnapshot:
+        """L2 snapshot with good conditions (low impact, sufficient depth)."""
+        return L2FeatureSnapshot(
+            ts_ms=1000,
+            symbol="BTCUSDT",
+            venue="binance_futures",
+            depth=5,
+            depth_bid_qty_topN=Decimal("100"),
+            depth_ask_qty_topN=Decimal("100"),
+            depth_imbalance_topN_bps=0,
+            impact_buy_topN_bps=10,  # Low impact
+            impact_sell_topN_bps=10,
+            impact_buy_topN_insufficient_depth=0,
+            impact_sell_topN_insufficient_depth=0,
+            wall_bid_score_topN_x1000=1000,
+            wall_ask_score_topN_x1000=1000,
+            qty_ref=Decimal("1"),
+        )
+
+    @pytest.fixture
+    def stale_l2_snapshot(self) -> L2FeatureSnapshot:
+        """L2 snapshot that will be stale (old ts_ms)."""
+        return L2FeatureSnapshot(
+            ts_ms=0,  # Very old
+            symbol="BTCUSDT",
+            venue="binance_futures",
+            depth=5,
+            depth_bid_qty_topN=Decimal("100"),
+            depth_ask_qty_topN=Decimal("100"),
+            depth_imbalance_topN_bps=0,
+            impact_buy_topN_bps=10,
+            impact_sell_topN_bps=10,
+            impact_buy_topN_insufficient_depth=0,
+            impact_sell_topN_insufficient_depth=0,
+            wall_bid_score_topN_x1000=1000,
+            wall_ask_score_topN_x1000=1000,
+            qty_ref=Decimal("1"),
+        )
+
+    @pytest.fixture
+    def insufficient_depth_buy_snapshot(self) -> L2FeatureSnapshot:
+        """L2 snapshot with insufficient buy depth."""
+        return L2FeatureSnapshot(
+            ts_ms=1000,
+            symbol="BTCUSDT",
+            venue="binance_futures",
+            depth=5,
+            depth_bid_qty_topN=Decimal("100"),
+            depth_ask_qty_topN=Decimal("10"),
+            depth_imbalance_topN_bps=0,
+            impact_buy_topN_bps=500,  # Sentinel value
+            impact_sell_topN_bps=10,
+            impact_buy_topN_insufficient_depth=1,  # Insufficient
+            impact_sell_topN_insufficient_depth=0,
+            wall_bid_score_topN_x1000=1000,
+            wall_ask_score_topN_x1000=1000,
+            qty_ref=Decimal("1"),
+        )
+
+    @pytest.fixture
+    def high_impact_sell_snapshot(self) -> L2FeatureSnapshot:
+        """L2 snapshot with high sell impact."""
+        return L2FeatureSnapshot(
+            ts_ms=1000,
+            symbol="BTCUSDT",
+            venue="binance_futures",
+            depth=5,
+            depth_bid_qty_topN=Decimal("100"),
+            depth_ask_qty_topN=Decimal("100"),
+            depth_imbalance_topN_bps=0,
+            impact_buy_topN_bps=10,
+            impact_sell_topN_bps=100,  # High impact (> threshold of 50)
+            impact_buy_topN_insufficient_depth=0,
+            impact_sell_topN_insufficient_depth=0,
+            wall_bid_score_topN_x1000=1000,
+            wall_ask_score_topN_x1000=1000,
+            qty_ref=Decimal("1"),
+        )
+
+    def test_l2_guard_disabled_is_noop(self, fresh_l2_snapshot: L2FeatureSnapshot) -> None:
+        """Test L2 guard is no-op when disabled (default)."""
+        port = NoOpExchangePort()
+        # Default config has l2_execution_guard_enabled=False
+        engine = ExecutionEngine(
+            port=port,
+            l2_features={"BTCUSDT": fresh_l2_snapshot},
+        )
+
+        # Guard should return False (don't skip)
+        skip, reason = engine._apply_l2_guard("BTCUSDT", OrderSide.BUY, ts=1000)
+
+        assert skip is False
+        assert reason is None
+
+    def test_l2_guard_enabled_missing_features_pass_through(self) -> None:
+        """Test L2 guard passes through when no features provided (safe rollout)."""
+        port = NoOpExchangePort()
+        config = ExecutionEngineConfig(l2_execution_guard_enabled=True)
+        # No l2_features provided
+        engine = ExecutionEngine(port=port, config=config)
+
+        # Guard should return False (pass-through, don't skip)
+        skip, reason = engine._apply_l2_guard("BTCUSDT", OrderSide.BUY, ts=1000)
+
+        assert skip is False
+        assert reason is None
+
+    def test_l2_guard_stale_skips_place(self, stale_l2_snapshot: L2FeatureSnapshot) -> None:
+        """Test L2 guard skips PLACE when L2 data is stale."""
+        port = NoOpExchangePort()
+        config = ExecutionEngineConfig(
+            l2_execution_guard_enabled=True,
+            l2_execution_max_age_ms=1500,
+        )
+        engine = ExecutionEngine(
+            port=port,
+            config=config,
+            l2_features={"BTCUSDT": stale_l2_snapshot},  # ts_ms=0
+        )
+
+        # ts=2000 means snapshot age = 2000 - 0 = 2000ms > max_age_ms=1500
+        skip, reason = engine._apply_l2_guard("BTCUSDT", OrderSide.BUY, ts=2000)
+
+        assert skip is True
+        assert reason == "EXEC_L2_STALE"
+
+    def test_l2_guard_insufficient_depth_buy_skips(
+        self, insufficient_depth_buy_snapshot: L2FeatureSnapshot
+    ) -> None:
+        """Test L2 guard skips BUY when buy depth is insufficient."""
+        port = NoOpExchangePort()
+        config = ExecutionEngineConfig(l2_execution_guard_enabled=True)
+        engine = ExecutionEngine(
+            port=port,
+            config=config,
+            l2_features={"BTCUSDT": insufficient_depth_buy_snapshot},
+        )
+
+        # BUY order should be skipped
+        skip, reason = engine._apply_l2_guard("BTCUSDT", OrderSide.BUY, ts=1000)
+
+        assert skip is True
+        assert reason == "EXEC_L2_INSUFFICIENT_DEPTH_BUY"
+
+        # SELL order should NOT be skipped (sell depth is fine)
+        skip, reason = engine._apply_l2_guard("BTCUSDT", OrderSide.SELL, ts=1000)
+
+        assert skip is False
+        assert reason is None
+
+    def test_l2_guard_impact_high_sell_skips(
+        self, high_impact_sell_snapshot: L2FeatureSnapshot
+    ) -> None:
+        """Test L2 guard skips SELL when sell impact is too high."""
+        port = NoOpExchangePort()
+        config = ExecutionEngineConfig(
+            l2_execution_guard_enabled=True,
+            l2_execution_impact_threshold_bps=50,  # Threshold
+        )
+        engine = ExecutionEngine(
+            port=port,
+            config=config,
+            l2_features={"BTCUSDT": high_impact_sell_snapshot},  # sell impact=100
+        )
+
+        # SELL order should be skipped (100 >= 50 threshold)
+        skip, reason = engine._apply_l2_guard("BTCUSDT", OrderSide.SELL, ts=1000)
+
+        assert skip is True
+        assert reason == "EXEC_L2_IMPACT_SELL_HIGH"
+
+        # BUY order should NOT be skipped (buy impact=10 < 50)
+        skip, reason = engine._apply_l2_guard("BTCUSDT", OrderSide.BUY, ts=1000)
+
+        assert skip is False
+        assert reason is None
+
+    def test_l2_guard_applies_only_to_place_not_cancel(
+        self, stale_l2_snapshot: L2FeatureSnapshot
+    ) -> None:
+        """Test L2 guard does NOT affect CANCEL actions (only PLACE)."""
+        port = NoOpExchangePort()
+        config = ExecutionEngineConfig(l2_execution_guard_enabled=True)
+        engine = ExecutionEngine(
+            port=port,
+            config=config,
+            l2_features={"BTCUSDT": stale_l2_snapshot},
+        )
+
+        # Create state with an existing order
+        existing_order = OrderRecord(
+            order_id="order-1",
+            symbol="BTCUSDT",
+            side=OrderSide.BUY,
+            price=Decimal("50000"),
+            quantity=Decimal("0.1"),
+            state=OrderState.OPEN,
+            level_id=1,
+            created_ts=500,
+        )
+        state = ExecutionState(
+            open_orders={"order-1": existing_order},
+            last_plan_digest="",
+            tick_counter=0,
+        )
+
+        # PAUSE plan cancels all orders
+        pause_plan = GridPlan(
+            mode=GridMode.PAUSE,
+            center_price=Decimal("50000"),
+            spacing_bps=10.0,
+            levels_up=1,
+            levels_down=1,
+            size_schedule=[Decimal("0.1")],
+            reason_codes=["PAUSE"],
+        )
+
+        # Even with stale L2 data, CANCEL should work (L2 guard only affects PLACE)
+        result = engine.evaluate(pause_plan, "BTCUSDT", state, ts=2000)
+
+        # Order should be cancelled
+        cancel_actions = [a for a in result.actions if a.action_type == ActionType.CANCEL]
+        assert len(cancel_actions) == 1
+
+        # No L2-related skip events
+        l2_skips = [
+            e
+            for e in result.events
+            if e.event_type == "ORDER_SKIPPED" and "L2" in e.details.get("reason", "")
+        ]
+        assert len(l2_skips) == 0
+
+    def test_l2_guard_runs_before_qty_constraints(
+        self, stale_l2_snapshot: L2FeatureSnapshot
+    ) -> None:
+        """Test L2 guard runs BEFORE qty constraints (order matters)."""
+        port = NoOpExchangePort()
+        config = ExecutionEngineConfig(
+            l2_execution_guard_enabled=True,
+            constraints_enabled=True,
+        )
+        # Stale L2 data + constraints that would also reject
+        constraints = {
+            "BTCUSDT": SymbolConstraints(
+                step_size=Decimal("0.001"),
+                min_qty=Decimal("1.0"),  # Would reject qty=0.1
+            )
+        }
+        engine = ExecutionEngine(
+            port=port,
+            config=config,
+            symbol_constraints=constraints,
+            l2_features={"BTCUSDT": stale_l2_snapshot},
+        )
+
+        # Plan with qty that would be rejected by both guards
+        plan = GridPlan(
+            mode=GridMode.BILATERAL,
+            center_price=Decimal("50000"),
+            spacing_bps=10.0,
+            levels_up=1,
+            levels_down=1,
+            size_schedule=[Decimal("0.1")],  # < min_qty=1.0
+            reason_codes=["TEST"],
+        )
+
+        empty_state = ExecutionState(open_orders={}, last_plan_digest="", tick_counter=0)
+        result = engine.evaluate(plan, "BTCUSDT", empty_state, ts=2000)
+
+        # L2 guard should fire first (EXEC_L2_STALE), not qty constraint
+        skip_events = [e for e in result.events if e.event_type == "ORDER_SKIPPED"]
+        assert len(skip_events) == 2  # Both BUY and SELL skipped
+        for event in skip_events:
+            assert event.details["reason"] == "EXEC_L2_STALE"  # L2 guard, not qty

@@ -1353,6 +1353,13 @@ Comprehensive adaptive grid system design:
       - Symbol constraints only applied when `constraints_enabled=True`
       - Backward compatible: existing code unchanged
       - See ADR-061
+    - **Execution L2 Guard (M7-09):** Last-mile L2 safety checks at execution layer
+      - `ExecutionEngineConfig.l2_execution_guard_enabled=False` — default OFF for safety
+      - `l2_features: dict[str, L2FeatureSnapshot]` input for L2 data
+      - Guards: staleness (`EXEC_L2_STALE`), insufficient depth (`EXEC_L2_INSUFFICIENT_DEPTH_*`), high impact (`EXEC_L2_IMPACT_*_HIGH`)
+      - Runs BEFORE qty constraints, only on PLACE actions
+      - Pass-through when features missing (safe rollout)
+      - See ADR-062
     - **Fixture:** `sample_day_adaptive` — paper digest `1b8af993a8435ee6`
   - ✅ **Top-K v1 (ASM-P1-06):** Feature-based symbol selection (see ADR-023)
     - **Opt-in:** `topk_v1_enabled=False` default (backward compat with existing digests)
