@@ -2981,3 +2981,90 @@ Orders with qty < minQty are rejected by the exchange. We must handle this grace
 
 - ADR-058: DD budget ratio (policy-level, no rounding)
 - ADR-032: DdAllocator
+
+## ADR-060 — M7-06: ConstraintProvider for symbol step_size/min_qty
+
+**Status:** Accepted
+**Date:** 2026-02-10
+**Deciders:** Core team
+**Scope:** Automated loading of symbol constraints from Binance exchangeInfo
+
+### Context
+
+ADR-059 introduced `ExecutionEngine.symbol_constraints` but left it empty by default.
+To enable qty rounding and minQty validation in production, we need to populate
+constraints from the exchange.
+
+Sources of truth for Binance Futures USDT-M:
+- REST endpoint: `GET /fapi/v1/exchangeInfo`
+- Filter type: `LOT_SIZE` contains `stepSize` and `minQty`
+
+### Decision
+
+1. **ConstraintProvider class:**
+   - Loads constraints from Binance exchangeInfo
+   - Supports offline mode via local JSON cache
+   - Parses `LOT_SIZE` filter for each symbol
+
+2. **Data sources (priority order):**
+   - Local JSON cache (`var/cache/exchange_info_futures.json`)
+   - Binance REST API (if cache stale or missing)
+   - Stale cache fallback (if API unavailable)
+
+3. **Caching strategy:**
+   - Cache TTL: 24 hours (configurable)
+   - Cache file is deterministic JSON (sorted keys, indent=2)
+   - Cache can be pre-populated via CLI script
+
+4. **Parsing semantics:**
+   - All values parsed as strings to Decimal (determinism)
+   - Missing LOT_SIZE filter = no constraints for symbol
+   - Invalid filter data = log warning, skip symbol
+
+5. **Missing constraints behavior:**
+   - If symbol not in constraints dict: pass-through (no rounding)
+   - This matches ADR-059 default behavior
+   - Safe for backward compatibility
+
+6. **CLI script:**
+   - `scripts/fetch_exchange_info.py` for ops/runbook
+   - Fetches from API and saves to cache
+   - Shows parsed constraints summary
+
+### API Contract
+
+```python
+from grinder.execution.constraint_provider import (
+    ConstraintProvider,
+    load_constraints_from_file,
+)
+
+# From cache file (offline)
+constraints = load_constraints_from_file(Path("var/cache/exchange_info_futures.json"))
+
+# From provider (with optional API fetch)
+provider = ConstraintProvider(http_client=client, config=config)
+constraints = provider.get_constraints()
+
+# Wire into engine
+engine = ExecutionEngine(port=port, symbol_constraints=constraints)
+```
+
+### Non-goals
+
+- COIN-M support (only USDT-M)
+- Auto-refresh in background
+- Multi-venue abstraction
+- Dynamic constraint updates during runtime
+
+### Consequences
+
+- Constraints can be populated from exchange without manual configuration
+- Offline mode supported for testing and air-gapped environments
+- Cache prevents excessive API calls
+- Deterministic parsing ensures replay consistency
+
+### Related
+
+- ADR-059: ExecutionEngine qty constraints
+- ADR-058: DD budget ratio (policy-level)
