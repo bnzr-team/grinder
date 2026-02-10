@@ -1334,6 +1334,12 @@ Comprehensive adaptive grid system design:
       - 0 < ratio < 1: scales size_schedule by ratio
       - ratio=1 or None: no scaling (v1 behavior)
       - See ADR-058
+    - **Qty constraints (M7-05):** Execution-layer qty rounding with stepSize/minQty
+      - `SymbolConstraints(step_size, min_qty)` per-symbol configuration
+      - `floor_to_step()`: deterministic floor rounding to lot size
+      - Orders with rounded_qty < min_qty: skipped with `ORDER_SKIPPED` event
+      - Reason code: `EXEC_QTY_BELOW_MIN_QTY`
+      - See ADR-059
     - **Fixture:** `sample_day_adaptive` — paper digest `1b8af993a8435ee6`
   - ✅ **Top-K v1 (ASM-P1-06):** Feature-based symbol selection (see ADR-023)
     - **Opt-in:** `topk_v1_enabled=False` default (backward compat with existing digests)

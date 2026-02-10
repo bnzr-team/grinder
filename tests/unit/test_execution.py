@@ -23,6 +23,7 @@ from grinder.execution import (
     NoOpExchangePort,
     OrderRecord,
 )
+from grinder.execution.engine import SymbolConstraints, floor_to_step
 from grinder.execution.metrics import ExecutionMetrics
 from grinder.policies.base import GridPlan
 
@@ -924,3 +925,129 @@ class TestSymbolFiltering:
         cancel_actions = [a for a in result.actions if a.action_type == ActionType.CANCEL]
         assert len(cancel_actions) == 1
         assert cancel_actions[0].order_id == "btc1"
+
+
+# --- Tests: M7-05 Symbol Qty Constraints ---
+
+
+class TestFloorToStep:
+    """Tests for floor_to_step helper (M7-05, ADR-059)."""
+
+    def test_floor_to_step_rounds_down(self) -> None:
+        """Test floor_to_step floors to step size (never rounds up)."""
+        # 0.12345 floored to step 0.001 = 0.123
+        result = floor_to_step(Decimal("0.12345"), Decimal("0.001"))
+        assert result == Decimal("0.123")
+
+        # 0.12399 floored to step 0.001 = 0.123 (not 0.124)
+        result = floor_to_step(Decimal("0.12399"), Decimal("0.001"))
+        assert result == Decimal("0.123")
+
+    def test_floor_to_step_exact_multiple(self) -> None:
+        """Test floor_to_step returns exact value for multiples."""
+        # 0.123 is exact multiple of 0.001
+        result = floor_to_step(Decimal("0.123"), Decimal("0.001"))
+        assert result == Decimal("0.123")
+
+        # 0.5 is exact multiple of 0.1
+        result = floor_to_step(Decimal("0.5"), Decimal("0.1"))
+        assert result == Decimal("0.5")
+
+    def test_floor_to_step_zero_step(self) -> None:
+        """Test floor_to_step passes through with step_size=0."""
+        result = floor_to_step(Decimal("0.12345"), Decimal("0"))
+        assert result == Decimal("0.12345")
+
+
+class TestApplyQtyConstraints:
+    """Tests for ExecutionEngine._apply_qty_constraints (M7-05, ADR-059)."""
+
+    def test_apply_constraints_below_min(self) -> None:
+        """Test returns EXEC_QTY_BELOW_MIN_QTY when rounded qty < min_qty."""
+        port = NoOpExchangePort()
+        constraints = {
+            "BTCUSDT": SymbolConstraints(
+                step_size=Decimal("0.001"),
+                min_qty=Decimal("0.01"),
+            )
+        }
+        engine = ExecutionEngine(port=port, symbol_constraints=constraints)
+
+        # 0.005 floored to 0.001 = 0.005, which is < 0.01
+        rounded_qty, reason = engine._apply_qty_constraints(Decimal("0.005"), "BTCUSDT")
+
+        assert rounded_qty == Decimal("0.005")
+        assert reason == "EXEC_QTY_BELOW_MIN_QTY"
+
+    def test_apply_constraints_above_min(self) -> None:
+        """Test returns (rounded_qty, None) when qty >= min_qty."""
+        port = NoOpExchangePort()
+        constraints = {
+            "BTCUSDT": SymbolConstraints(
+                step_size=Decimal("0.001"),
+                min_qty=Decimal("0.01"),
+            )
+        }
+        engine = ExecutionEngine(port=port, symbol_constraints=constraints)
+
+        # 0.02345 floored to 0.001 = 0.023, which is >= 0.01
+        rounded_qty, reason = engine._apply_qty_constraints(Decimal("0.02345"), "BTCUSDT")
+
+        assert rounded_qty == Decimal("0.023")
+        assert reason is None
+
+    def test_apply_constraints_no_constraints(self) -> None:
+        """Test passes through when no constraints configured for symbol."""
+        port = NoOpExchangePort()
+        engine = ExecutionEngine(port=port, symbol_constraints={})
+
+        qty, reason = engine._apply_qty_constraints(Decimal("0.00001"), "BTCUSDT")
+
+        assert qty == Decimal("0.00001")
+        assert reason is None
+
+
+class TestEngineSkipsOrderBelowMin:
+    """Integration test for order skipping (M7-05, ADR-059)."""
+
+    def test_engine_skips_order_below_min(self) -> None:
+        """Test engine emits ORDER_SKIPPED event when qty below min."""
+        port = NoOpExchangePort()
+        constraints = {
+            "BTCUSDT": SymbolConstraints(
+                step_size=Decimal("0.001"),
+                min_qty=Decimal("0.1"),  # High min to trigger skip
+            )
+        }
+        engine = ExecutionEngine(port=port, symbol_constraints=constraints)
+
+        # Plan with very small qty that will be below min
+        plan = GridPlan(
+            mode=GridMode.BILATERAL,
+            center_price=Decimal("50000"),
+            spacing_bps=10.0,
+            levels_up=1,
+            levels_down=1,
+            size_schedule=[Decimal("0.05")],  # Below min_qty of 0.1
+            reason_codes=["TEST"],
+        )
+
+        empty_state = ExecutionState(open_orders={}, last_plan_digest="", tick_counter=0)
+        result = engine.evaluate(plan, "BTCUSDT", empty_state, ts=1000)
+
+        # Should have no placed orders
+        place_actions = [a for a in result.actions if a.action_type == ActionType.PLACE]
+        assert len(place_actions) == 2  # 2 actions generated but...
+
+        # Should have skipped events for both orders
+        skipped_events = [e for e in result.events if e.event_type == "ORDER_SKIPPED"]
+        assert len(skipped_events) == 2
+
+        # Verify event details
+        for event in skipped_events:
+            assert event.details["reason"] == "EXEC_QTY_BELOW_MIN_QTY"
+            assert event.details["original_qty"] == "0.050"
+            assert Decimal(event.details["rounded_qty"]) < Decimal("0.1")
+
+        # State should have no open orders (all skipped)
+        assert len(result.state.open_orders) == 0
