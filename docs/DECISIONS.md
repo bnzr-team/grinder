@@ -2912,3 +2912,72 @@ Note: No reason code emitted for ratio=None or ratio=1 (unchanged behavior).
 - ADR-032: DdAllocator
 - ADR-057: L2 gating semantics
 - ADR-022: AdaptiveGridPolicy v1
+
+## ADR-059 — M7-05: Execution-layer qty rounding with stepSize/minQty
+
+**Status:** Accepted
+**Date:** 2026-02-10
+**Deciders:** Core team
+**Scope:** ExecutionEngine qty constraints for symbol-specific lot size rounding and minimum qty validation
+
+### Context
+
+ADR-058 established that policy outputs exact Decimal quantities without rounding, deferring
+symbol-specific lot size constraints to the execution layer. This ADR defines how execution
+layer applies those constraints.
+
+Exchange-specific constraints:
+- `stepSize` (lot size): qty must be a multiple of this value (e.g., 0.001 for BTC)
+- `minQty`: minimum order quantity enforced by exchange (e.g., 0.001 for BTC)
+
+Orders with qty < minQty are rejected by the exchange. We must handle this gracefully.
+
+### Decision
+
+1. **Single point of application:**
+   - `ExecutionEngine._apply_qty_constraints(qty, symbol)` is the ONLY place where
+     step_size rounding and min_qty validation occurs
+   - Called immediately before `port.place_order()`
+
+2. **Constraint provider:**
+   - `SymbolConstraints` dataclass: `step_size: Decimal`, `min_qty: Decimal`
+   - Passed to `ExecutionEngine.__init__` as `symbol_constraints: dict[str, SymbolConstraints]`
+   - Empty dict or missing symbol = no constraints applied (pass-through)
+
+3. **Rounding semantics:**
+   - `floor_to_step(qty, step_size)` — always floor (ROUND_DOWN), never round up
+   - Deterministic: uses Decimal arithmetic only, no floats
+
+4. **Validation semantics:**
+   - If `rounded_qty < min_qty`: skip order, emit `ORDER_SKIPPED` event
+   - Reason code: `EXEC_QTY_BELOW_MIN_QTY`
+   - Order is NOT placed to port
+
+5. **Event emission:**
+   - `ORDER_SKIPPED` event with details:
+     - `reason`: `EXEC_QTY_BELOW_MIN_QTY`
+     - `level_id`, `side`, `original_qty`, `rounded_qty`
+
+### Reason codes (SSOT table)
+
+| Code | Condition | Effect |
+|------|-----------|--------|
+| `EXEC_QTY_BELOW_MIN_QTY` | rounded_qty < min_qty | Order skipped, not placed |
+
+### Non-goals
+
+- Dynamic constraint fetching from exchange (constraints are passed at engine init)
+- Price step rounding (price rounding uses existing `_round_price()` method)
+- Retry logic for rejected orders
+
+### Consequences
+
+- DD→qty→execution chain is complete: policy scales qty, execution rounds and validates
+- Orders below minQty are gracefully skipped with audit trail
+- No hidden precision contracts in policy layer
+- Deterministic: same constraints + same input = same output
+
+### Related
+
+- ADR-058: DD budget ratio (policy-level, no rounding)
+- ADR-032: DdAllocator

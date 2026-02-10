@@ -30,6 +30,39 @@ if TYPE_CHECKING:
     from grinder.policies.base import GridPlan
 
 
+@dataclass(frozen=True)
+class SymbolConstraints:
+    """Exchange symbol constraints for qty validation (M7-05, ADR-059).
+
+    Attributes:
+        step_size: Lot size step for qty rounding (e.g., 0.001 for BTC)
+        min_qty: Minimum order quantity (e.g., 0.001 for BTC)
+    """
+
+    step_size: Decimal
+    min_qty: Decimal
+
+
+def floor_to_step(qty: Decimal, step_size: Decimal) -> Decimal:
+    """Floor quantity to nearest step size (M7-05, ADR-059).
+
+    Deterministic floor rounding - never exceeds input qty.
+    Uses Decimal arithmetic only, no floats.
+
+    Args:
+        qty: Raw quantity to round
+        step_size: Exchange lot size step
+
+    Returns:
+        Floored quantity as multiple of step_size
+    """
+    if step_size <= 0:
+        return qty
+    # Compute number of whole steps, then multiply back
+    steps = (qty / step_size).quantize(Decimal("1"), rounding=ROUND_DOWN)
+    return steps * step_size
+
+
 @dataclass
 class GridLevel:
     """Computed grid level for order placement."""
@@ -70,6 +103,7 @@ class ExecutionEngine:
         port: ExchangePort,
         price_precision: int = 2,
         quantity_precision: int = 3,
+        symbol_constraints: dict[str, SymbolConstraints] | None = None,
     ) -> None:
         """Initialize execution engine.
 
@@ -77,10 +111,12 @@ class ExecutionEngine:
             port: Exchange port for order operations
             price_precision: Decimal places for price rounding
             quantity_precision: Decimal places for quantity rounding
+            symbol_constraints: Per-symbol step_size/min_qty constraints (M7-05)
         """
         self._port = port
         self._price_precision = price_precision
         self._quantity_precision = quantity_precision
+        self._symbol_constraints = symbol_constraints or {}
 
     def _round_price(self, price: Decimal) -> Decimal:
         """Round price to configured precision."""
@@ -91,6 +127,35 @@ class ExecutionEngine:
         """Round quantity to configured precision."""
         quantize_str = "0." + "0" * self._quantity_precision
         return qty.quantize(Decimal(quantize_str), rounding=ROUND_DOWN)
+
+    def _apply_qty_constraints(self, qty: Decimal, symbol: str) -> tuple[Decimal, str | None]:
+        """Apply symbol-specific qty constraints (M7-05, ADR-059).
+
+        Single point of application for:
+        1. Floor to step_size (lot size rounding)
+        2. Validate against min_qty
+
+        Args:
+            qty: Raw quantity from policy
+            symbol: Trading symbol for constraint lookup
+
+        Returns:
+            (rounded_qty, reason_code) - reason_code is None if valid,
+            or "EXEC_QTY_BELOW_MIN_QTY" if qty rounds to below minimum.
+            If no constraints configured, returns (qty, None) unchanged.
+        """
+        constraints = self._symbol_constraints.get(symbol)
+        if constraints is None:
+            return qty, None
+
+        # Step 1: Floor to step_size
+        rounded_qty = floor_to_step(qty, constraints.step_size)
+
+        # Step 2: Validate min_qty
+        if rounded_qty < constraints.min_qty:
+            return rounded_qty, "EXEC_QTY_BELOW_MIN_QTY"
+
+        return rounded_qty, None
 
     def _compute_plan_digest(self, plan: GridPlan) -> str:
         """Compute deterministic digest of a plan."""
@@ -396,11 +461,33 @@ class ExecutionEngine:
 
             elif action.action_type == ActionType.PLACE:
                 if action.side and action.price and action.quantity:
+                    # M7-05: Apply symbol constraints (step_size, min_qty)
+                    final_qty, constraint_reason = self._apply_qty_constraints(
+                        action.quantity, action.symbol
+                    )
+                    if constraint_reason == "EXEC_QTY_BELOW_MIN_QTY":
+                        # Skip order - qty below minimum after rounding
+                        events.append(
+                            ExecutionEvent(
+                                ts=ts,
+                                event_type="ORDER_SKIPPED",
+                                symbol=action.symbol,
+                                details={
+                                    "reason": constraint_reason,
+                                    "level_id": action.level_id,
+                                    "side": action.side.value,
+                                    "original_qty": str(action.quantity),
+                                    "rounded_qty": str(final_qty),
+                                },
+                            )
+                        )
+                        continue
+
                     order_id = self._port.place_order(
                         symbol=action.symbol,
                         side=action.side,
                         price=action.price,
-                        quantity=action.quantity,
+                        quantity=final_qty,
                         level_id=action.level_id,
                         ts=ts,
                     )
@@ -409,7 +496,7 @@ class ExecutionEngine:
                         symbol=action.symbol,
                         side=action.side,
                         price=action.price,
-                        quantity=action.quantity,
+                        quantity=final_qty,
                         state=OrderState.OPEN,
                         level_id=action.level_id,
                         created_ts=ts,
