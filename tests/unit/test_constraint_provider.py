@@ -13,8 +13,12 @@ import json
 import tempfile
 from decimal import Decimal
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import pytest
+
+if TYPE_CHECKING:
+    from collections.abc import Generator
 
 from grinder.core import GridMode
 from grinder.execution import ExecutionEngine, ExecutionState, NoOpExchangePort
@@ -37,14 +41,15 @@ FIXTURE_PATH = (
 
 
 @pytest.fixture
-def exchange_info_data() -> dict:
+def exchange_info_data() -> dict[str, Any]:
     """Load exchange info fixture."""
     with FIXTURE_PATH.open() as f:
-        return json.load(f)
+        data: dict[str, Any] = json.load(f)
+        return data
 
 
 @pytest.fixture
-def temp_cache_dir() -> Path:
+def temp_cache_dir() -> Generator[Path, None, None]:
     """Create temporary directory for cache tests."""
     with tempfile.TemporaryDirectory() as tmpdir:
         yield Path(tmpdir)
@@ -111,7 +116,7 @@ class TestParseLotSizeFilter:
 class TestParseExchangeInfo:
     """Tests for full exchangeInfo parsing."""
 
-    def test_parse_all_symbols(self, exchange_info_data: dict) -> None:
+    def test_parse_all_symbols(self, exchange_info_data: dict[str, Any]) -> None:
         """Test parsing all symbols from fixture."""
         constraints = parse_exchange_info(exchange_info_data)
 
@@ -120,7 +125,7 @@ class TestParseExchangeInfo:
         assert "ETHUSDT" in constraints
         assert "SOLUSDT" in constraints
 
-    def test_parse_btc_constraints(self, exchange_info_data: dict) -> None:
+    def test_parse_btc_constraints(self, exchange_info_data: dict[str, Any]) -> None:
         """Test BTCUSDT constraints parsed correctly."""
         constraints = parse_exchange_info(exchange_info_data)
 
@@ -128,7 +133,7 @@ class TestParseExchangeInfo:
         assert btc.step_size == Decimal("0.001")
         assert btc.min_qty == Decimal("0.001")
 
-    def test_parse_sol_constraints(self, exchange_info_data: dict) -> None:
+    def test_parse_sol_constraints(self, exchange_info_data: dict[str, Any]) -> None:
         """Test SOLUSDT constraints parsed correctly (integer qty)."""
         constraints = parse_exchange_info(exchange_info_data)
 
@@ -136,7 +141,7 @@ class TestParseExchangeInfo:
         assert sol.step_size == Decimal("1")
         assert sol.min_qty == Decimal("1")
 
-    def test_parse_deterministic(self, exchange_info_data: dict) -> None:
+    def test_parse_deterministic(self, exchange_info_data: dict[str, Any]) -> None:
         """Test parsing is deterministic (same input = same output)."""
         constraints1 = parse_exchange_info(exchange_info_data)
         constraints2 = parse_exchange_info(exchange_info_data)

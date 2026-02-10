@@ -66,7 +66,8 @@ def fetch_exchange_info(url: str, timeout: int = 30) -> dict[str, Any]:
     with urllib.request.urlopen(request, timeout=timeout) as response:
         if response.status != 200:
             raise RuntimeError(f"API returned status {response.status}")
-        return json.loads(response.read().decode("utf-8"))
+        data: dict[str, Any] = json.loads(response.read().decode("utf-8"))
+        return data
 
 
 def save_to_file(data: dict[str, Any], path: Path) -> None:
