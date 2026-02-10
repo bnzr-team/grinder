@@ -1340,6 +1340,13 @@ Comprehensive adaptive grid system design:
       - Orders with rounded_qty < min_qty: skipped with `ORDER_SKIPPED` event
       - Reason code: `EXEC_QTY_BELOW_MIN_QTY`
       - See ADR-059
+    - **ConstraintProvider (M7-06):** Automated loading from Binance exchangeInfo
+      - `ConstraintProvider` class with cache + API fetch
+      - `load_constraints_from_file()` for offline mode
+      - `scripts/fetch_exchange_info.py` CLI for ops
+      - LOT_SIZE filter parsing for stepSize/minQty
+      - Cache location: `var/cache/exchange_info_futures.json`
+      - See ADR-060
     - **Fixture:** `sample_day_adaptive` — paper digest `1b8af993a8435ee6`
   - ✅ **Top-K v1 (ASM-P1-06):** Feature-based symbol selection (see ADR-023)
     - **Opt-in:** `topk_v1_enabled=False` default (backward compat with existing digests)
