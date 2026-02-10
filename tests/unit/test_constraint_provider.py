@@ -30,7 +30,7 @@ from grinder.execution.constraint_provider import (
     parse_exchange_info,
     parse_lot_size_filter,
 )
-from grinder.execution.engine import SymbolConstraints
+from grinder.execution.engine import ExecutionEngineConfig, SymbolConstraints
 from grinder.policies.base import GridPlan
 
 # --- Fixtures ---
@@ -245,9 +245,10 @@ class TestConstraintProviderIntegration:
         # Load constraints from fixture
         constraints = load_constraints_from_file(FIXTURE_PATH)
 
-        # Create engine with constraints
+        # Create engine with constraints enabled (M7-07)
         port = NoOpExchangePort()
-        engine = ExecutionEngine(port=port, symbol_constraints=constraints)
+        config = ExecutionEngineConfig(constraints_enabled=True)
+        engine = ExecutionEngine(port=port, symbol_constraints=constraints, config=config)
 
         # Plan with small qty that will be floored
         plan = GridPlan(
@@ -281,7 +282,8 @@ class TestConstraintProviderIntegration:
         }
 
         port = NoOpExchangePort()
-        engine = ExecutionEngine(port=port, symbol_constraints=constraints)
+        config = ExecutionEngineConfig(constraints_enabled=True)
+        engine = ExecutionEngine(port=port, symbol_constraints=constraints, config=config)
 
         # Plan with qty that will be below min after rounding
         plan = GridPlan(
@@ -307,7 +309,8 @@ class TestConstraintProviderIntegration:
         constraints = load_constraints_from_file(FIXTURE_PATH)
 
         port = NoOpExchangePort()
-        engine = ExecutionEngine(port=port, symbol_constraints=constraints)
+        config = ExecutionEngineConfig(constraints_enabled=True)
+        engine = ExecutionEngine(port=port, symbol_constraints=constraints, config=config)
 
         # Plan with fractional qty that will floor to 0
         plan = GridPlan(
