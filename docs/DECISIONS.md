@@ -2872,7 +2872,8 @@ We need Smart Grid v2.0 to respect per-symbol DD budget constraints without coup
    - `dd_budget_ratio is None` → no DD scaling (v1 behavior)
    - `dd_budget_ratio == 1` → no scaling
    - `0 < dd_budget_ratio < 1` → scale per-level entry sizing:
-     - `qty_per_level = round_to_8_decimals(qty_per_level * dd_budget_ratio)`
+     - `qty_per_level = qty_per_level * dd_budget_ratio` (exact Decimal multiplication)
+     - **No rounding in policy** — symbol-specific lot size rounding at execution layer
    - `dd_budget_ratio == 0` → **block NEW entries** on both sides:
      - `levels_up = 0`, `levels_down = 0`
      - reduce-only / existing-position management is unaffected
@@ -2880,14 +2881,15 @@ We need Smart Grid v2.0 to respect per-symbol DD budget constraints without coup
 
 4. **Determinism:**
    - Uses `Decimal` for dd_budget_ratio and sizing computations
-   - Rounding uses `quantize(Decimal("0.00000001"))` for 8 decimal precision
+   - Policy outputs exact scaled values (no precision loss)
+   - Lot size rounding deferred to execution layer where stepSize is known
    - No floats, no locale-dependent formatting
 
 5. **Reason codes (SSOT table):**
 
 | Code | Condition | Effect |
 |------|-----------|--------|
-| `DD_SCALE_APPLIED` | 0 < ratio < 1 | qty scaled + rounded |
+| `DD_SCALE_APPLIED` | 0 < ratio < 1 | qty scaled (exact Decimal) |
 | `DD_BLOCK_ENTRIES` | ratio == 0 | levels_up=0 and levels_down=0 |
 
 Note: No reason code emitted for ratio=None or ratio=1 (unchanged behavior).

@@ -1082,8 +1082,8 @@ class TestDdBudgetRatioWiring:
         # No DD reason codes emitted for ratio=1
         assert all("DD_" not in code for code in plan_with_one.reason_codes)
 
-    def test_dd_budget_ratio_scales_qty_and_rounds_deterministically(self) -> None:
-        """dd_budget_ratio=0.5 scales size_schedule deterministically."""
+    def test_dd_budget_ratio_scales_qty_deterministically(self) -> None:
+        """dd_budget_ratio=0.5 scales size_schedule deterministically (no rounding)."""
         config = AdaptiveGridConfig()
         policy = AdaptiveGridPolicy(config)
         features = self._base_features()
@@ -1095,12 +1095,13 @@ class TestDdBudgetRatioWiring:
         assert plan_baseline.levels_up == plan_scaled.levels_up
         assert plan_baseline.levels_down == plan_scaled.levels_down
 
-        # Size schedule should be scaled by 0.5
+        # Size schedule should be scaled by 0.5 (exact Decimal multiplication)
+        # Note: No rounding in policy - lot size rounding happens at execution layer
         assert len(plan_baseline.size_schedule) == len(plan_scaled.size_schedule)
         for baseline_qty, scaled_qty in zip(
             plan_baseline.size_schedule, plan_scaled.size_schedule, strict=True
         ):
-            expected = (baseline_qty * Decimal("0.5")).quantize(Decimal("0.00000001"))
+            expected = baseline_qty * Decimal("0.5")
             assert scaled_qty == expected
 
         # DD_SCALE_APPLIED reason code should be present

@@ -642,12 +642,9 @@ class AdaptiveGridPolicy(GridPolicy):
             return 0, 0, [], reason_codes
 
         # 0 < ratio < 1: scale size_schedule
-        scaled_schedule: list[Decimal] = []
-        for qty in size_schedule:
-            scaled_qty = qty * dd_budget_ratio
-            # Quantize to 8 decimal places (standard for crypto qty)
-            scaled_qty = scaled_qty.quantize(Decimal("0.00000001"))
-            scaled_schedule.append(scaled_qty)
+        # Note: No rounding here - policy outputs exact Decimal values.
+        # Symbol-specific lot size rounding happens at execution layer.
+        scaled_schedule = [qty * dd_budget_ratio for qty in size_schedule]
 
         reason_codes.append("DD_SCALE_APPLIED")
         return levels_up, levels_down, scaled_schedule, reason_codes
