@@ -3161,3 +3161,108 @@ engine = ExecutionEngine(port=port)  # No constraints applied
 - ADR-059: ExecutionEngine qty constraints (implementation)
 - ADR-060: ConstraintProvider (loading)
 - ADR-058: DD budget ratio (policy-level)
+
+## ADR-062 — M7-09: Execution L2 Guard (last-mile safety)
+
+- **Date:** 2026-02-10
+- **Status:** accepted
+- **PR:** #132
+- **Related:** M7-09, SPEC_V2_0.md §B
+
+### Context
+
+After M7-03 (policy L2 gating), we have policy-level guards that skip entries based on L2 conditions.
+However, between policy evaluation and order placement, market conditions can change.
+We need a "last-mile safety" guard at the execution layer to catch:
+
+1. Stale L2 data (snapshot too old)
+2. Insufficient depth (would exhaust orderbook)
+3. High slippage impact (adverse conditions)
+
+This is NOT a replacement for policy gating — it's a final safety net at execution time.
+
+### Decision
+
+1. **New config fields in ExecutionEngineConfig:**
+   ```python
+   @dataclass(frozen=True)
+   class ExecutionEngineConfig:
+       # M7-07 fields...
+       constraints_enabled: bool = False
+
+       # M7-09 L2 guard fields
+       l2_execution_guard_enabled: bool = False  # Default OFF
+       l2_execution_max_age_ms: int = 1500       # Staleness threshold
+       l2_execution_impact_threshold_bps: int = 50  # Impact threshold
+   ```
+
+2. **L2 features input:**
+   ```python
+   engine = ExecutionEngine(
+       port=port,
+       config=config,
+       l2_features={"BTCUSDT": l2_snapshot},  # dict[str, L2FeatureSnapshot]
+   )
+   ```
+
+3. **Guard logic in `_apply_l2_guard()`:**
+   - Only applies to PLACE actions
+   - Runs BEFORE qty constraints
+   - Checks in order:
+     a. Staleness: `now_ts - snapshot.ts_ms > max_age_ms` → `EXEC_L2_STALE`
+     b. Insufficient depth: `impact_*_topN_insufficient_depth == 1` → `EXEC_L2_INSUFFICIENT_DEPTH_BUY/SELL`
+     c. High impact: `impact_*_topN_bps >= threshold` → `EXEC_L2_IMPACT_BUY_HIGH/SELL_HIGH`
+
+4. **Pass-through behavior (safe rollout):**
+   - `l2_execution_guard_enabled=False` → no checks, pass-through
+   - `l2_features=None` → no checks, pass-through
+   - Symbol not in l2_features → no checks, pass-through
+
+5. **Reason codes (SSOT):**
+   | Code | Meaning |
+   |------|---------|
+   | `EXEC_L2_STALE` | L2 snapshot older than max_age_ms |
+   | `EXEC_L2_INSUFFICIENT_DEPTH_BUY` | Buy side depth exhausted |
+   | `EXEC_L2_INSUFFICIENT_DEPTH_SELL` | Sell side depth exhausted |
+   | `EXEC_L2_IMPACT_BUY_HIGH` | Buy impact >= threshold |
+   | `EXEC_L2_IMPACT_SELL_HIGH` | Sell impact >= threshold |
+
+### API Contract
+
+```python
+from grinder.execution import ExecutionEngine, ExecutionEngineConfig
+from grinder.features.l2_types import L2FeatureSnapshot
+
+# Enable L2 guard
+config = ExecutionEngineConfig(
+    l2_execution_guard_enabled=True,
+    l2_execution_max_age_ms=1500,
+    l2_execution_impact_threshold_bps=50,
+)
+
+# Provide L2 features per symbol
+l2_features = {"BTCUSDT": latest_snapshot}
+
+engine = ExecutionEngine(port=port, config=config, l2_features=l2_features)
+```
+
+### Non-goals
+
+- L2 streaming/websocket wiring (separate concern)
+- Dynamic threshold adjustment
+- Multi-symbol orchestration
+- "Smart" qty/price adjustments based on L2 (only block/skip)
+
+### Consequences
+
+- Default OFF: no behavior change until explicitly enabled
+- Determinism preserved: guard uses integer comparisons only
+- No I/O at init: L2 features are passed in, not fetched
+- Single point of application: guard in `_apply_actions()` before qty constraints
+- Side-aware: checks appropriate impact/depth based on order side
+
+### Related
+
+- ADR-059: ExecutionEngine qty constraints
+- ADR-061: ExecutionEngineConfig with constraints_enabled
+- M7-03: Policy L2 gating
