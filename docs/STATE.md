@@ -1291,7 +1291,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
 | v1.1 | `docs/smart_grid/SPEC_V1_1.md` | ✅ Implemented | FeatureEngine in `sample_day_adaptive`; ADR-019 |
 | v1.2 | `docs/smart_grid/SPEC_V1_2.md` | ✅ Implemented | `sample_day_adaptive` digest `1b8af993a8435ee6`; ADR-022 |
 | v1.3 | `docs/smart_grid/SPEC_V1_3.md` | ✅ Implemented | `sample_day_topk_v1` digest `63d981b60a8e9b3a`; ADR-023 |
-| v2.0 | `docs/smart_grid/SPEC_V2_0.md` | 🔜 Planned | — |
+| v2.0 | `docs/smart_grid/SPEC_V2_0.md` | 🟡 Partial | M7-03..M7-09 code+ADRs; digest fixtures pending |
 | v3.0 | `docs/smart_grid/SPEC_V3_0.md` | 🔜 Planned | — |
 
 **Verification:** `python -m scripts.verify_determinism_suite` (8/8 fixtures PASS)

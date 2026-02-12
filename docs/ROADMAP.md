@@ -24,7 +24,7 @@ This section reflects **what is verified and merged on main** as of PR #117.
 | M4 — Ops Hardening | ✅ Done | 2026-02-07 |
 | M5 — Observability Polish | ✅ Done | 2026-02-07 |
 | M6 — HA Leader Election | ✅ Done | 2026-02-08 |
-| M7 — Smart Grid v2.0 | 🔜 Planned | — |
+| M7 — Smart Grid v2.0 | 🟡 Partial | M7-03..M7-09 code+ADRs done, digest fixtures pending |
 | M8 — ML Integration | 🔜 Planned | — |
 | M9 — Multi-venue | 🔜 Planned | — |
 
@@ -282,7 +282,7 @@ See ADR-053 for rationale.
 
 ## 5) Planned Milestones (M7–M9)
 
-### M7 — Smart Grid v2.0 (L2-aware + DD Allocator) — 🔜 Planned
+### M7 — Smart Grid v2.0 (L2-aware + DD Allocator) — 🟡 Partial
 
 **Goal:** L2 order book integration with depth-aware sizing and portfolio-level drawdown allocation
 
@@ -298,7 +298,20 @@ See ADR-053 for rationale.
 - Drawdown allocator distributing budget across Top-K symbols
 - Deterministic walk-the-book execution model
 
-**Not started:** No code, no fixtures, ADRs are design-only.
+**Implementation status:**
+
+| Sub-milestone | Code | ADR | Unit Tests | Digest Fixture |
+|---------------|------|-----|------------|----------------|
+| M7-03: L2 gating | ✅ | ADR-057 | ✅ | ❌ pending |
+| M7-04: DD budget ratio | ✅ | ADR-058 | ✅ | ❌ pending |
+| M7-05: Qty constraints | ✅ | ADR-059 | ✅ | ❌ pending |
+| M7-06: ConstraintProvider | ✅ | ADR-060 | ✅ | ❌ pending |
+| M7-07: ExecutionEngineConfig | ✅ | ADR-061 | ✅ | ❌ pending |
+| M7-08: TTL/Refresh | ✅ | ADR-063 | ✅ | ❌ pending |
+| M7-09: L2 Exec Guard | ✅ | ADR-062 | ✅ | ❌ pending |
+
+**Gap:** All M7 features have code + unit tests, but NO digest-gated fixtures.
+M7 cannot be marked "Done" until determinism fixtures exist for each feature.
 
 ---
 
