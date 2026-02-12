@@ -20,11 +20,11 @@
 | `sum_abs_returns_bps` | **Implemented** | FeatureEngine v1 | Range horizon feature |
 | `net_return_bps` | **Implemented** | FeatureEngine v1 | Range horizon feature |
 | `range_score` | **Implemented** | FeatureEngine v1 | Chop detection score |
-| `impact_buy_topN_bps` | **Planned (M7)** | FeatureEngine v2 | L2 VWAP slippage |
-| `impact_sell_topN_bps` | **Planned (M7)** | FeatureEngine v2 | L2 VWAP slippage |
-| `wall_bid_score_topN_x1000` | **Planned (M7)** | FeatureEngine v2 | L2 wall detection |
-| `wall_ask_score_topN_x1000` | **Planned (M7)** | FeatureEngine v2 | L2 wall detection |
-| `depth_imbalance_topN_bps` | **Planned (M7)** | FeatureEngine v2 | L2 depth imbalance |
+| `impact_buy_topN_bps` | **Partial (M7)** | L2FeatureSnapshot | L2 VWAP slippage (unit tested, no digest fixture) |
+| `impact_sell_topN_bps` | **Partial (M7)** | L2FeatureSnapshot | L2 VWAP slippage (unit tested, no digest fixture) |
+| `wall_bid_score_topN_x1000` | **Partial (M7)** | L2FeatureSnapshot | L2 wall detection (unit tested, no digest fixture) |
+| `wall_ask_score_topN_x1000` | **Partial (M7)** | L2FeatureSnapshot | L2 wall detection (unit tested, no digest fixture) |
+| `depth_imbalance_topN_bps` | **Partial (M7)** | L2FeatureSnapshot | L2 depth imbalance (unit tested, no digest fixture) |
 | `microprice` | Unscheduled | — | Spec only |
 | `microprice_dev_bps` | Unscheduled | — | Spec only |
 | `cvd` | Unscheduled | — | Spec only |
@@ -40,7 +40,8 @@
 | `tox_score` | Unscheduled | — | Spec only |
 
 **Status legend:**
-- **Implemented**: Code exists, tests pass, determinism verified
+- **Implemented**: Code exists, tests pass, determinism verified via digest-gated fixtures
+- **Partial (M7)**: Code exists, unit tests pass, but NO digest-gated fixture (M7 gap)
 - **Planned (M7)**: Scheduled for M7 milestone (L2 FeatureEngine v2)
 - **Unscheduled**: Spec/wishlist only, no implementation timeline
 
