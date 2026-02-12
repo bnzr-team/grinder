@@ -1360,6 +1360,12 @@ Comprehensive adaptive grid system design:
       - Runs BEFORE qty constraints, only on PLACE actions
       - Pass-through when features missing (safe rollout)
       - See ADR-062
+    - **ConstraintProvider TTL/Refresh (M7-08):** TTL and controlled refresh for exchangeInfo cache
+      - `ConstraintProviderConfig.cache_ttl_seconds=86400` — 24h default TTL
+      - `allow_fetch=True/False` — gate for API fetch (False in offline/replay)
+      - Fallback chain: fresh cache → API → stale cache → empty dict
+      - No I/O at init (lazy loading preserves determinism)
+      - See ADR-063
     - **Fixture:** `sample_day_adaptive` — paper digest `1b8af993a8435ee6`
   - ✅ **Top-K v1 (ASM-P1-06):** Feature-based symbol selection (see ADR-023)
     - **Opt-in:** `topk_v1_enabled=False` default (backward compat with existing digests)

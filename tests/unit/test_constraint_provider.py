@@ -1,16 +1,21 @@
-"""Tests for constraint provider (M7-06, ADR-060).
+"""Tests for constraint provider (M7-06, ADR-060; M7-08, ADR-063).
 
 Tests verify:
 - Parsing LOT_SIZE filters from exchangeInfo
 - Decimal parsing determinism
 - Cache loading/saving
+- TTL/refresh behavior (M7-08)
+- Fallback chain: cache → API → stale → empty
 - Integration with ExecutionEngine constraints
 """
 
 from __future__ import annotations
 
 import json
+import os
 import tempfile
+import time
+from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -330,3 +335,225 @@ class TestConstraintProviderIntegration:
         assert len(result.state.open_orders) == 0
         skipped_events = [e for e in result.events if e.event_type == "ORDER_SKIPPED"]
         assert len(skipped_events) == 2
+
+
+# --- Mock HTTP Client for TTL tests ---
+
+
+@dataclass
+class MockHttpResponse:
+    """Mock HTTP response for testing."""
+
+    status_code: int
+    json_data: dict[str, Any]
+
+
+class MockHttpClient:
+    """Mock HTTP client that tracks calls and returns configured responses."""
+
+    def __init__(
+        self,
+        response: MockHttpResponse | None = None,
+        should_fail: bool = False,
+    ) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.response = response
+        self.should_fail = should_fail
+
+    def request(
+        self,
+        method: str,
+        url: str,
+        params: dict[str, Any] | None = None,
+        _headers: dict[str, str] | None = None,
+        _timeout_ms: int = 5000,
+    ) -> MockHttpResponse:
+        self.calls.append({"method": method, "url": url, "params": params})
+        if self.should_fail:
+            raise ConnectionError("Mock connection failure")
+        if self.response is None:
+            raise ValueError("No mock response configured")
+        return self.response
+
+
+# --- Tests: TTL/Refresh behavior (M7-08, ADR-063) ---
+
+
+class TestConstraintProviderTTL:
+    """Tests for TTL and refresh behavior (M7-08, ADR-063)."""
+
+    @pytest.fixture
+    def mock_exchange_info(self) -> dict[str, Any]:
+        """Minimal valid exchangeInfo for API mock."""
+        return {
+            "symbols": [
+                {
+                    "symbol": "BTCUSDT",
+                    "filters": [{"filterType": "LOT_SIZE", "stepSize": "0.001", "minQty": "0.001"}],
+                }
+            ]
+        }
+
+    def test_ttl_fresh_cache_uses_cache_no_fetch(
+        self, temp_cache_dir: Path, mock_exchange_info: dict[str, Any]
+    ) -> None:
+        """Fresh cache within TTL should be used without API fetch."""
+        # Create fresh cache file
+        cache_file = temp_cache_dir / "exchange_info.json"
+        with cache_file.open("w") as f:
+            json.dump(mock_exchange_info, f)
+
+        # Create mock client (should NOT be called)
+        mock_client = MockHttpClient(
+            response=MockHttpResponse(status_code=200, json_data=mock_exchange_info)
+        )
+
+        config = ConstraintProviderConfig(
+            cache_dir=temp_cache_dir,
+            cache_file="exchange_info.json",
+            cache_ttl_seconds=3600,  # 1 hour TTL
+            allow_fetch=True,
+        )
+        provider = ConstraintProvider(http_client=mock_client, config=config)
+
+        constraints = provider.get_constraints()
+
+        assert len(constraints) == 1
+        assert "BTCUSDT" in constraints
+        assert len(mock_client.calls) == 0  # No API call made
+
+    def test_ttl_stale_cache_fetches_when_allow_fetch_true(
+        self, temp_cache_dir: Path, mock_exchange_info: dict[str, Any]
+    ) -> None:
+        """Stale cache should trigger API fetch when allow_fetch=True."""
+        # Create cache file
+        cache_file = temp_cache_dir / "exchange_info.json"
+        with cache_file.open("w") as f:
+            json.dump(mock_exchange_info, f)
+
+        # Make cache stale by setting mtime in the past
+        old_mtime = time.time() - 7200  # 2 hours ago
+        os.utime(cache_file, (old_mtime, old_mtime))
+
+        # Create mock client that will be called
+        mock_client = MockHttpClient(
+            response=MockHttpResponse(status_code=200, json_data=mock_exchange_info)
+        )
+
+        config = ConstraintProviderConfig(
+            cache_dir=temp_cache_dir,
+            cache_file="exchange_info.json",
+            cache_ttl_seconds=3600,  # 1 hour TTL (cache is 2h old = stale)
+            allow_fetch=True,
+        )
+        provider = ConstraintProvider(http_client=mock_client, config=config)
+
+        constraints = provider.get_constraints()
+
+        assert len(constraints) == 1
+        assert len(mock_client.calls) == 1  # API was called
+
+    def test_ttl_stale_cache_no_fetch_uses_stale(
+        self, temp_cache_dir: Path, mock_exchange_info: dict[str, Any]
+    ) -> None:
+        """Stale cache with allow_fetch=False should use stale cache."""
+        # Create cache file
+        cache_file = temp_cache_dir / "exchange_info.json"
+        with cache_file.open("w") as f:
+            json.dump(mock_exchange_info, f)
+
+        # Make cache stale
+        old_mtime = time.time() - 7200
+        os.utime(cache_file, (old_mtime, old_mtime))
+
+        config = ConstraintProviderConfig(
+            cache_dir=temp_cache_dir,
+            cache_file="exchange_info.json",
+            cache_ttl_seconds=3600,
+            allow_fetch=False,  # No fetch allowed
+        )
+        provider = ConstraintProvider(http_client=None, config=config)
+
+        constraints = provider.get_constraints()
+
+        # Should still return constraints from stale cache
+        assert len(constraints) == 1
+        assert "BTCUSDT" in constraints
+
+    def test_cache_miss_fetches_when_allow_fetch_true(
+        self, temp_cache_dir: Path, mock_exchange_info: dict[str, Any]
+    ) -> None:
+        """Missing cache should trigger API fetch when allow_fetch=True."""
+        mock_client = MockHttpClient(
+            response=MockHttpResponse(status_code=200, json_data=mock_exchange_info)
+        )
+
+        config = ConstraintProviderConfig(
+            cache_dir=temp_cache_dir,
+            cache_file="nonexistent.json",
+            allow_fetch=True,
+        )
+        provider = ConstraintProvider(http_client=mock_client, config=config)
+
+        constraints = provider.get_constraints()
+
+        assert len(constraints) == 1
+        assert len(mock_client.calls) == 1
+
+    def test_cache_miss_no_fetch_returns_empty(self, temp_cache_dir: Path) -> None:
+        """Missing cache with allow_fetch=False should return empty dict."""
+        config = ConstraintProviderConfig(
+            cache_dir=temp_cache_dir,
+            cache_file="nonexistent.json",
+            allow_fetch=False,
+        )
+        provider = ConstraintProvider(http_client=None, config=config)
+
+        constraints = provider.get_constraints()
+
+        assert constraints == {}
+
+    def test_api_failure_with_stale_cache_falls_back(
+        self, temp_cache_dir: Path, mock_exchange_info: dict[str, Any]
+    ) -> None:
+        """API failure should fall back to stale cache."""
+        # Create stale cache
+        cache_file = temp_cache_dir / "exchange_info.json"
+        with cache_file.open("w") as f:
+            json.dump(mock_exchange_info, f)
+        old_mtime = time.time() - 7200
+        os.utime(cache_file, (old_mtime, old_mtime))
+
+        # Mock client that fails
+        mock_client = MockHttpClient(should_fail=True)
+
+        config = ConstraintProviderConfig(
+            cache_dir=temp_cache_dir,
+            cache_file="exchange_info.json",
+            cache_ttl_seconds=3600,
+            allow_fetch=True,
+        )
+        provider = ConstraintProvider(http_client=mock_client, config=config)
+
+        constraints = provider.get_constraints()
+
+        # Should fall back to stale cache
+        assert len(constraints) == 1
+        assert "BTCUSDT" in constraints
+        assert len(mock_client.calls) == 1  # API was attempted
+
+    def test_api_failure_without_cache_returns_empty(self, temp_cache_dir: Path) -> None:
+        """API failure with no cache should return empty dict."""
+        mock_client = MockHttpClient(should_fail=True)
+
+        config = ConstraintProviderConfig(
+            cache_dir=temp_cache_dir,
+            cache_file="nonexistent.json",
+            allow_fetch=True,
+        )
+        provider = ConstraintProvider(http_client=mock_client, config=config)
+
+        constraints = provider.get_constraints()
+
+        assert constraints == {}
+        assert len(mock_client.calls) == 1

@@ -3266,3 +3266,111 @@ engine = ExecutionEngine(port=port, config=config, l2_features=l2_features)
 - ADR-059: ExecutionEngine qty constraints
 - ADR-061: ExecutionEngineConfig with constraints_enabled
 - M7-03: Policy L2 gating
+
+## ADR-063 — M7-08: ConstraintProvider TTL and Refresh Policy
+
+- **Date:** 2026-02-10
+- **Status:** accepted
+- **PR:** #133
+- **Related:** M7-06 (ADR-060), M7-07 (ADR-061)
+
+### Context
+
+ConstraintProvider loads symbol constraints (step_size, min_qty) from Binance exchangeInfo.
+For production use, we need:
+
+1. **TTL semantics**: Cache should expire after a configurable time
+2. **Controlled refresh**: API fetch should be gated by explicit flag
+3. **Graceful degradation**: Fallback chain when API is unavailable
+4. **No I/O at init**: Preserve determinism and fast startup
+
+### Decision
+
+1. **ConstraintProviderConfig with TTL:**
+   ```python
+   @dataclass(frozen=True)
+   class ConstraintProviderConfig:
+       cache_dir: Path = Path("var/cache")
+       cache_file: str = "exchange_info_futures.json"
+       cache_ttl_seconds: int = 86400  # 24 hours
+       allow_fetch: bool = True
+       exchange_info_url: str = BINANCE_FUTURES_EXCHANGE_INFO_URL
+   ```
+
+2. **Staleness check:**
+   - Cache is stale when `now - mtime(cache_file) > cache_ttl_seconds`
+   - Uses `Path.stat().st_mtime` for file modification time
+   - TTL only affects "decision to fetch", not stale fallback usage
+
+3. **Refresh policy (get_constraints flow):**
+   ```
+   1. If in-memory cache exists and not force_refresh → return it
+   2. If file cache is fresh (within TTL) → load and return
+   3. If allow_fetch=True and http_client available:
+      a. Try API fetch
+      b. On success: save to cache, return constraints
+      c. On failure: log warning, continue to fallback
+   4. Fallback: try loading stale cache (if exists)
+   5. Final fallback: return empty dict {}
+   ```
+
+4. **No auto-refresh on init:**
+   - `__init__` does no I/O
+   - Constraints loaded lazily on `get_constraints()` call
+   - Preserves determinism in replay (constraints_enabled=False by default)
+
+5. **Logging (debug/info):**
+   - `cache_hit_fresh`: "Loaded N constraints from cache"
+   - `cache_stale_api_success`: "Fetched N constraints from API"
+   - `cache_stale_api_fail`: "API fetch failed, using stale cache"
+   - `no_constraints`: "No constraints available"
+
+### API Contract
+
+```python
+# Production: fetch enabled, 24h TTL
+config = ConstraintProviderConfig(
+    cache_ttl_seconds=86400,
+    allow_fetch=True,
+)
+provider = ConstraintProvider(http_client=client, config=config)
+
+# Offline/replay: fetch disabled, use cache only
+provider = ConstraintProvider.from_cache(Path("var/cache/exchange_info.json"))
+# Equivalent to: allow_fetch=False, uses existing cache
+
+# Force refresh (ops/CLI)
+constraints = provider.get_constraints(force_refresh=True)
+```
+
+### Non-goals
+
+- Auto-refresh on background thread
+- Per-symbol TTL
+- Cache invalidation signals
+- Retry/backoff logic (single attempt only)
+
+### Consequences
+
+- **Safe by default**: `allow_fetch=False` in offline mode, `constraints_enabled=False` means no constraint impact
+- **Determinism preserved**: No network I/O in replay path
+- **Graceful degradation**: Stale cache is better than no constraints
+- **Testable**: All network paths mockable via `allow_fetch=False` + fixtures
+
+### Fallback Chain Summary
+
+| Cache State | allow_fetch | API Result | Outcome |
+|-------------|-------------|------------|---------|
+| Fresh | any | - | Use fresh cache |
+| Stale | True | Success | Use API, update cache |
+| Stale | True | Failure | Use stale cache |
+| Stale | False | - | Use stale cache |
+| Missing | True | Success | Use API, create cache |
+| Missing | True | Failure | Empty dict |
+| Missing | False | - | Empty dict |
+
+### Related
+
+- ADR-060: ConstraintProvider initial implementation
+- ADR-061: ExecutionEngineConfig constraints_enabled gate
+- ADR-059: ExecutionEngine qty constraints
