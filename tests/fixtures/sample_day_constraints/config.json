@@ -1,0 +1,19 @@
+{
+  "description": "Fixture to test M7 constraints: ORDER_SKIPPED with EXEC_QTY_BELOW_MIN_QTY",
+  "symbols": ["TESTUSDT"],
+  "duration_ms": 3000,
+  "expected_digest": "080f6d192a2c4d14",
+  "expected_paper_digest": "aba3bc69acdc0b6f",
+  "notes": "size_per_level=1.0 but min_qty=10.0 => qty constrained to 0 => ORDER_SKIPPED",
+  "schema_version": "v1",
+  "constraints_enabled": true,
+  "symbol_constraints": {
+    "TESTUSDT": {
+      "step_size": "0.001",
+      "min_qty": "10.0"
+    }
+  },
+  "size_per_level": "1.0",
+  "max_notional_per_symbol": "10000",
+  "max_notional_total": "50000"
+}

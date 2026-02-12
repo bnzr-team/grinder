@@ -20,11 +20,14 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from decimal import Decimal
 from pathlib import Path
 from typing import Any
 
+from grinder.execution import SymbolConstraints
 from grinder.paper import PaperEngine
+from grinder.policies.grid.adaptive import AdaptiveGridConfig
 from grinder.replay import ReplayEngine
 from grinder.selection import TopKConfigV1
 
@@ -69,12 +72,109 @@ class BacktestCheck:
     report_digest_2: str
     match: bool
     all_fixtures_passed: bool
-    errors: list[str]
+    errors: list[str] = field(default_factory=list)
 
     @property
     def passed(self) -> bool:
         """Check if backtest determinism passed."""
         return self.match and self.all_fixtures_passed and not self.errors
+
+
+@dataclass
+class FixtureConfig:
+    """Parsed configuration for a fixture."""
+
+    controller_enabled: bool
+    feature_engine_enabled: bool
+    adaptive_policy_enabled: bool
+    topk_v1_enabled: bool
+    topk_v1_config: TopKConfigV1 | None
+    constraints_enabled: bool
+    constraint_cache_path: Path | None
+    symbol_constraints: dict[str, dict[str, Any]] | None
+    l2_execution_guard_enabled: bool
+    l2_execution_max_age_ms: int
+    l2_execution_impact_threshold_bps: int
+    size_per_level: Decimal | None
+    max_notional_per_symbol: Decimal | None
+    max_notional_total: Decimal | None
+    adaptive_config: AdaptiveGridConfig | None
+    replay_expected: str
+    paper_expected: str
+
+
+def parse_fixture_config(fixture_path: Path, config: dict[str, Any]) -> FixtureConfig:
+    """Parse fixture configuration into FixtureConfig."""
+    controller_enabled = bool(config.get("controller_enabled", False))
+    feature_engine_enabled = bool(config.get("feature_engine_enabled", False))
+    adaptive_policy_enabled = bool(config.get("adaptive_policy_enabled", False))
+    topk_v1_enabled = bool(config.get("topk_v1_enabled", False))
+
+    # Build TopKConfigV1 if enabled
+    topk_v1_config = None
+    if topk_v1_enabled:
+        topk_v1_config = TopKConfigV1(
+            k=config.get("topk_v1_k", 3),
+            spread_max_bps=config.get("topk_v1_spread_max_bps", 100),
+            thin_l1_min=config.get("topk_v1_thin_l1_min", 1.0),
+            warmup_min=config.get("topk_v1_warmup_min", 10),
+        )
+        feature_engine_enabled = True
+
+    # M7: Read constraint and L2 guard config
+    constraints_enabled = bool(config.get("constraints_enabled", False))
+    constraint_cache_file = config.get("constraint_cache_file", "")
+    constraint_cache_path: Path | None = None
+    if constraint_cache_file:
+        constraint_cache_path = fixture_path / constraint_cache_file
+    symbol_constraints = config.get("symbol_constraints")
+    l2_execution_guard_enabled = bool(config.get("l2_execution_guard_enabled", False))
+    l2_execution_max_age_ms = int(config.get("l2_execution_max_age_ms", 1500))
+    l2_execution_impact_threshold_bps = int(config.get("l2_execution_impact_threshold_bps", 50))
+
+    # Custom sizing params
+    size_per_level_str = config.get("size_per_level")
+    size_per_level = Decimal(size_per_level_str) if size_per_level_str else None
+    max_notional_str = config.get("max_notional_per_symbol")
+    max_notional_per_symbol = Decimal(max_notional_str) if max_notional_str else None
+    max_total_str = config.get("max_notional_total")
+    max_notional_total = Decimal(max_total_str) if max_total_str else None
+
+    # M7: Build AdaptiveGridConfig only if l2_gating is explicitly enabled
+    adaptive_config: AdaptiveGridConfig | None = None
+    l2_gating_enabled = bool(config.get("l2_gating_enabled", False))
+    if l2_gating_enabled:
+        adaptive_config = AdaptiveGridConfig(
+            l2_gating_enabled=l2_gating_enabled,
+            l2_impact_threshold_bps=int(config.get("l2_impact_threshold_bps", 50)),
+        )
+        adaptive_policy_enabled = True
+
+    # Expected digests
+    replay_expected = config.get("expected_digest", "")
+    paper_expected = config.get("expected_paper_digest", "")
+    if not paper_expected:
+        paper_expected = config.get("canonical_digest", "")
+
+    return FixtureConfig(
+        controller_enabled=controller_enabled,
+        feature_engine_enabled=feature_engine_enabled,
+        adaptive_policy_enabled=adaptive_policy_enabled,
+        topk_v1_enabled=topk_v1_enabled,
+        topk_v1_config=topk_v1_config,
+        constraints_enabled=constraints_enabled,
+        constraint_cache_path=constraint_cache_path,
+        symbol_constraints=symbol_constraints,
+        l2_execution_guard_enabled=l2_execution_guard_enabled,
+        l2_execution_max_age_ms=l2_execution_max_age_ms,
+        l2_execution_impact_threshold_bps=l2_execution_impact_threshold_bps,
+        size_per_level=size_per_level,
+        max_notional_per_symbol=max_notional_per_symbol,
+        max_notional_total=max_notional_total,
+        adaptive_config=adaptive_config,
+        replay_expected=replay_expected,
+        paper_expected=paper_expected,
+    )
 
 
 def discover_fixtures() -> list[Path]:
@@ -114,15 +214,56 @@ def run_paper(
     adaptive_policy_enabled: bool = False,
     topk_v1_enabled: bool = False,
     topk_v1_config: TopKConfigV1 | None = None,
+    # M7 parameters
+    constraints_enabled: bool = False,
+    constraint_cache_path: Path | None = None,
+    l2_execution_guard_enabled: bool = False,
+    l2_execution_max_age_ms: int = 1500,
+    l2_execution_impact_threshold_bps: int = 50,
+    symbol_constraints: dict[str, dict[str, Any]] | None = None,
+    # Custom params for fixture testing
+    size_per_level: Decimal | None = None,
+    max_notional_per_symbol: Decimal | None = None,
+    max_notional_total: Decimal | None = None,
+    # M7 L2 gating (AdaptiveGridPolicy)
+    adaptive_config: AdaptiveGridConfig | None = None,
 ) -> str:
     """Run paper trading and return digest."""
-    engine = PaperEngine(
-        controller_enabled=controller_enabled,
-        feature_engine_enabled=feature_engine_enabled,
-        adaptive_policy_enabled=adaptive_policy_enabled,
-        topk_v1_enabled=topk_v1_enabled,
-        topk_v1_config=topk_v1_config,
-    )
+    # Convert symbol_constraints dict to SymbolConstraints objects
+    parsed_constraints: dict[str, SymbolConstraints] | None = None
+    if symbol_constraints:
+        parsed_constraints = {
+            sym: SymbolConstraints(
+                step_size=Decimal(str(c["step_size"])),
+                min_qty=Decimal(str(c["min_qty"])),
+            )
+            for sym, c in symbol_constraints.items()
+        }
+
+    # Build kwargs with defaults for optional params
+    kwargs: dict[str, Any] = {
+        "controller_enabled": controller_enabled,
+        "feature_engine_enabled": feature_engine_enabled,
+        "adaptive_policy_enabled": adaptive_policy_enabled,
+        "topk_v1_enabled": topk_v1_enabled,
+        "topk_v1_config": topk_v1_config,
+        "constraints_enabled": constraints_enabled,
+        "constraint_cache_path": constraint_cache_path,
+        "l2_execution_guard_enabled": l2_execution_guard_enabled,
+        "l2_execution_max_age_ms": l2_execution_max_age_ms,
+        "l2_execution_impact_threshold_bps": l2_execution_impact_threshold_bps,
+        "symbol_constraints": parsed_constraints,
+    }
+    if size_per_level is not None:
+        kwargs["size_per_level"] = size_per_level
+    if max_notional_per_symbol is not None:
+        kwargs["max_notional_per_symbol"] = max_notional_per_symbol
+    if max_notional_total is not None:
+        kwargs["max_notional_total"] = max_notional_total
+    if adaptive_config is not None:
+        kwargs["adaptive_config"] = adaptive_config
+
+    engine = PaperEngine(**kwargs)
     result = engine.run(fixture_path)
     return result.digest
 
@@ -140,31 +281,8 @@ def check_fixture(fixture_path: Path, verbose: bool = False) -> FixtureCheck:
     """Check a single fixture for determinism."""
     name = fixture_path.name
     config = load_config(fixture_path)
-    controller_enabled = bool(config.get("controller_enabled", False))
-    feature_engine_enabled = bool(config.get("feature_engine_enabled", False))
-    adaptive_policy_enabled = bool(config.get("adaptive_policy_enabled", False))
-    topk_v1_enabled = bool(config.get("topk_v1_enabled", False))
-
-    # Build TopKConfigV1 if enabled
-    topk_v1_config = None
-    if topk_v1_enabled:
-        topk_v1_config = TopKConfigV1(
-            k=config.get("topk_v1_k", 3),
-            spread_max_bps=config.get("topk_v1_spread_max_bps", 100),
-            thin_l1_min=config.get("topk_v1_thin_l1_min", 1.0),
-            warmup_min=config.get("topk_v1_warmup_min", 10),
-        )
-        # If topk_v1 is enabled, feature_engine must also be enabled
-        feature_engine_enabled = True
-
+    fc = parse_fixture_config(fixture_path, config)
     errors: list[str] = []
-
-    # Get expected digests from config
-    replay_expected = config.get("expected_digest", "")
-    paper_expected = config.get("expected_paper_digest", "")
-    # Also check canonical_digest (alternative key)
-    if not paper_expected:
-        paper_expected = config.get("canonical_digest", "")
 
     if verbose:
         print(f"  Checking {name}...")
@@ -178,48 +296,64 @@ def check_fixture(fixture_path: Path, verbose: bool = False) -> FixtureCheck:
         replay_1 = replay_2 = ""
 
     replay_match = replay_1 == replay_2 and replay_1 != ""
-
-    # Check replay against expected (if specified, otherwise skip)
-    replay_expected_match = replay_1 == replay_expected if replay_expected else True
+    replay_expected_match = replay_1 == fc.replay_expected if fc.replay_expected else True
 
     # Run paper twice
     try:
         paper_1 = run_paper(
             fixture_path,
-            controller_enabled=controller_enabled,
-            feature_engine_enabled=feature_engine_enabled,
-            adaptive_policy_enabled=adaptive_policy_enabled,
-            topk_v1_enabled=topk_v1_enabled,
-            topk_v1_config=topk_v1_config,
+            controller_enabled=fc.controller_enabled,
+            feature_engine_enabled=fc.feature_engine_enabled,
+            adaptive_policy_enabled=fc.adaptive_policy_enabled,
+            topk_v1_enabled=fc.topk_v1_enabled,
+            topk_v1_config=fc.topk_v1_config,
+            constraints_enabled=fc.constraints_enabled,
+            constraint_cache_path=fc.constraint_cache_path,
+            l2_execution_guard_enabled=fc.l2_execution_guard_enabled,
+            l2_execution_max_age_ms=fc.l2_execution_max_age_ms,
+            l2_execution_impact_threshold_bps=fc.l2_execution_impact_threshold_bps,
+            symbol_constraints=fc.symbol_constraints,
+            size_per_level=fc.size_per_level,
+            max_notional_per_symbol=fc.max_notional_per_symbol,
+            max_notional_total=fc.max_notional_total,
+            adaptive_config=fc.adaptive_config,
         )
         paper_2 = run_paper(
             fixture_path,
-            controller_enabled=controller_enabled,
-            feature_engine_enabled=feature_engine_enabled,
-            adaptive_policy_enabled=adaptive_policy_enabled,
-            topk_v1_enabled=topk_v1_enabled,
-            topk_v1_config=topk_v1_config,
+            controller_enabled=fc.controller_enabled,
+            feature_engine_enabled=fc.feature_engine_enabled,
+            adaptive_policy_enabled=fc.adaptive_policy_enabled,
+            topk_v1_enabled=fc.topk_v1_enabled,
+            topk_v1_config=fc.topk_v1_config,
+            constraints_enabled=fc.constraints_enabled,
+            constraint_cache_path=fc.constraint_cache_path,
+            l2_execution_guard_enabled=fc.l2_execution_guard_enabled,
+            l2_execution_max_age_ms=fc.l2_execution_max_age_ms,
+            l2_execution_impact_threshold_bps=fc.l2_execution_impact_threshold_bps,
+            symbol_constraints=fc.symbol_constraints,
+            size_per_level=fc.size_per_level,
+            max_notional_per_symbol=fc.max_notional_per_symbol,
+            max_notional_total=fc.max_notional_total,
+            adaptive_config=fc.adaptive_config,
         )
     except Exception as e:
         errors.append(f"Paper error: {e}")
         paper_1 = paper_2 = ""
 
     paper_match = paper_1 == paper_2 and paper_1 != ""
-
-    # Check paper against expected (if specified, otherwise skip)
-    paper_expected_match = paper_1 == paper_expected if paper_expected else True
+    paper_expected_match = paper_1 == fc.paper_expected if fc.paper_expected else True
 
     return FixtureCheck(
         name=name,
         replay_digest_1=replay_1,
         replay_digest_2=replay_2,
         replay_match=replay_match,
-        replay_expected=replay_expected,
+        replay_expected=fc.replay_expected,
         replay_expected_match=replay_expected_match,
         paper_digest_1=paper_1,
         paper_digest_2=paper_2,
         paper_match=paper_match,
-        paper_expected=paper_expected,
+        paper_expected=fc.paper_expected,
         paper_expected_match=paper_expected_match,
         errors=errors,
     )

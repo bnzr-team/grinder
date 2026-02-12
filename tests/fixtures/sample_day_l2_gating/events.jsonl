@@ -1,0 +1,4 @@
+{"ts_ms": 900, "type": "l2_snapshot", "v": 0, "symbol": "TESTUSDT", "venue": "binance", "depth": 2, "bids": [["1.0000", "0.001"], ["0.9900", "0.003"]], "asks": [["1.0001", "0.001"], ["1.0101", "0.003"]]}
+{"ts": 1000, "type": "SNAPSHOT", "symbol": "TESTUSDT", "bid_price": "1.0000", "ask_price": "1.0001", "bid_qty": "0.001", "ask_qty": "0.001", "last_price": "1.00005", "last_qty": "0.001"}
+{"ts": 2000, "type": "SNAPSHOT", "symbol": "TESTUSDT", "bid_price": "1.0100", "ask_price": "1.0101", "bid_qty": "0.001", "ask_qty": "0.001", "last_price": "1.01005", "last_qty": "0.001"}
+{"ts": 3000, "type": "SNAPSHOT", "symbol": "TESTUSDT", "bid_price": "1.0200", "ask_price": "1.0201", "bid_qty": "0.001", "ask_qty": "0.001", "last_price": "1.02005", "last_qty": "0.001"}
