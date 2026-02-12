@@ -699,3 +699,47 @@ class TestPolicyFeaturesPlumbing:
         # They should be identical, so no "silent" override occurs
         assert features["mid_price"] == snapshot.mid_price
         assert features["mid_price"] == Decimal("50005")
+
+
+class TestM7SafeByDefault:
+    """Test M7 safe-by-default contract: new flags OFF preserves baseline behavior.
+
+    ADR-059 / ADR-062: When constraints_enabled=False and l2_execution_guard_enabled=False,
+    the engine must produce identical digests to the baseline (before M7 changes).
+    This ensures backward compatibility and safe rollout.
+    """
+
+    def test_m7_flags_off_matches_baseline_digest(self) -> None:
+        """Test that M7 flags OFF produces identical digest to baseline.
+
+        This is the critical regression test for M7 safe-by-default contract:
+        - constraints_enabled=False (default)
+        - l2_execution_guard_enabled=False (default)
+        => digest must match EXPECTED_PAPER_DIGEST_SAMPLE_DAY
+        """
+        # Explicitly pass M7 flags as OFF
+        engine = PaperEngine(
+            constraints_enabled=False,
+            l2_execution_guard_enabled=False,
+        )
+        result = engine.run(FIXTURE_DIR)
+
+        assert result.digest == EXPECTED_PAPER_DIGEST_SAMPLE_DAY, (
+            f"M7 flags OFF changed digest: got {result.digest}, "
+            f"expected {EXPECTED_PAPER_DIGEST_SAMPLE_DAY}. "
+            "This breaks the safe-by-default contract!"
+        )
+
+    def test_m7_flags_off_matches_allowed_fixture_digest(self) -> None:
+        """Test M7 flags OFF with allowed fixture also matches baseline."""
+        engine = PaperEngine(
+            constraints_enabled=False,
+            l2_execution_guard_enabled=False,
+        )
+        result = engine.run(FIXTURE_ALLOWED_DIR)
+
+        assert result.digest == EXPECTED_PAPER_DIGEST_ALLOWED, (
+            f"M7 flags OFF changed digest for allowed fixture: got {result.digest}, "
+            f"expected {EXPECTED_PAPER_DIGEST_ALLOWED}. "
+            "This breaks the safe-by-default contract!"
+        )

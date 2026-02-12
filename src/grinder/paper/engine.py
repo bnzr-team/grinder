@@ -24,8 +24,17 @@ from typing import Any
 from grinder.contracts import Snapshot
 from grinder.controller import AdaptiveController, ControllerMode
 from grinder.core import OrderState
-from grinder.execution import ExecutionEngine, ExecutionState, NoOpExchangePort, OrderRecord
-from grinder.features import FeatureEngine, FeatureEngineConfig
+from grinder.execution import (
+    ConstraintProvider,
+    ConstraintProviderConfig,
+    ExecutionEngine,
+    ExecutionEngineConfig,
+    ExecutionState,
+    NoOpExchangePort,
+    OrderRecord,
+    SymbolConstraints,
+)
+from grinder.features import FeatureEngine, FeatureEngineConfig, L2FeatureSnapshot
 from grinder.gating import GateReason, GatingResult, RateLimiter, RiskGate, ToxicityGate
 from grinder.paper.cycle_engine import CycleEngine
 from grinder.paper.fills import Fill, check_pending_fills, simulate_fills
@@ -34,6 +43,7 @@ from grinder.policies.base import GridPlan  # noqa: TC001 - used at runtime
 from grinder.policies.grid.adaptive import AdaptiveGridConfig, AdaptiveGridPolicy
 from grinder.policies.grid.static import StaticGridPolicy
 from grinder.prefilter import TopKSelector, hard_filter
+from grinder.replay import parse_l2_snapshot_line
 from grinder.risk import (
     DrawdownGuard,
     DrawdownGuardV1,
@@ -275,6 +285,14 @@ class PaperEngine:
         # DrawdownGuardV1 parameters (ADR-033)
         dd_guard_v1_enabled: bool = False,
         dd_guard_v1_config: DrawdownGuardV1Config | None = None,
+        # M7 Execution constraints parameters (ADR-059, ADR-060)
+        constraints_enabled: bool = False,
+        symbol_constraints: dict[str, SymbolConstraints] | None = None,
+        constraint_cache_path: Path | None = None,
+        # M7 L2 execution guard parameters (ADR-062)
+        l2_execution_guard_enabled: bool = False,
+        l2_execution_max_age_ms: int = 1500,
+        l2_execution_impact_threshold_bps: int = 50,
     ) -> None:
         """Initialize paper trading engine.
 
@@ -319,6 +337,12 @@ class PaperEngine:
             topk_v1_config: Configuration for Top-K v1 selection (uses defaults if None)
             dd_guard_v1_enabled: Enable DrawdownGuardV1 for intent-based blocking (default False)
             dd_guard_v1_config: Configuration for DrawdownGuardV1 (uses defaults if None)
+            constraints_enabled: Enable M7 symbol qty constraints (default False)
+            symbol_constraints: Per-symbol step_size/min_qty constraints (M7-05)
+            constraint_cache_path: Path to cached exchangeInfo for constraints (M7-06)
+            l2_execution_guard_enabled: Enable L2-based execution guards (default False)
+            l2_execution_max_age_ms: Max age in ms for L2 snapshot (default 1500)
+            l2_execution_impact_threshold_bps: Impact threshold in bps to skip order (default 50)
         """
         # Policy and execution
         self._policy = StaticGridPolicy(
@@ -327,10 +351,38 @@ class PaperEngine:
             size_per_level=size_per_level,
         )
         self._port = NoOpExchangePort()
+
+        # M7: Build ExecutionEngineConfig
+        exec_config = ExecutionEngineConfig(
+            constraints_enabled=constraints_enabled,
+            l2_execution_guard_enabled=l2_execution_guard_enabled,
+            l2_execution_max_age_ms=l2_execution_max_age_ms,
+            l2_execution_impact_threshold_bps=l2_execution_impact_threshold_bps,
+        )
+
+        # M7: Build ConstraintProvider if cache path is provided
+        constraint_provider: ConstraintProvider | None = None
+        if constraints_enabled and constraint_cache_path is not None:
+            constraint_provider = ConstraintProvider(
+                http_client=None,  # No HTTP for paper trading
+                config=ConstraintProviderConfig(
+                    cache_dir=constraint_cache_path.parent,
+                    cache_file=constraint_cache_path.name,
+                    allow_fetch=False,  # Use cache only
+                ),
+            )
+
+        # M7: Store L2 features state (will be updated during processing)
+        self._l2_features: dict[str, L2FeatureSnapshot] = {}
+
         self._engine = ExecutionEngine(
             port=self._port,
             price_precision=price_precision,
             quantity_precision=quantity_precision,
+            symbol_constraints=symbol_constraints,
+            config=exec_config,
+            constraint_provider=constraint_provider,
+            l2_features=self._l2_features,  # M7: Pass L2 features reference for guards
         )
 
         # Gating controls
@@ -722,6 +774,7 @@ class PaperEngine:
                 policy_features,
                 kill_switch_active=kill_switch_active,
                 toxicity_result=preliminary_toxicity,
+                l2_features=self._l2_features.get(symbol),
             )
         elif self._controller_enabled and effective_spacing_bps != self._base_spacing_bps:
             # Create a temporary policy with adjusted spacing if controller is active
@@ -981,6 +1034,8 @@ class PaperEngine:
         ):
             # First pass: feed all events to FeatureEngine for warmup
             for event in events:
+                # M7: Process L2 events to update L2 features
+                self._process_l2_event(event)
                 snapshot = self._parse_snapshot(event)
                 if snapshot:
                     # Update FeatureEngine to build bar history
@@ -1031,6 +1086,8 @@ class PaperEngine:
             outputs: list[PaperOutput] = []
             for event in events:
                 try:
+                    # M7: Process L2 events to update L2 features
+                    self._process_l2_event(event)
                     snapshot = self._parse_snapshot(event)
                     if snapshot:
                         # Check if symbol is in Top-K v1 selected list
@@ -1078,6 +1135,8 @@ class PaperEngine:
             # First pass: populate TopKSelector with prices for scoring
             self._topk_selector.reset()
             for event in events:
+                # M7: Process L2 events to update L2 features
+                self._process_l2_event(event)
                 snapshot = self._parse_snapshot(event)
                 if snapshot:
                     self._topk_selector.record_price(
@@ -1094,16 +1153,20 @@ class PaperEngine:
             result.topk_scores = [s.to_dict() for s in topk_result.scores]
 
             # Filter events to only include selected symbols
+            # Note: Keep non-SNAPSHOT events (like l2_snapshot) for L2 feature updates
             filtered_events = [
                 e
                 for e in events
-                if e.get("symbol") in selected_symbols or e.get("type") != "SNAPSHOT"
+                if e.get("symbol") in selected_symbols
+                or e.get("type") not in ("SNAPSHOT",)  # Keep L2 and other events
             ]
 
             # Process filtered events in order
             outputs = []
             for event in filtered_events:
                 try:
+                    # M7: Process L2 events to update L2 features
+                    self._process_l2_event(event)
                     snapshot = self._parse_snapshot(event)
                     if snapshot:
                         output = self.process_snapshot(snapshot)
@@ -1217,6 +1280,25 @@ class PaperEngine:
             last_price=Decimal(event["last_price"]),
             last_qty=Decimal(event["last_qty"]),
         )
+
+    def _process_l2_event(self, event: dict[str, Any]) -> None:
+        """Process L2 snapshot event and update L2 features.
+
+        M7: L2 execution guards require L2 feature snapshots.
+        This method parses l2_snapshot events and updates self._l2_features.
+        """
+        if event.get("type") != "l2_snapshot":
+            return
+
+        # Parse the L2 snapshot from event dict
+        line = json.dumps(event)
+        l2_snapshot = parse_l2_snapshot_line(line)
+
+        # Compute L2 features from snapshot
+        l2_features = L2FeatureSnapshot.from_l2_snapshot(l2_snapshot)
+
+        # Update the L2 features dict (ExecutionEngine holds reference to this)
+        self._l2_features[l2_snapshot.symbol] = l2_features
 
     def _compute_digest(self, outputs: list[dict[str, Any]]) -> str:
         """Compute deterministic digest of outputs."""
