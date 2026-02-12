@@ -67,7 +67,7 @@ ruff format --check .
 mypy .
 
 # Unicode security scan
-python3 scripts/check_unicode.py --all
+python3 -m scripts.check_unicode --all
 ```
 
 ### 2. Replay Determinism

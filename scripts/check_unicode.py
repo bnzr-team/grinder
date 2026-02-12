@@ -10,8 +10,8 @@ This script scans files for:
 Box-drawing characters (U+2500-257F) are explicitly allowed for diagrams.
 
 Usage:
-  python scripts/check_unicode.py           # Scan docs/ only (default)
-  python scripts/check_unicode.py --all     # Scan docs/, src/, tests/
+  python -m scripts.check_unicode           # Scan docs/ only (default)
+  python -m scripts.check_unicode --all     # Scan docs/, src/, tests/
 
 Exit codes:
   0 - Clean (no dangerous chars, only allowed non-ASCII)

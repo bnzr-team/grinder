@@ -7,13 +7,13 @@ and does not contain any FORBIDDEN_METRIC_LABELS.
 
 Usage:
     # Against live service
-    python scripts/smoke_metrics_contract.py --url http://localhost:9090/metrics
+    python -m scripts.smoke_metrics_contract --url http://localhost:9090/metrics
 
     # Against file (for testing)
-    python scripts/smoke_metrics_contract.py --file /tmp/metrics.txt
+    python -m scripts.smoke_metrics_contract --file /tmp/metrics.txt
 
     # With verbose output
-    python scripts/smoke_metrics_contract.py --url http://localhost:9090/metrics -v
+    python -m scripts.smoke_metrics_contract --url http://localhost:9090/metrics -v
 
 Exit codes:
     0 - All patterns present, no forbidden labels
