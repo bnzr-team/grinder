@@ -2,6 +2,27 @@
 
 > Machine learning for parameter calibration and policy discovery
 
+**Status:** M8 milestone — implementation planned
+**SSOT:** This document defines ML integration contracts
+**See also:** ADR-064 (ML Integration), docs/05_FEATURE_CATALOG.md
+
+---
+
+## Table of Contents
+
+1. [ML Philosophy](#121-ml-philosophy)
+2. [M8 I/O Contracts (SSOT)](#122-m8-io-contracts-ssot)
+3. [Determinism Invariants](#123-determinism-invariants)
+4. [Artifact Versioning Scheme](#124-artifact-versioning-scheme)
+5. [Runtime Enablement Model](#125-runtime-enablement-model)
+6. [M8 Milestone Plan](#126-m8-milestone-plan)
+7. [ML Use Cases](#127-ml-use-cases)
+8. [Feature Engineering for ML](#128-feature-engineering-for-ml)
+9. [Model Training Pipeline](#129-model-training-pipeline)
+10. [Model Registry](#1210-model-registry)
+11. [Model Monitoring](#1211-model-monitoring)
+12. [Calibration Path](#1212-calibration-path)
+
 ---
 
 ## 12.1 ML Philosophy
@@ -28,7 +49,445 @@
 
 ---
 
-## 12.2 ML Use Cases
+## 12.2 M8 I/O Contracts (SSOT)
+
+This section defines the canonical input/output contracts for ML integration.
+All implementations MUST conform to these contracts.
+
+### 12.2.1 Input: Feature Snapshots
+
+ML models receive two feature snapshot types as input:
+
+#### FeatureSnapshot (L1 + Volatility)
+
+```python
+@dataclass(frozen=True)
+class FeatureSnapshot:
+    """L1 microstructure + volatility features.
+
+    Source: src/grinder/features/types.py
+    """
+    ts: int                    # Timestamp (ms)
+    symbol: str                # Trading symbol
+
+    # L1 microstructure
+    mid_price: Decimal         # Mid price (bid + ask) / 2
+    spread_bps: int            # Bid-ask spread in integer bps
+    imbalance_l1_bps: int      # L1 imbalance [-10000, 10000]
+    thin_l1: Decimal           # Min(bid_qty, ask_qty)
+
+    # Volatility
+    natr_bps: int              # Normalized ATR in integer bps
+    atr: Decimal | None        # Raw ATR (None if warmup)
+
+    # Range/trend
+    sum_abs_returns_bps: int   # Sum of absolute returns
+    net_return_bps: int        # Net return over horizon
+    range_score: int           # Choppiness indicator
+
+    # Metadata
+    warmup_bars: int           # Completed bars available
+```
+
+#### L2FeatureSnapshot (Order Book Depth)
+
+```python
+@dataclass(frozen=True)
+class L2FeatureSnapshot:
+    """L2 order book features.
+
+    Source: src/grinder/features/l2_types.py
+    Field names: SPEC_V2_0.md §B.2 (*_topN_* naming)
+    """
+    ts_ms: int                 # Timestamp (ms)
+    symbol: str                # Trading symbol
+    venue: str                 # Exchange venue
+    depth: int                 # Levels per side (topN)
+
+    # Depth features
+    depth_bid_qty_topN: Decimal
+    depth_ask_qty_topN: Decimal
+    depth_imbalance_topN_bps: int  # [-10000, 10000]
+
+    # Impact features (VWAP slippage)
+    impact_buy_topN_bps: int
+    impact_sell_topN_bps: int
+    impact_buy_topN_insufficient_depth: int   # 0 or 1
+    impact_sell_topN_insufficient_depth: int  # 0 or 1
+
+    # Wall features
+    wall_bid_score_topN_x1000: int
+    wall_ask_score_topN_x1000: int
+
+    # Config
+    qty_ref: Decimal           # Reference qty for impact calc
+```
+
+### 12.2.2 Output: MlSignalSnapshot
+
+ML models produce a single output type:
+
+```python
+@dataclass(frozen=True)
+class MlSignalSnapshot:
+    """ML model output signal.
+
+    All probabilities are integers in basis points [0, 10000].
+    This ensures deterministic serialization/comparison.
+
+    SSOT: docs/12_ML_SPEC.md §12.2.2
+    """
+    ts: int                    # Timestamp when computed (ms)
+    symbol: str                # Trading symbol
+    model_version: str         # Model artifact version (e.g., "v1.0.0")
+    model_hash: str            # SHA256 of model artifact (16-char hex)
+
+    # Regime probabilities (sum = 10000 bps = 100%)
+    regime_low_prob_bps: int   # P(LOW regime) in bps
+    regime_mid_prob_bps: int   # P(MID regime) in bps
+    regime_high_prob_bps: int  # P(HIGH regime) in bps
+
+    # Predicted regime (argmax of probabilities)
+    predicted_regime: str      # "LOW" | "MID" | "HIGH"
+    regime_confidence_bps: int # Max probability in bps
+
+    # Parameter adjustments (multipliers as x1000 integers)
+    spacing_multiplier_x1000: int   # 1000 = 1.0x, 1500 = 1.5x
+
+    # Feature importance (top 3, for interpretability)
+    top_features: tuple[str, str, str]
+    top_feature_weights_x1000: tuple[int, int, int]
+
+    # Metadata
+    inference_latency_us: int  # Inference time in microseconds
+    features_hash: str         # SHA256 of input features (16-char hex)
+```
+
+### 12.2.3 Contract Invariants
+
+**Input contracts:**
+- All integer fields use basis points (bps) or x1000 encoding
+- All Decimal fields serialize as strings
+- `ts`/`ts_ms` are Unix milliseconds (int)
+- Missing features → model MUST handle gracefully (return neutral signal)
+
+**Output contracts:**
+- `regime_*_prob_bps` MUST sum to exactly 10000
+- `predicted_regime` MUST be one of: `"LOW"`, `"MID"`, `"HIGH"`
+- `regime_confidence_bps` = max(regime_low_prob_bps, regime_mid_prob_bps, regime_high_prob_bps)
+- `spacing_multiplier_x1000` MUST be in range [500, 2000] (0.5x to 2.0x)
+- `model_hash` MUST match artifact manifest (see §12.4)
+- `features_hash` = SHA256 of JSON-serialized inputs, truncated to 16 hex chars
+
+**JSON serialization:**
+```json
+{
+  "ts": 1700000000000,
+  "symbol": "BTCUSDT",
+  "model_version": "v1.0.0",
+  "model_hash": "a1b2c3d4e5f67890",
+  "regime_low_prob_bps": 2000,
+  "regime_mid_prob_bps": 5000,
+  "regime_high_prob_bps": 3000,
+  "predicted_regime": "MID",
+  "regime_confidence_bps": 5000,
+  "spacing_multiplier_x1000": 1000,
+  "top_features": ["natr_bps", "spread_bps", "depth_imbalance_topN_bps"],
+  "top_feature_weights_x1000": [350, 280, 220],
+  "inference_latency_us": 1500,
+  "features_hash": "f0e1d2c3b4a59687"
+}
+```
+
+---
+
+## 12.3 Determinism Invariants
+
+ML integration MUST preserve replay determinism. This section lists invariants.
+
+### 12.3.1 MUST (Required)
+
+| Invariant | Description |
+|-----------|-------------|
+| **DET-01** | Same input features → same MlSignalSnapshot output (bitwise identical) |
+| **DET-02** | Model weights loaded from artifact file (no random init) |
+| **DET-03** | All floating-point outputs converted to integer bps/x1000 via `round()` |
+| **DET-04** | Feature ordering matches canonical order in FeatureSnapshot/L2FeatureSnapshot |
+| **DET-05** | Model version + hash included in output for traceability |
+| **DET-06** | Inference uses `float32` or `float64` (no mixed precision) |
+| **DET-07** | NumPy/ONNX random seed fixed at model load time |
+| **DET-08** | features_hash computed BEFORE inference, logged with output |
+
+### 12.3.2 MUST NOT (Forbidden)
+
+| Anti-pattern | Why forbidden |
+|--------------|---------------|
+| **NODET-01** | Random dropout/noise at inference time |
+| **NODET-02** | Time-based or clock-based features in model |
+| **NODET-03** | External API calls during inference |
+| **NODET-04** | Mutable global state affecting inference |
+| **NODET-05** | Float comparison without epsilon tolerance |
+| **NODET-06** | Thread-local storage for model state |
+| **NODET-07** | Dynamic feature selection based on runtime conditions |
+
+### 12.3.3 Verification Protocol
+
+```bash
+# Run determinism check: same inputs → same outputs across 2 runs
+python -m scripts.verify_ml_determinism \
+    --fixture tests/fixtures/sample_day \
+    --model var/models/regime_v1/
+
+# Expected output:
+# Input features hash:  a1b2c3d4e5f67890
+# Run 1 output hash:    f0e1d2c3b4a59687
+# Run 2 output hash:    f0e1d2c3b4a59687
+# Determinism check:    ✅ PASS
+```
+
+---
+
+## 12.4 Artifact Versioning Scheme
+
+ML model artifacts follow a strict versioning scheme for reproducibility.
+
+### 12.4.1 Directory Structure
+
+```
+var/models/
+└── regime_v1/
+    ├── manifest.json       # Metadata + checksums (SSOT)
+    ├── model.onnx          # Model weights (ONNX format)
+    ├── scaler.joblib       # Feature scaler (optional)
+    └── config.json         # Hyperparameters
+```
+
+### 12.4.2 manifest.json Schema
+
+```json
+{
+  "schema_version": 1,
+  "model_name": "regime_classifier",
+  "model_version": "v1.0.0",
+  "created_at": "2024-01-15T10:30:00Z",
+  "framework": "lightgbm",
+  "export_format": "onnx",
+
+  "files": {
+    "model.onnx": {
+      "sha256": "a1b2c3d4e5f6789012345678901234567890123456789012345678901234abcd",
+      "size_bytes": 102400
+    },
+    "scaler.joblib": {
+      "sha256": "b2c3d4e5f6789012345678901234567890123456789012345678901234abcde",
+      "size_bytes": 2048
+    },
+    "config.json": {
+      "sha256": "c3d4e5f6789012345678901234567890123456789012345678901234abcdef",
+      "size_bytes": 512
+    }
+  },
+
+  "model_hash": "a1b2c3d4e5f67890",
+
+  "input_features": [
+    "natr_bps",
+    "spread_bps",
+    "imbalance_l1_bps",
+    "range_score",
+    "depth_imbalance_topN_bps",
+    "impact_buy_topN_bps",
+    "impact_sell_topN_bps"
+  ],
+
+  "output_classes": ["LOW", "MID", "HIGH"],
+
+  "training_metadata": {
+    "train_samples": 50000,
+    "val_samples": 10000,
+    "test_accuracy_bps": 7250,
+    "data_hash": "d4e5f67890123456"
+  }
+}
+```
+
+### 12.4.3 Checksum Rules
+
+| Field | Computation |
+|-------|-------------|
+| `files[*].sha256` | SHA256 of file contents (64-char hex) |
+| `model_hash` | SHA256 of `model.onnx` truncated to 16 hex chars |
+| `data_hash` | SHA256 of training data, truncated to 16 hex chars |
+
+### 12.4.4 Version Naming
+
+```
+<model_name>_v<major>.<minor>.<patch>
+
+Examples:
+- regime_classifier_v1.0.0  # Initial release
+- regime_classifier_v1.0.1  # Bugfix (same architecture)
+- regime_classifier_v1.1.0  # New features (backward compatible)
+- regime_classifier_v2.0.0  # Breaking change (new I/O contract)
+```
+
+**Semantic versioning rules:**
+- MAJOR: Breaking changes to I/O contract
+- MINOR: New features, backward compatible
+- PATCH: Bugfixes, retraining with same architecture
+
+### 12.4.5 Artifact Validation
+
+```python
+def validate_artifact(artifact_dir: Path) -> bool:
+    """Validate model artifact integrity.
+
+    Returns True if all checksums match manifest.
+    """
+    manifest = json.load((artifact_dir / "manifest.json").open())
+
+    for filename, meta in manifest["files"].items():
+        file_path = artifact_dir / filename
+        actual_hash = hashlib.sha256(file_path.read_bytes()).hexdigest()
+        if actual_hash != meta["sha256"]:
+            raise ArtifactCorruptedError(f"{filename}: hash mismatch")
+
+    return True
+```
+
+---
+
+## 12.5 Runtime Enablement Model
+
+ML integration is **disabled by default** for safe rollout.
+
+### 12.5.1 Configuration
+
+```yaml
+# config/paper.yaml or config/live.yaml
+ml:
+  enabled: false              # MUST be explicitly enabled
+  model_dir: "var/models/regime_v1"
+
+  # Safety limits
+  max_inference_latency_ms: 10
+  fallback_on_error: "neutral"  # "neutral" | "previous" | "error"
+
+  # Feature toggles
+  use_l2_features: true
+  use_l1_features: true
+```
+
+### 12.5.2 Enablement Hierarchy
+
+```
+┌────────────────────────────────────────────────────────────────┐
+│                  ML ENABLEMENT HIERARCHY                        │
+├────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  Level 1: Global gate                                          │
+│  └── ml.enabled = false (default)                              │
+│      └── If false: skip ML entirely, use rule-based policy     │
+│                                                                 │
+│  Level 2: Artifact gate                                        │
+│  └── Model artifact must exist and validate                    │
+│      └── If missing/invalid: log warning, use rule-based       │
+│                                                                 │
+│  Level 3: Runtime gate                                         │
+│  └── Inference must complete within max_latency_ms             │
+│      └── If timeout: log warning, use fallback                 │
+│                                                                 │
+│  Level 4: Output gate                                          │
+│  └── MlSignalSnapshot must pass contract validation            │
+│      └── If invalid: log error, use fallback                   │
+│                                                                 │
+└────────────────────────────────────────────────────────────────┘
+```
+
+### 12.5.3 Fallback Behavior
+
+| `fallback_on_error` | Behavior |
+|---------------------|----------|
+| `"neutral"` | Return neutral signal: `predicted_regime="MID"`, `spacing_multiplier_x1000=1000` |
+| `"previous"` | Return last valid signal for this symbol |
+| `"error"` | Raise exception, halt processing |
+
+### 12.5.4 Safe Rollout Path
+
+```
+Phase 1: Shadow mode (ml.enabled=true, ml.shadow_only=true)
+├── ML runs in parallel with rule-based
+├── ML output logged but NOT used for decisions
+└── Compare ML vs rule-based performance
+
+Phase 2: Canary (ml.enabled=true, ml.canary_pct=5)
+├── 5% of symbols use ML decisions
+├── Monitor for degradation
+└── Auto-rollback if metrics degrade
+
+Phase 3: Full rollout (ml.enabled=true)
+├── All symbols use ML decisions
+├── Continuous monitoring
+└── Manual rollback available
+```
+
+---
+
+## 12.6 M8 Milestone Plan
+
+M8 (ML Integration) is divided into three sub-milestones.
+
+### M8-00: Specification (docs-only)
+
+**Scope:** This document
+**Deliverables:**
+- [x] I/O contracts (FeatureSnapshot → MlSignalSnapshot)
+- [x] Determinism invariants (MUST/MUST NOT)
+- [x] Artifact versioning scheme (manifest.json + sha256)
+- [x] Runtime enablement model (ml_enabled=False default)
+- [x] M8 milestone plan
+
+**Acceptance criteria:**
+- All sections present in docs/12_ML_SPEC.md
+- ADR-064 created in docs/DECISIONS.md
+- No code changes
+
+### M8-01: Stub Implementation
+
+**Scope:** Code scaffold with tests, no real model
+**Deliverables:**
+- [ ] `MlSignalSnapshot` dataclass in `src/grinder/ml/types.py`
+- [ ] `MlModelPort` protocol in `src/grinder/ml/port.py`
+- [ ] `NeutralMlModel` stub (always returns neutral signal)
+- [ ] `MlConfig` dataclass with `enabled=False` default
+- [ ] Integration point in PaperEngine (if ml_enabled)
+- [ ] 15+ unit tests for contracts
+
+**Acceptance criteria:**
+- `ml_enabled=False` → no ML code path executed
+- `ml_enabled=True` + stub → neutral signal returned
+- All tests pass, digest unchanged when disabled
+
+### M8-02: ONNX Integration
+
+**Scope:** Real model inference via ONNX Runtime
+**Deliverables:**
+- [ ] `OnnxMlModel` implementation of `MlModelPort`
+- [ ] Artifact loader with manifest validation
+- [ ] `verify_ml_determinism` script
+- [ ] Sample model artifact (trained on fixture data)
+- [ ] Shadow mode support
+- [ ] 20+ integration tests
+
+**Acceptance criteria:**
+- Determinism verified across 2 runs
+- Inference latency < 10ms on sample fixture
+- Fallback works on invalid model
+- Shadow mode logs ML output without affecting decisions
+
+---
+
+## 12.7 ML Use Cases
 
 ### Use Case 1: Parameter Calibration
 
@@ -209,7 +668,7 @@ class PolicyDiscovery:
 
 ---
 
-## 12.3 Feature Engineering for ML
+## 12.8 Feature Engineering for ML
 
 ```python
 class MLFeatureEngine:
@@ -265,7 +724,7 @@ class MLFeatureEngine:
 
 ---
 
-## 12.4 Model Training Pipeline
+## 12.9 Model Training Pipeline
 
 ```python
 class MLTrainingPipeline:
@@ -342,7 +801,7 @@ class MLTrainingPipeline:
 
 ---
 
-## 12.5 Model Registry
+## 12.10 Model Registry
 
 ```python
 class ModelRegistry:
@@ -401,7 +860,7 @@ class ModelRegistry:
 
 ---
 
-## 12.6 Model Monitoring
+## 12.11 Model Monitoring
 
 ```python
 class ModelMonitor:
@@ -453,7 +912,7 @@ class ModelMonitor:
 
 ---
 
-## 12.7 Calibration Path
+## 12.12 Calibration Path
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -485,7 +944,7 @@ class ModelMonitor:
 
 ---
 
-## 12.8 Model Configuration
+## 12.13 Model Configuration
 
 ```yaml
 # config/ml.yaml

@@ -3374,3 +3374,78 @@ constraints = provider.get_constraints(force_refresh=True)
 - ADR-060: ConstraintProvider initial implementation
 - ADR-061: ExecutionEngineConfig constraints_enabled gate
 - ADR-059: ExecutionEngine qty constraints
+
+---
+
+## ADR-064 — M8-00: ML Integration Specification
+
+- **Date:** 2026-02-12
+- **Status:** accepted
+- **Milestone:** M8-00 (docs-only)
+- **Artifact:** docs/12_ML_SPEC.md
+
+### Context
+
+M8 introduces ML-based regime classification to improve parameter calibration.
+Before implementing code, we need clear contracts for:
+
+1. **I/O contracts**: What features go in, what signals come out
+2. **Determinism**: How to preserve replay reproducibility with ML inference
+3. **Artifacts**: How to version and validate model files
+4. **Enablement**: How to safely roll out ML without breaking existing behavior
+
+### Decision
+
+1. **Input contract**: ML models receive `FeatureSnapshot` (L1+volatility) and optionally `L2FeatureSnapshot` (order book depth). Both are existing SSOT types.
+
+2. **Output contract**: New `MlSignalSnapshot` type with:
+   - Regime probabilities in integer bps (sum = 10000)
+   - Predicted regime ("LOW"/"MID"/"HIGH")
+   - Spacing multiplier as x1000 integer
+   - Model version + hash for traceability
+   - Feature importance for interpretability
+
+3. **Determinism invariants**:
+   - 8 MUST rules (e.g., same inputs → same outputs, fixed random seeds)
+   - 7 MUST NOT anti-patterns (e.g., no random dropout, no clock-based features)
+   - Verification script: `verify_ml_determinism`
+
+4. **Artifact scheme**:
+   - Directory: `var/models/<model_name>/`
+   - Manifest: `manifest.json` with SHA256 checksums for all files
+   - Model format: ONNX for portability
+   - Semantic versioning: MAJOR.MINOR.PATCH
+
+5. **Enablement model**:
+   - `ml.enabled=False` by default (safe rollout)
+   - 4-level gate hierarchy: global → artifact → runtime → output
+   - Fallback options: neutral, previous, error
+   - Shadow mode support for A/B comparison
+
+### M8 Milestone Plan
+
+| Sub-milestone | Scope | Deliverables |
+|--------------|-------|--------------|
+| M8-00 | Docs-only | ML spec (this ADR), I/O contracts, determinism rules |
+| M8-01 | Stub | MlSignalSnapshot type, MlModelPort protocol, NeutralMlModel stub |
+| M8-02 | ONNX | OnnxMlModel implementation, artifact loader, shadow mode |
+
+### Non-goals (M8)
+
+- Training pipeline (out of scope, offline/manual)
+- Hyperparameter tuning automation
+- Real-time model updates
+- Multi-model ensemble
+
+### Consequences
+
+- **Safe by default**: ML disabled means zero impact on existing behavior
+- **Determinism preserved**: All inference paths use fixed seeds and integer outputs
+- **Testable**: NeutralMlModel stub enables unit testing without real model
+- **Traceable**: Every ML output includes model version + hash
+
+### Related
+
+- docs/12_ML_SPEC.md (SSOT for ML contracts)
+- src/grinder/features/types.py (FeatureSnapshot input)
+- src/grinder/features/l2_types.py (L2FeatureSnapshot input)
