@@ -15,7 +15,6 @@ import json
 import os
 import tempfile
 import time
-from dataclasses import dataclass
 from decimal import Decimal
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -27,6 +26,7 @@ if TYPE_CHECKING:
 
 from grinder.core import GridMode
 from grinder.execution import ExecutionEngine, ExecutionState, NoOpExchangePort
+from grinder.execution.binance_port import HttpResponse
 from grinder.execution.constraint_provider import (
     ConstraintParseError,
     ConstraintProvider,
@@ -340,20 +340,12 @@ class TestConstraintProviderIntegration:
 # --- Mock HTTP Client for TTL tests ---
 
 
-@dataclass
-class MockHttpResponse:
-    """Mock HTTP response for testing."""
-
-    status_code: int
-    json_data: dict[str, Any]
-
-
 class MockHttpClient:
     """Mock HTTP client that tracks calls and returns configured responses."""
 
     def __init__(
         self,
-        response: MockHttpResponse | None = None,
+        response: HttpResponse | None = None,
         should_fail: bool = False,
     ) -> None:
         self.calls: list[dict[str, Any]] = []
@@ -365,9 +357,9 @@ class MockHttpClient:
         method: str,
         url: str,
         params: dict[str, Any] | None = None,
-        _headers: dict[str, str] | None = None,
-        _timeout_ms: int = 5000,
-    ) -> MockHttpResponse:
+        headers: dict[str, str] | None = None,  # noqa: ARG002
+        timeout_ms: int = 5000,  # noqa: ARG002
+    ) -> HttpResponse:
         self.calls.append({"method": method, "url": url, "params": params})
         if self.should_fail:
             raise ConnectionError("Mock connection failure")
@@ -405,7 +397,7 @@ class TestConstraintProviderTTL:
 
         # Create mock client (should NOT be called)
         mock_client = MockHttpClient(
-            response=MockHttpResponse(status_code=200, json_data=mock_exchange_info)
+            response=HttpResponse(status_code=200, json_data=mock_exchange_info)
         )
 
         config = ConstraintProviderConfig(
@@ -437,7 +429,7 @@ class TestConstraintProviderTTL:
 
         # Create mock client that will be called
         mock_client = MockHttpClient(
-            response=MockHttpResponse(status_code=200, json_data=mock_exchange_info)
+            response=HttpResponse(status_code=200, json_data=mock_exchange_info)
         )
 
         config = ConstraintProviderConfig(
@@ -485,7 +477,7 @@ class TestConstraintProviderTTL:
     ) -> None:
         """Missing cache should trigger API fetch when allow_fetch=True."""
         mock_client = MockHttpClient(
-            response=MockHttpResponse(status_code=200, json_data=mock_exchange_info)
+            response=HttpResponse(status_code=200, json_data=mock_exchange_info)
         )
 
         config = ConstraintProviderConfig(
