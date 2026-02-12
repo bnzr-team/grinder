@@ -1379,9 +1379,19 @@ Comprehensive adaptive grid system design:
     - **NOT included:** real-time re-selection (selects once after warmup), adaptive scoring weights
 
 ### ML Integration (`docs/12_ML_SPEC.md`)
-- **Spec:** `docs/12_ML_SPEC.md` exists
+- **Spec:** `docs/12_ML_SPEC.md` — SSOT for ML contracts
 - **Code:** `src/grinder/ml/` — empty placeholder
-- **Status:** 🔜 Planned (see ROADMAP M8)
+- **Status:** M8 in progress
+- **Progress:**
+  - ✅ **M8-00 (docs-only):** ML Specification with I/O contracts
+    - Input: `FeatureSnapshot` (L1+volatility) + `L2FeatureSnapshot` (order book)
+    - Output: `MlSignalSnapshot` (regime probabilities, spacing multiplier)
+    - Determinism: 8 MUST / 7 MUST NOT invariants
+    - Artifacts: `manifest.json` + SHA256 checksums
+    - Enablement: `ml_enabled=False` default (safe rollout)
+    - See ADR-064
+  - 🔜 **M8-01 (stub):** MlSignalSnapshot type, MlModelPort protocol, NeutralMlModel
+  - 🔜 **M8-02 (ONNX):** OnnxMlModel implementation, artifact loader, shadow mode
 
 ### Multi-venue
 - **Current:** Binance Futures USDT-M only
