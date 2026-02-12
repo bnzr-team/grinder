@@ -1,0 +1,15 @@
+{
+  "description": "Fixture to test M7 L2 execution guard: ORDER_SKIPPED with EXEC_L2_STALE",
+  "symbols": ["TESTUSDT"],
+  "duration_ms": 3000,
+  "expected_digest": "4ff7e25bbc0f9d9d",
+  "expected_paper_digest": "efaad650423d8936",
+  "notes": "L2 snapshot at ts=100ms, SNAPSHOT at ts=2000ms => stale L2 (1900ms > 1500ms threshold)",
+  "schema_version": "v1",
+  "l2_execution_guard_enabled": true,
+  "l2_execution_max_age_ms": 1500,
+  "l2_execution_impact_threshold_bps": 50,
+  "size_per_level": "100.0",
+  "max_notional_per_symbol": "10000",
+  "max_notional_total": "50000"
+}

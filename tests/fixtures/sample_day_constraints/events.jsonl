@@ -1,0 +1,3 @@
+{"ts": 1000, "type": "SNAPSHOT", "symbol": "TESTUSDT", "bid_price": "1.0000", "ask_price": "1.0001", "bid_qty": "10000.0", "ask_qty": "10000.0", "last_price": "1.00005", "last_qty": "100.0"}
+{"ts": 2000, "type": "SNAPSHOT", "symbol": "TESTUSDT", "bid_price": "1.0100", "ask_price": "1.0101", "bid_qty": "10000.0", "ask_qty": "10000.0", "last_price": "1.01005", "last_qty": "100.0"}
+{"ts": 3000, "type": "SNAPSHOT", "symbol": "TESTUSDT", "bid_price": "1.0200", "ask_price": "1.0201", "bid_qty": "10000.0", "ask_qty": "10000.0", "last_price": "1.02005", "last_qty": "100.0"}
