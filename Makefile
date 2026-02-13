@@ -1,7 +1,17 @@
 # GRINDER Makefile
 # Shortcuts for common development tasks
 
-.PHONY: help test lint format check determinism replay gates
+# Use venv python if available
+VENV_PY := .venv/bin/python
+VENV_EXISTS := $(shell [ -x "$(VENV_PY)" ] && echo 1)
+
+.PHONY: help test lint format check determinism replay gates all venv-check
+
+# Fail fast if venv doesn't exist
+venv-check:
+ifndef VENV_EXISTS
+	$(error venv not found at $(VENV_PY). Create it: python -m venv .venv && .venv/bin/pip install -e ".[dev]")
+endif
 
 help:
 	@echo "GRINDER Development Shortcuts"
@@ -21,26 +31,26 @@ help:
 	@echo "  make all        - Run gates + determinism"
 
 # Quality gates
-lint:
-	ruff check .
+lint: venv-check
+	$(VENV_PY) -m ruff check .
 
-format:
-	ruff format --check .
+format: venv-check
+	$(VENV_PY) -m ruff format --check .
 
-check:
-	mypy .
+check: venv-check
+	$(VENV_PY) -m mypy .
 
-test:
-	pytest -q
+test: venv-check
+	$(VENV_PY) -m pytest -q
 
 gates: lint format check test
 
 # Determinism
-determinism:
-	python -m scripts.verify_determinism_suite
+determinism: venv-check
+	$(VENV_PY) -m scripts.verify_determinism_suite
 
-replay:
-	python -m scripts.verify_replay_determinism
+replay: venv-check
+	$(VENV_PY) -m scripts.verify_replay_determinism
 
 # Combined target
 all: gates determinism
