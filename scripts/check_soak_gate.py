@@ -8,10 +8,10 @@ Gates ONLY deterministic metrics that don't vary with CI runner performance:
 - Events dropped
 
 Latency and memory are NOT gated (CI runners have variable performance).
-Use check_soak_thresholds.py for full threshold validation in controlled environments.
+Use `python -m scripts.check_soak_thresholds` for full threshold validation in controlled environments.
 
 Usage:
-    python scripts/check_soak_gate.py \
+    python -m scripts.check_soak_gate \
         --report artifacts/soak_fixtures.json \
         --thresholds monitoring/soak_thresholds.yml \
         --mode baseline

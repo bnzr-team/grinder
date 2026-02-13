@@ -51,7 +51,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - Determinism check: `python -m scripts.verify_replay_determinism --fixture <path>`
   - Output format: `Replay completed. Events processed: N\nOutput digest: <16-char-hex>`
 - `python -m scripts.secret_guard` проверяет repo на утечки секретов.
-- `python scripts/check_unicode.py` сканирует docs на опасный Unicode (bidi, zero-width). См. ADR-005.
+- `python -m scripts.check_unicode` сканирует docs на опасный Unicode (bidi, zero-width). См. ADR-005.
 - Docker build + healthcheck работают (Dockerfile использует `urllib.request` вместо `curl`).
 - Grafana provisioning: `monitoring/grafana/provisioning/` содержит datasource + dashboard.
 - Branch protection на `main`: все PR требуют 5 зелёных checks.
@@ -1007,10 +1007,10 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - **Usage:**
     ```bash
     # Validate against live service
-    python scripts/smoke_metrics_contract.py --url http://localhost:9090/metrics
+    python -m scripts.smoke_metrics_contract --url http://localhost:9090/metrics
 
     # Validate from file
-    python scripts/smoke_metrics_contract.py --file /tmp/metrics.txt -v
+    python -m scripts.smoke_metrics_contract --file /tmp/metrics.txt -v
     ```
 
 - **Live Smoke Harness** (`scripts/smoke_live_testnet.py`):
@@ -1195,8 +1195,8 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - `nightly_soak.yml`: runs daily with synthetic soak (existing)
   - **Commands:**
     - `python -m scripts.run_soak_fixtures --output report.json` — run soak test
-    - `python scripts/check_soak_gate.py --report report.json --thresholds monitoring/soak_thresholds.yml --mode baseline` — PR gate (deterministic only)
-    - `python scripts/check_soak_thresholds.py --baseline report.json --overload report.json --thresholds monitoring/soak_thresholds.yml` — nightly gate (full)
+    - `python -m scripts.check_soak_gate --report report.json --thresholds monitoring/soak_thresholds.yml --mode baseline` — PR gate (deterministic only)
+    - `python -m scripts.check_soak_thresholds --baseline report.json --overload report.json --thresholds monitoring/soak_thresholds.yml` — nightly gate (full)
   - **Unit tests:** `tests/unit/test_soak_thresholds.py`
   - **Test fixtures:** Uses registered fixtures including `sample_day_drawdown` for kill-switch
 - **Operations v0** (`docs/runbooks/`, `docs/HOW_TO_OPERATE.md`):

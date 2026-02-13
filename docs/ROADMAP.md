@@ -431,4 +431,4 @@ See sections below for M1/M2 PR-level DoD. These are preserved for reference.
 - `PYTHONPATH=src python3 -m pytest -q`
 - `ruff check .` + `ruff format --check .`
 - `mypy .`
-- `python3 scripts/check_unicode.py --all`
+- `python3 -m scripts.check_unicode --all`

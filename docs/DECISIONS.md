@@ -318,7 +318,7 @@
     - Reads thresholds from `monitoring/soak_thresholds.yml` (SSOT for thresholds)
     - Gates ONLY deterministic metrics: `all_digests_stable`, `errors_total`, `fill_rate`, `events_dropped`
     - Logs latency/memory as informational (not gated)
-    - Usage: `python scripts/check_soak_gate.py --report report.json --thresholds monitoring/soak_thresholds.yml --mode baseline`
+    - Usage: `python -m scripts.check_soak_gate --report report.json --thresholds monitoring/soak_thresholds.yml --mode baseline`
   - **CI workflow** (`.github/workflows/soak_gate.yml`):
     - Triggers on PRs touching `src/**`, `scripts/**`, `tests/fixtures/**`, `monitoring/soak_thresholds.yml`
     - Runs fixture-based soak with 3 runs per fixture

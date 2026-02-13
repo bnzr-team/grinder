@@ -6,16 +6,16 @@ Used for populating symbol_constraints (step_size, min_qty) for ExecutionEngine.
 
 Usage:
     # Fetch and save to default cache location
-    python scripts/fetch_exchange_info.py
+    python -m scripts.fetch_exchange_info
 
     # Fetch and save to custom location
-    python scripts/fetch_exchange_info.py --out var/cache/custom.json
+    python -m scripts.fetch_exchange_info --out var/cache/custom.json
 
     # Show parsed constraints summary
-    python scripts/fetch_exchange_info.py --show
+    python -m scripts.fetch_exchange_info --show
 
     # Use testnet instead of mainnet
-    python scripts/fetch_exchange_info.py --testnet
+    python -m scripts.fetch_exchange_info --testnet
 
 See: ADR-060 for design decisions
 """

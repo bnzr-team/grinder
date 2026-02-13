@@ -3,7 +3,7 @@
 Validate soak test results against thresholds.
 
 Usage:
-    python scripts/check_soak_thresholds.py \
+    python -m scripts.check_soak_thresholds \
         --baseline artifacts/soak_baseline.json \
         --overload artifacts/soak_overload.json \
         --thresholds monitoring/soak_thresholds.yml

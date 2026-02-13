@@ -45,6 +45,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 cd "${REPO_ROOT}"
 
+# Activate venv if available (ensures correct Python environment)
+if [[ -f ".venv/bin/activate" ]]; then
+  # shellcheck disable=SC1091
+  source ".venv/bin/activate"
+fi
+
 # Colors for terminal (disabled if not tty)
 if [[ -t 1 ]]; then
   RED='\033[0;31m'
@@ -234,7 +240,7 @@ if [[ "${REPLAY_REQUIRED}" == "true" ]]; then
   trap 'rm -rf "${TEMP_FIXTURE}"' EXIT
 
   echo "--- Generating synthetic fixture ---"
-  if python3 scripts/generate_fixture.py --symbols BTCUSDT --duration-s 2 --out-dir "${TEMP_FIXTURE}" 2>&1; then
+  if python3 -m scripts.generate_fixture --symbols BTCUSDT --duration-s 2 --out-dir "${TEMP_FIXTURE}" 2>&1; then
     log_info "Fixture generated successfully"
   else
     fail_check "FIXTURE_GEN_FAILED: Could not generate synthetic fixture"
@@ -243,13 +249,13 @@ if [[ "${REPLAY_REQUIRED}" == "true" ]]; then
 
   # Run replay twice
   echo "--- Replay run #1 ---"
-  REPLAY1_OUTPUT="$(python3 scripts/run_replay.py --fixture "${TEMP_FIXTURE}" -v 2>&1)"
+  REPLAY1_OUTPUT="$(python3 -m scripts.run_replay --fixture "${TEMP_FIXTURE}" -v 2>&1)"
   echo "${REPLAY1_OUTPUT}"
   DIGEST1="$(echo "${REPLAY1_OUTPUT}" | grep "Output digest:" | awk '{print $NF}' || true)"
   echo
 
   echo "--- Replay run #2 ---"
-  REPLAY2_OUTPUT="$(python3 scripts/run_replay.py --fixture "${TEMP_FIXTURE}" -v 2>&1)"
+  REPLAY2_OUTPUT="$(python3 -m scripts.run_replay --fixture "${TEMP_FIXTURE}" -v 2>&1)"
   echo "${REPLAY2_OUTPUT}"
   DIGEST2="$(echo "${REPLAY2_OUTPUT}" | grep "Output digest:" | awk '{print $NF}' || true)"
   echo

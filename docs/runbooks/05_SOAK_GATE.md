@@ -21,7 +21,7 @@ The soak gate validates that strategy behavior is stable and consistent before r
 ### 1. Run Soak Fixtures
 
 ```bash
-PYTHONPATH=src python scripts/run_soak_fixtures.py \
+python -m scripts.run_soak_fixtures \
   --runs 3 \
   --mode baseline \
   --output artifacts/soak_fixtures.json
@@ -45,7 +45,7 @@ Results saved to artifacts/soak_fixtures.json
 ### 2. Check Soak Gate
 
 ```bash
-python scripts/check_soak_gate.py \
+python -m scripts.check_soak_gate \
   --report artifacts/soak_fixtures.json \
   --thresholds monitoring/soak_thresholds.yml \
   --mode baseline
@@ -116,7 +116,7 @@ candidate:
 1. Check for floating-point issues
 2. Check for timestamp dependencies
 3. Check for random/shuffle operations
-4. Run determinism suite: `python scripts/verify_determinism_suite.py -v`
+4. Run determinism suite: `python -m scripts.verify_determinism_suite -v`
 
 ### Signals Below Threshold
 
@@ -173,11 +173,11 @@ If soak gate failed in CI and you want to reproduce locally:
 rm -rf artifacts/
 
 # Run soak fixtures
-PYTHONPATH=src python scripts/run_soak_fixtures.py \
+python -m scripts.run_soak_fixtures \
   --runs 3 --mode baseline --output artifacts/soak_fixtures.json
 
 # Check gate
-python scripts/check_soak_gate.py \
+python -m scripts.check_soak_gate \
   --report artifacts/soak_fixtures.json \
   --thresholds monitoring/soak_thresholds.yml \
   --mode baseline
