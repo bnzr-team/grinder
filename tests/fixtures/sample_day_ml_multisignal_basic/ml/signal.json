@@ -1,0 +1,16 @@
+[
+  {
+    "ts_ms": 1500,
+    "symbol": "BTCUSDT",
+    "regime_probs_bps": {"LOW": 7000, "MID": 2000, "HIGH": 1000},
+    "predicted_regime": "LOW",
+    "spacing_multiplier_x1000": 800
+  },
+  {
+    "ts_ms": 2500,
+    "symbol": "BTCUSDT",
+    "regime_probs_bps": {"LOW": 1000, "MID": 2000, "HIGH": 7000},
+    "predicted_regime": "HIGH",
+    "spacing_multiplier_x1000": 1200
+  }
+]

@@ -1,0 +1,2 @@
+{"ts": 500, "type": "SNAPSHOT", "symbol": "BTCUSDT", "bid_price": "50000.00", "ask_price": "50001.00", "bid_qty": "10.0", "ask_qty": "10.0", "last_price": "50000.50", "last_qty": "0.5"}
+{"ts": 1000, "type": "SNAPSHOT", "symbol": "BTCUSDT", "bid_price": "50005.00", "ask_price": "50006.00", "bid_qty": "10.0", "ask_qty": "10.0", "last_price": "50005.50", "last_qty": "0.5"}

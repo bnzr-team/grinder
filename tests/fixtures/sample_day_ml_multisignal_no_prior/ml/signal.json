@@ -1,0 +1,9 @@
+[
+  {
+    "ts_ms": 2000,
+    "symbol": "BTCUSDT",
+    "regime_probs_bps": {"LOW": 3000, "MID": 4000, "HIGH": 3000},
+    "predicted_regime": "MID",
+    "spacing_multiplier_x1000": 1000
+  }
+]

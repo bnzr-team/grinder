@@ -1,0 +1,9 @@
+{
+  "description": "M8-01b: All snapshots before first signal (safe-by-default)",
+  "symbols": ["BTCUSDT"],
+  "duration_ms": 1000,
+  "ml_enabled": true,
+  "expected_digest": "72acf8f2fb965b3b",
+  "expected_paper_digest": "810776843f6facd6",
+  "schema_version": "v1"
+}
