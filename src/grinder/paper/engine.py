@@ -41,6 +41,12 @@ from grinder.execution import (
 from grinder.features import FeatureEngine, FeatureEngineConfig, L2FeatureSnapshot
 from grinder.gating import GateReason, GatingResult, RateLimiter, RiskGate, ToxicityGate
 from grinder.ml import MlSignalSnapshot
+from grinder.ml.metrics import (
+    MlBlockReason,
+    record_ml_inference_error,
+    record_ml_inference_success,
+    set_ml_active_on,
+)
 from grinder.ml.onnx import ONNX_AVAILABLE, OnnxMlModel
 from grinder.paper.cycle_engine import CycleEngine
 from grinder.paper.fills import Fill, check_pending_fills, simulate_fills
@@ -607,22 +613,26 @@ class PaperEngine:
             if not self._onnx_artifact_dir:
                 raise ValueError("ml_shadow_mode=True requires onnx_artifact_dir to be set")
 
-    def _is_ml_kill_switch_active(self) -> bool:
+    def _is_ml_kill_switch_active(self) -> tuple[bool, MlBlockReason | None]:
         """Check if ML kill-switch is active (K1/K2).
 
         Kill-switch is evaluated per-snapshot (not just at startup).
         Takes effect immediately without process restart.
 
         Returns:
-            True if kill-switch is ON (force mode OFF).
+            Tuple of (is_active: bool, reason: MlBlockReason | None)
         """
         # K1: Check env var (re-read every time for per-snapshot behavior)
         if os.environ.get("ML_KILL_SWITCH") == "1":
-            return True
+            return True, MlBlockReason.KILL_SWITCH_ENV
         # K2: Check config
-        return self._ml_kill_switch
+        if self._ml_kill_switch:
+            return True, MlBlockReason.KILL_SWITCH_CONFIG
+        return False, None
 
-    def _is_ml_active_allowed(self, ts_ms: int) -> tuple[bool, str]:  # noqa: ARG002, PLR0911
+    def _is_ml_active_allowed(  # noqa: PLR0911
+        self, ts_ms: int
+    ) -> tuple[bool, MlBlockReason | None]:
         """Check if ACTIVE mode is allowed per ADR-065 truth table.
 
         All 8 conditions must be true for ACTIVE to be allowed:
@@ -636,44 +646,47 @@ class PaperEngine:
         8. If ml_active_allowed_envs non-empty → GRINDER_ENV in allowlist
 
         Args:
-            ts_ms: Timestamp for logging
+            ts_ms: Timestamp for logging (unused, reserved for future metrics)
 
         Returns:
-            Tuple of (allowed: bool, reason_code: str)
-            reason_code is empty string if allowed, otherwise explains why blocked
+            Tuple of (allowed: bool, reason: MlBlockReason | None)
+            reason is None if allowed, otherwise the blocking reason
         """
+        _ = ts_ms  # Reserved for future per-snapshot metrics
+
         # K1/K2: Kill-switch (highest priority, per-snapshot)
-        if self._is_ml_kill_switch_active():
-            return False, "KILL_SWITCH"
+        kill_active, kill_reason = self._is_ml_kill_switch_active()
+        if kill_active:
+            return False, kill_reason
 
         # Condition 3: ml_infer_enabled
         if not self._ml_infer_enabled:
-            return False, "INFER_DISABLED"
+            return False, MlBlockReason.INFER_DISABLED
 
         # Condition 4: ml_active_enabled
         if not self._ml_active_enabled:
-            return False, "ACTIVE_DISABLED"
+            return False, MlBlockReason.ACTIVE_DISABLED
 
         # Condition 5: Explicit ack (already validated at startup, but double-check)
         expected_ack = "I_UNDERSTAND_THIS_AFFECTS_TRADING"
         if self._ml_active_ack != expected_ack:
-            return False, "WRONG_ACK"
+            return False, MlBlockReason.BAD_ACK
 
         # Condition 6: ONNX available
         if not ONNX_AVAILABLE:
-            return False, "ONNX_MISSING"
+            return False, MlBlockReason.ONNX_UNAVAILABLE
 
         # Condition 7: Model loaded
         if self._onnx_model is None:
-            return False, "MODEL_NOT_LOADED"
+            return False, MlBlockReason.MODEL_NOT_LOADED
 
         # Condition 8: Environment allowlist (empty = allow all)
         if self._ml_active_allowed_envs and (
             not self._grinder_env or self._grinder_env not in self._ml_active_allowed_envs
         ):
-            return False, "ENV_NOT_ALLOWED"
+            return False, MlBlockReason.ENV_NOT_ALLOWED
 
-        return True, ""
+        return True, None
 
     def _load_onnx_model(self) -> None:
         """Load ONNX model for shadow/active mode inference (M8-02b/02c).
@@ -807,8 +820,11 @@ class PaperEngine:
             ml_features = prediction.to_policy_features()
             policy_features.update(ml_features)
 
+            # M8-02c-2: Record successful inference
+            record_ml_inference_success()
+
             logger.info(
-                "ML_ACTIVE_ENABLED: ts=%d symbol=%s regime=%s "
+                "ML_INFER_OK: ts=%d symbol=%s regime=%s "
                 "probs_bps=%s spacing_x1000=%d latency_ms=%.2f",
                 ts,
                 symbol,
@@ -821,6 +837,8 @@ class PaperEngine:
 
         except Exception as e:
             # Fail-closed: log error and do NOT modify policy_features
+            # M8-02c-2: Record inference error
+            record_ml_inference_error()
             latency_ms = (time.perf_counter() - start_time) * 1000
             logger.error(
                 "ML_INFER_ERROR: ts=%d symbol=%s error=%s latency_ms=%.2f",
@@ -1106,27 +1124,47 @@ class PaperEngine:
 
         # M8-02c: Per-snapshot kill-switch check (K1/K2)
         # If kill-switch active, skip all ML inference
-        ml_kill_switch_active = self._is_ml_kill_switch_active()
-        if ml_kill_switch_active:
+        ml_kill_switch_active, kill_reason = self._is_ml_kill_switch_active()
+        if ml_kill_switch_active and kill_reason is not None:
             logger.debug(
-                "ML_ACTIVE_DISABLED: ts=%d symbol=%s reason=KILL_SWITCH",
+                "ML_KILL_SWITCH_ON: ts=%d symbol=%s reason=%s",
                 ts,
                 symbol,
+                kill_reason.value,
             )
+            # Update gauge: ACTIVE blocked by kill-switch
+            set_ml_active_on(False, kill_reason)
 
         # M8-02c: ACTIVE mode inference (affects policy_features if allowed)
         ml_active_applied = False
         if not ml_kill_switch_active and self._ml_active_enabled:
-            active_allowed, reason = self._is_ml_active_allowed(ts)
+            active_allowed, block_reason = self._is_ml_active_allowed(ts)
             if active_allowed:
                 ml_active_applied = self._run_active_inference(ts, symbol, policy_features)
-            elif reason:
+                if ml_active_applied:
+                    # Update gauge: ACTIVE inference succeeded this tick
+                    set_ml_active_on(True)
+                    logger.info(
+                        "ML_ACTIVE_ON: ts=%d symbol=%s",
+                        ts,
+                        symbol,
+                    )
+                else:
+                    # Inference failed (error already tracked by record_ml_inference_error)
+                    # Gauge = 0, no block reason (this is runtime failure, not gate block)
+                    set_ml_active_on(False)
+            elif block_reason is not None:
+                # Update gauge: ACTIVE blocked
+                set_ml_active_on(False, block_reason)
                 logger.debug(
                     "ML_ACTIVE_BLOCKED: ts=%d symbol=%s reason=%s",
                     ts,
                     symbol,
-                    reason,
+                    block_reason.value,
                 )
+        elif not ml_kill_switch_active:
+            # ACTIVE not enabled - update gauge with reason
+            set_ml_active_on(False, MlBlockReason.ACTIVE_DISABLED)
 
         # M8-02b: Shadow mode inference (does NOT affect policy_features)
         # Run inference for logging/metrics only; result is discarded
