@@ -1,4 +1,4 @@
-# GRINDER Alert Rules v2
+# GRINDER Alert Rules v3
 # Based on metrics from src/grinder/observability/metrics_builder.py
 #
 # Available metrics:
@@ -10,6 +10,13 @@
 #   - grinder_kill_switch_trips_total{reason} (counter): total trips by reason
 #   - grinder_drawdown_pct (gauge): current drawdown percentage
 #   - grinder_high_water_mark (gauge): current equity HWM
+#
+# ML inference metrics (M8-02c-2, M8-02d):
+#   - grinder_ml_active_on (gauge): 1 if ACTIVE mode enabled, 0 otherwise
+#   - grinder_ml_block_total{reason} (counter): ACTIVE mode blocks by reason
+#   - grinder_ml_inference_total (counter): successful inferences
+#   - grinder_ml_inference_errors_total (counter): inference errors
+#   - grinder_ml_inference_latency_ms{mode} (histogram): latency by mode (shadow/active)
 #
 # Reconcile metrics (LC-09b/LC-10/LC-11/LC-15b/LC-18):
 #   - grinder_reconcile_runs_total (counter): total loop runs
@@ -247,3 +254,80 @@ groups:
           summary: "Reconcile budget notional critically low"
           description: "Notional budget remaining is {{ $value | printf \"%.2f\" }} USDT (threshold: 10). Used today: {{ with query \"grinder_reconcile_budget_notional_used_day\" }}{{ . | first | value | printf \"%.2f\" }}{{ end }} USDT."
           runbook_url: "docs/runbooks/16_RECONCILE_ALERTS_SLOS.md#reconcilebudgetnotionallow"
+
+  # M8-02d: ML Inference Performance SLO Alerts
+  - name: grinder_ml_inference
+    rules:
+      # Warning: ML inference p99 latency exceeds 100ms SLO
+      - alert: MlInferenceLatencyHigh
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(grinder_ml_inference_latency_ms_bucket[5m])) by (le, mode)
+          ) > 100
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "ML inference p99 latency exceeds SLO"
+          description: "ML inference p99 latency is {{ $value | printf \"%.1f\" }}ms (SLO: 100ms). Check ONNX model performance."
+          runbook_url: "docs/runbooks/17_ML_INFERENCE_SLOS.md#mlinferencelatencyhigh"
+
+      # Critical: ML inference p99.9 latency exceeds 250ms
+      - alert: MlInferenceLatencyCritical
+        expr: |
+          histogram_quantile(0.999,
+            sum(rate(grinder_ml_inference_latency_ms_bucket[5m])) by (le, mode)
+          ) > 250
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "ML inference p99.9 latency critically high"
+          description: "ML inference p99.9 latency is {{ $value | printf \"%.1f\" }}ms (threshold: 250ms). Consider model optimization or kill-switch."
+          runbook_url: "docs/runbooks/17_ML_INFERENCE_SLOS.md#mlinferencelatencycritical"
+
+      # Warning: ML inference error rate exceeds 5%
+      - alert: MlInferenceErrorRateHigh
+        expr: |
+          (
+            rate(grinder_ml_inference_errors_total[5m])
+            /
+            (rate(grinder_ml_inference_total[5m]) + rate(grinder_ml_inference_errors_total[5m]) + 0.001)
+          ) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "ML inference error rate exceeds 5%"
+          description: "ML inference error rate is {{ $value | printf \"%.1f\" }}%. Check model and input data."
+          runbook_url: "docs/runbooks/17_ML_INFERENCE_SLOS.md#mlinferenceerrorratehigh"
+
+      # Info: ML ACTIVE mode is persistently blocked
+      - alert: MlActiveModePersistentlyBlocked
+        expr: |
+          grinder_ml_active_on == 0
+          and
+          sum(rate(grinder_ml_block_total[5m])) > 0
+        for: 15m
+        labels:
+          severity: info
+        annotations:
+          summary: "ML ACTIVE mode persistently blocked"
+          description: "ML ACTIVE mode has been blocked for 15+ minutes. Check block reasons in metrics."
+          runbook_url: "docs/runbooks/17_ML_INFERENCE_SLOS.md#mlactivemodepersistentlyblocked"
+
+      # Warning: No ML inferences in 10 minutes (when ML should be active)
+      - alert: MlInferenceStalled
+        expr: |
+          increase(grinder_ml_inference_total[10m]) == 0
+          and
+          increase(grinder_ml_inference_errors_total[10m]) == 0
+          and
+          grinder_up == 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "No ML inferences detected"
+          description: "No ML inferences (success or error) in 10 minutes while GRINDER is up. Check ML configuration."
+          runbook_url: "docs/runbooks/17_ML_INFERENCE_SLOS.md#mlinferencestalled"

@@ -198,6 +198,50 @@ class MetricsCollector:
         self.spread_bps.labels(symbol=symbol).set(spread_bps)
 ```
 
+### ML Inference Metrics (M8-02c-2, M8-02d)
+
+ML ONNX inference metrics for SLO tracking and alerting.
+
+```python
+# ML Metrics (from grinder.ml.metrics)
+
+# Gauge: Whether ML ACTIVE mode is enabled per snapshot
+grinder_ml_active_on  # 0 or 1
+
+# Counter: ACTIVE mode blocks by reason code
+# Labels: reason (KILL_SWITCH_ENV, KILL_SWITCH_CONFIG, INFER_DISABLED,
+#                 ACTIVE_DISABLED, BAD_ACK, ONNX_UNAVAILABLE,
+#                 ARTIFACT_DIR_MISSING, MANIFEST_INVALID, MODEL_NOT_LOADED,
+#                 ENV_NOT_ALLOWED)
+grinder_ml_block_total{reason="..."}
+
+# Counter: Successful inferences
+grinder_ml_inference_total
+
+# Counter: Inference errors (fail-closed mode)
+grinder_ml_inference_errors_total
+
+# Histogram: Inference latency in milliseconds (M8-02d)
+# Labels: mode (shadow, active)
+# Buckets: [1, 2, 5, 10, 25, 50, 100, 250, 500] ms
+grinder_ml_inference_latency_ms{mode="..."}
+```
+
+**SLO Thresholds (M8-02d):**
+
+| Metric | p95 Target | p99 Warning | p99.9 Critical |
+|--------|------------|-------------|----------------|
+| Inference latency | < 50ms | < 100ms | < 250ms |
+| Error rate | - | < 5% | - |
+
+**Alert Rules:**
+
+- `MlInferenceLatencyHigh`: p99 > 100ms for 5m (warning)
+- `MlInferenceLatencyCritical`: p99.9 > 250ms for 3m (critical)
+- `MlInferenceErrorRateHigh`: error rate > 5% for 5m (warning)
+- `MlActiveModePersistentlyBlocked`: ACTIVE blocked for 15m (info)
+- `MlInferenceStalled`: no inferences for 10m (warning)
+
 ---
 
 ## 13.3 Structured Logging
