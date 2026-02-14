@@ -101,6 +101,8 @@ class FixtureConfig:
     adaptive_config: AdaptiveGridConfig | None
     replay_expected: str
     paper_expected: str
+    # M8: ML signal integration
+    ml_enabled: bool
 
 
 def parse_fixture_config(fixture_path: Path, config: dict[str, Any]) -> FixtureConfig:
@@ -156,6 +158,9 @@ def parse_fixture_config(fixture_path: Path, config: dict[str, Any]) -> FixtureC
     if not paper_expected:
         paper_expected = config.get("canonical_digest", "")
 
+    # M8: ML signal integration (safe-by-default: False)
+    ml_enabled = bool(config.get("ml_enabled", False))
+
     return FixtureConfig(
         controller_enabled=controller_enabled,
         feature_engine_enabled=feature_engine_enabled,
@@ -174,6 +179,7 @@ def parse_fixture_config(fixture_path: Path, config: dict[str, Any]) -> FixtureC
         adaptive_config=adaptive_config,
         replay_expected=replay_expected,
         paper_expected=paper_expected,
+        ml_enabled=ml_enabled,
     )
 
 
@@ -227,6 +233,8 @@ def run_paper(
     max_notional_total: Decimal | None = None,
     # M7 L2 gating (AdaptiveGridPolicy)
     adaptive_config: AdaptiveGridConfig | None = None,
+    # M8 ML signal integration
+    ml_enabled: bool = False,
 ) -> str:
     """Run paper trading and return digest."""
     # Convert symbol_constraints dict to SymbolConstraints objects
@@ -253,6 +261,7 @@ def run_paper(
         "l2_execution_max_age_ms": l2_execution_max_age_ms,
         "l2_execution_impact_threshold_bps": l2_execution_impact_threshold_bps,
         "symbol_constraints": parsed_constraints,
+        "ml_enabled": ml_enabled,
     }
     if size_per_level is not None:
         kwargs["size_per_level"] = size_per_level
@@ -317,6 +326,7 @@ def check_fixture(fixture_path: Path, verbose: bool = False) -> FixtureCheck:
             max_notional_per_symbol=fc.max_notional_per_symbol,
             max_notional_total=fc.max_notional_total,
             adaptive_config=fc.adaptive_config,
+            ml_enabled=fc.ml_enabled,
         )
         paper_2 = run_paper(
             fixture_path,
@@ -335,6 +345,7 @@ def check_fixture(fixture_path: Path, verbose: bool = False) -> FixtureCheck:
             max_notional_per_symbol=fc.max_notional_per_symbol,
             max_notional_total=fc.max_notional_total,
             adaptive_config=fc.adaptive_config,
+            ml_enabled=fc.ml_enabled,
         )
     except Exception as e:
         errors.append(f"Paper error: {e}")

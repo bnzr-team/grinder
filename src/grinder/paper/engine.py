@@ -36,6 +36,7 @@ from grinder.execution import (
 )
 from grinder.features import FeatureEngine, FeatureEngineConfig, L2FeatureSnapshot
 from grinder.gating import GateReason, GatingResult, RateLimiter, RiskGate, ToxicityGate
+from grinder.ml import MlSignalSnapshot
 from grinder.paper.cycle_engine import CycleEngine
 from grinder.paper.fills import Fill, check_pending_fills, simulate_fills
 from grinder.paper.ledger import Ledger
@@ -293,6 +294,8 @@ class PaperEngine:
         l2_execution_guard_enabled: bool = False,
         l2_execution_max_age_ms: int = 1500,
         l2_execution_impact_threshold_bps: int = 50,
+        # M8 ML signal integration
+        ml_enabled: bool = False,
     ) -> None:
         """Initialize paper trading engine.
 
@@ -343,6 +346,7 @@ class PaperEngine:
             l2_execution_guard_enabled: Enable L2-based execution guards (default False)
             l2_execution_max_age_ms: Max age in ms for L2 snapshot (default 1500)
             l2_execution_impact_threshold_bps: Impact threshold in bps to skip order (default 50)
+            ml_enabled: Enable ML signal integration (default False for safe-by-default)
         """
         # Policy and execution
         self._policy = StaticGridPolicy(
@@ -480,6 +484,10 @@ class PaperEngine:
             self._dd_guard_v1 = DrawdownGuardV1(
                 config=dd_guard_v1_config or DrawdownGuardV1Config()
             )
+
+        # M8: ML signal integration
+        self._ml_enabled = ml_enabled
+        self._ml_signals: dict[str, MlSignalSnapshot] = {}  # symbol -> latest signal
 
         # Per-symbol execution state
         self._states: dict[str, ExecutionState] = {}
@@ -760,6 +768,12 @@ class PaperEngine:
         if policy_feature_inputs is not None:
             policy_features.update(policy_feature_inputs)
 
+        # M8: Inject ML signal features if available
+        # Safe-by-default: if ml_enabled but no signal, policy_features unchanged
+        if self._ml_enabled and symbol in self._ml_signals:
+            ml_signal = self._ml_signals[symbol]
+            policy_features.update(ml_signal.to_policy_features())
+
         # Determine which policy to use
         if self._adaptive_policy_enabled and self._adaptive_policy is not None:
             # AdaptiveGridPolicy: needs preliminary toxicity check for regime classification
@@ -1021,6 +1035,10 @@ class PaperEngine:
         events = self._load_fixture(fixture_path)
         result.events_processed = len(events)
 
+        # M8: Load ML signals if enabled
+        if self._ml_enabled:
+            self._load_ml_signals(fixture_path)
+
         if not events:
             result.errors.append("No events found in fixture")
             result.digest = self._compute_digest([])
@@ -1265,6 +1283,33 @@ class PaperEngine:
         events.sort(key=lambda e: e.get("ts", 0))
         return events
 
+    def _load_ml_signals(self, fixture_path: Path) -> None:
+        """Load ML signals from fixture ml/signal.json.
+
+        M8: Safe-by-default behavior:
+        - If ml_enabled=True but no signal.json exists, log info and continue
+        - Signals are stored per-symbol for lookup during processing
+        - Invalid signals are logged and skipped
+        """
+        signal_path = fixture_path / "ml" / "signal.json"
+        if not signal_path.exists():
+            # Safe-by-default: no signals, no changes
+            return
+
+        with signal_path.open() as f:
+            data = json.load(f)
+
+        # Support both single signal and list of signals
+        signals = data if isinstance(data, list) else [data]
+
+        for signal_data in signals:
+            try:
+                signal = MlSignalSnapshot.from_dict(signal_data)
+                self._ml_signals[signal.symbol] = signal
+            except Exception:
+                # Log and skip invalid signals (safe-by-default)
+                pass
+
     def _parse_snapshot(self, event: dict[str, Any]) -> Snapshot | None:
         """Parse event dict into Snapshot if it's a SNAPSHOT type."""
         if event.get("type") != "SNAPSHOT":
@@ -1444,6 +1489,7 @@ class PaperEngine:
         if self._feature_engine is not None:
             self._feature_engine.reset()
         self._topk_v1_result = None
+        self._ml_signals.clear()  # M8: Reset ML signals
         self._states.clear()
         self._last_prices.clear()
         self._orders_placed = 0
