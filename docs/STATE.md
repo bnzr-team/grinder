@@ -1380,7 +1380,7 @@ Comprehensive adaptive grid system design:
 
 ### ML Integration (`docs/12_ML_SPEC.md`)
 - **Spec:** `docs/12_ML_SPEC.md` — SSOT for ML contracts
-- **Code:** `src/grinder/ml/` — empty placeholder
+- **Code:** `src/grinder/ml/` — MlSignalSnapshot contract
 - **Status:** M8 in progress
 - **Progress:**
   - ✅ **M8-00 (docs-only):** ML Specification with I/O contracts
@@ -1390,7 +1390,13 @@ Comprehensive adaptive grid system design:
     - Artifacts: `manifest.json` + SHA256 checksums
     - Enablement: `ml_enabled=False` default (safe rollout)
     - See ADR-064
-  - 🔜 **M8-01 (stub):** MlSignalSnapshot type, MlModelPort protocol, NeutralMlModel
+  - ✅ **M8-01 (stub):** MlSignalSnapshot contract + time-indexed signal selection
+    - `MlSignalSnapshot` dataclass in `src/grinder/ml/__init__.py` (PR #140)
+    - Time-indexed lookup: `_get_ml_signal(symbol, ts_ms)` with bisect O(log n) (PR #141)
+    - Safe-by-default: `ml_enabled=True` + no signal.json = baseline digest
+    - SSOT rule: max(signal.ts_ms) where signal.ts_ms <= snapshot.ts_ms
+    - Digest-locked fixtures: `sample_day_ml_multisignal_basic`, `sample_day_ml_multisignal_no_prior` (PR #142)
+    - 26 unit tests (14 contract + 12 selection)
   - 🔜 **M8-02 (ONNX):** OnnxMlModel implementation, artifact loader, shadow mode
 
 ### Multi-venue
