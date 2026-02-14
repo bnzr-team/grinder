@@ -9,6 +9,7 @@ import hashlib
 import json
 import tempfile
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -33,7 +34,7 @@ def _create_artifact_dir(
     tmpdir: Path,
     model_content: bytes = b"fake onnx model content",
     extra_files: dict[str, bytes] | None = None,
-    manifest_override: dict | None = None,
+    manifest_override: dict[str, Any] | None = None,
 ) -> Path:
     """Create a valid artifact directory for testing."""
     artifact_dir = tmpdir / "artifact"
