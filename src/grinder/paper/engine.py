@@ -808,7 +808,7 @@ class PaperEngine:
             latency_ms = (time.perf_counter() - start_time) * 1000
 
             if prediction is None:
-                logger.debug(
+                logger.warning(
                     "ML_ACTIVE_BLOCKED: ts=%d symbol=%s reason=PREDICTION_NONE latency_ms=%.2f",
                     ts,
                     symbol,
@@ -825,13 +825,14 @@ class PaperEngine:
 
             logger.info(
                 "ML_INFER_OK: ts=%d symbol=%s regime=%s "
-                "probs_bps=%s spacing_x1000=%d latency_ms=%.2f",
+                "probs_bps=%s spacing_x1000=%d latency_ms=%.2f artifact_dir=%s",
                 ts,
                 symbol,
                 prediction.predicted_regime,
                 prediction.regime_probs_bps,
                 prediction.spacing_multiplier_x1000,
                 latency_ms,
+                self._onnx_artifact_dir,
             )
             return True
 
@@ -841,11 +842,12 @@ class PaperEngine:
             record_ml_inference_error()
             latency_ms = (time.perf_counter() - start_time) * 1000
             logger.error(
-                "ML_INFER_ERROR: ts=%d symbol=%s error=%s latency_ms=%.2f",
+                "ML_INFER_ERROR: ts=%d symbol=%s error=%s latency_ms=%.2f artifact_dir=%s",
                 ts,
                 symbol,
                 str(e),
                 latency_ms,
+                self._onnx_artifact_dir,
             )
             return False
 
@@ -1126,7 +1128,7 @@ class PaperEngine:
         # If kill-switch active, skip all ML inference
         ml_kill_switch_active, kill_reason = self._is_ml_kill_switch_active()
         if ml_kill_switch_active and kill_reason is not None:
-            logger.debug(
+            logger.warning(
                 "ML_KILL_SWITCH_ON: ts=%d symbol=%s reason=%s",
                 ts,
                 symbol,
@@ -1156,7 +1158,7 @@ class PaperEngine:
             elif block_reason is not None:
                 # Update gauge: ACTIVE blocked
                 set_ml_active_on(False, block_reason)
-                logger.debug(
+                logger.warning(
                     "ML_ACTIVE_BLOCKED: ts=%d symbol=%s reason=%s",
                     ts,
                     symbol,
