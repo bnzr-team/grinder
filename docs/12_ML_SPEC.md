@@ -471,13 +471,55 @@ M8 (ML Integration) is divided into three sub-milestones.
 ### M8-02: ONNX Integration
 
 **Scope:** Real model inference via ONNX Runtime
+
+#### M8-02a: Artifact Plumbing (no inference) ✅
+
 **Deliverables:**
-- [ ] `OnnxMlModel` implementation of `MlModelPort`
-- [ ] Artifact loader with manifest validation
-- [ ] `verify_ml_determinism` script
-- [ ] Sample model artifact (trained on fixture data)
-- [ ] Shadow mode support
-- [ ] 20+ integration tests
+- [x] `OnnxArtifactManifest` and `OnnxArtifact` types in `src/grinder/ml/onnx/`
+- [x] Artifact loader with SHA256 validation
+- [x] Config fields: `ml_shadow_mode`, `ml_infer_enabled`, `onnx_artifact_dir`
+- [x] `verify_onnx_artifact.py` script
+- [x] 19 unit tests for artifact validation
+
+**ONNX Artifact v1 Format:**
+```json
+{
+  "schema_version": "v1",
+  "model_file": "model.onnx",
+  "sha256": {
+    "model.onnx": "a1b2c3..."
+  },
+  "created_at": "2026-02-14T00:00:00Z",
+  "notes": "optional"
+}
+```
+
+**Validation rules:**
+- `schema_version` must be `"v1"`
+- `model_file` must exist in `sha256` map
+- All paths must be relative (no `..`, no absolute)
+- SHA256 must match actual file content
+
+**Safe-by-default:**
+- `ml_shadow_mode=False` (default)
+- `ml_infer_enabled=False` (default)
+- `onnx_artifact_dir=None` (default)
+- Existing digests unchanged when all flags are off
+
+#### M8-02b: Shadow Mode (planned)
+
+**Deliverables:**
+- [ ] Model loading with soft-fail
+- [ ] Shadow logging (predicted vs actual)
+- [ ] Latency metrics
+
+#### M8-02c: Real Inference (planned)
+
+**Deliverables:**
+- [ ] `OnnxMlModel` implementation
+- [ ] ONNX Runtime integration
+- [ ] Determinism tests with pinned artifacts
+- [ ] Sample model artifact
 
 **Acceptance criteria:**
 - Determinism verified across 2 runs

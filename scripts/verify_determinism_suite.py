@@ -103,6 +103,10 @@ class FixtureConfig:
     paper_expected: str
     # M8: ML signal integration
     ml_enabled: bool
+    # M8-02a: ONNX artifact plumbing
+    ml_shadow_mode: bool
+    ml_infer_enabled: bool
+    onnx_artifact_dir: str | None
 
 
 def parse_fixture_config(fixture_path: Path, config: dict[str, Any]) -> FixtureConfig:
@@ -161,6 +165,11 @@ def parse_fixture_config(fixture_path: Path, config: dict[str, Any]) -> FixtureC
     # M8: ML signal integration (safe-by-default: False)
     ml_enabled = bool(config.get("ml_enabled", False))
 
+    # M8-02a: ONNX artifact plumbing (safe-by-default: all False/None)
+    ml_shadow_mode = bool(config.get("ml_shadow_mode", False))
+    ml_infer_enabled = bool(config.get("ml_infer_enabled", False))
+    onnx_artifact_dir = config.get("onnx_artifact_dir")
+
     return FixtureConfig(
         controller_enabled=controller_enabled,
         feature_engine_enabled=feature_engine_enabled,
@@ -180,6 +189,9 @@ def parse_fixture_config(fixture_path: Path, config: dict[str, Any]) -> FixtureC
         replay_expected=replay_expected,
         paper_expected=paper_expected,
         ml_enabled=ml_enabled,
+        ml_shadow_mode=ml_shadow_mode,
+        ml_infer_enabled=ml_infer_enabled,
+        onnx_artifact_dir=onnx_artifact_dir,
     )
 
 
@@ -235,6 +247,10 @@ def run_paper(
     adaptive_config: AdaptiveGridConfig | None = None,
     # M8 ML signal integration
     ml_enabled: bool = False,
+    # M8-02a ONNX artifact plumbing
+    ml_shadow_mode: bool = False,
+    ml_infer_enabled: bool = False,
+    onnx_artifact_dir: str | None = None,
 ) -> str:
     """Run paper trading and return digest."""
     # Convert symbol_constraints dict to SymbolConstraints objects
@@ -262,6 +278,9 @@ def run_paper(
         "l2_execution_impact_threshold_bps": l2_execution_impact_threshold_bps,
         "symbol_constraints": parsed_constraints,
         "ml_enabled": ml_enabled,
+        "ml_shadow_mode": ml_shadow_mode,
+        "ml_infer_enabled": ml_infer_enabled,
+        "onnx_artifact_dir": onnx_artifact_dir,
     }
     if size_per_level is not None:
         kwargs["size_per_level"] = size_per_level
@@ -327,6 +346,9 @@ def check_fixture(fixture_path: Path, verbose: bool = False) -> FixtureCheck:
             max_notional_total=fc.max_notional_total,
             adaptive_config=fc.adaptive_config,
             ml_enabled=fc.ml_enabled,
+            ml_shadow_mode=fc.ml_shadow_mode,
+            ml_infer_enabled=fc.ml_infer_enabled,
+            onnx_artifact_dir=fc.onnx_artifact_dir,
         )
         paper_2 = run_paper(
             fixture_path,
@@ -346,6 +368,9 @@ def check_fixture(fixture_path: Path, verbose: bool = False) -> FixtureCheck:
             max_notional_total=fc.max_notional_total,
             adaptive_config=fc.adaptive_config,
             ml_enabled=fc.ml_enabled,
+            ml_shadow_mode=fc.ml_shadow_mode,
+            ml_infer_enabled=fc.ml_infer_enabled,
+            onnx_artifact_dir=fc.onnx_artifact_dir,
         )
     except Exception as e:
         errors.append(f"Paper error: {e}")

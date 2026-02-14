@@ -297,6 +297,10 @@ class PaperEngine:
         l2_execution_impact_threshold_bps: int = 50,
         # M8 ML signal integration
         ml_enabled: bool = False,
+        # M8-02a ONNX artifact plumbing (no inference)
+        ml_shadow_mode: bool = False,
+        ml_infer_enabled: bool = False,
+        onnx_artifact_dir: str | None = None,
     ) -> None:
         """Initialize paper trading engine.
 
@@ -348,6 +352,9 @@ class PaperEngine:
             l2_execution_max_age_ms: Max age in ms for L2 snapshot (default 1500)
             l2_execution_impact_threshold_bps: Impact threshold in bps to skip order (default 50)
             ml_enabled: Enable ML signal integration (default False for safe-by-default)
+            ml_shadow_mode: Enable ONNX shadow mode (load model but don't affect decisions)
+            ml_infer_enabled: Enable ONNX inference (requires onnx_artifact_dir)
+            onnx_artifact_dir: Path to ONNX artifact directory with manifest.json
         """
         # Policy and execution
         self._policy = StaticGridPolicy(
@@ -490,6 +497,13 @@ class PaperEngine:
         self._ml_enabled = ml_enabled
         # M8-01b: Time-indexed signal storage: symbol -> sorted list of signals
         self._ml_signals: dict[str, list[MlSignalSnapshot]] = {}
+
+        # M8-02a: ONNX artifact plumbing (no inference yet)
+        self._ml_shadow_mode = ml_shadow_mode
+        self._ml_infer_enabled = ml_infer_enabled
+        self._onnx_artifact_dir = onnx_artifact_dir
+        # Artifact will be loaded in run() if needed; stored here for future use
+        self._onnx_artifact: Any = None  # OnnxArtifact once loaded
 
         # Per-symbol execution state
         self._states: dict[str, ExecutionState] = {}
