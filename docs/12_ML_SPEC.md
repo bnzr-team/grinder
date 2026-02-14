@@ -452,21 +452,21 @@ M8 (ML Integration) is divided into three sub-milestones.
 - ADR-064 created in docs/DECISIONS.md
 - No code changes
 
-### M8-01: Stub Implementation
+### M8-01: Stub Implementation ✅
 
 **Scope:** Code scaffold with tests, no real model
 **Deliverables:**
-- [ ] `MlSignalSnapshot` dataclass in `src/grinder/ml/types.py`
-- [ ] `MlModelPort` protocol in `src/grinder/ml/port.py`
-- [ ] `NeutralMlModel` stub (always returns neutral signal)
-- [ ] `MlConfig` dataclass with `enabled=False` default
-- [ ] Integration point in PaperEngine (if ml_enabled)
-- [ ] 15+ unit tests for contracts
+- [x] `MlSignalSnapshot` dataclass in `src/grinder/ml/__init__.py` (PR #140)
+- [x] Time-indexed signal selection `_get_ml_signal(symbol, ts_ms)` with bisect O(log n) (PR #141)
+- [x] Integration point in PaperEngine (`ml_enabled` flag)
+- [x] 26 unit tests for contracts (14 contract + 12 selection)
+- [x] Digest-locked fixtures: `sample_day_ml_multisignal_basic`, `sample_day_ml_multisignal_no_prior` (PR #142)
 
 **Acceptance criteria:**
-- `ml_enabled=False` → no ML code path executed
-- `ml_enabled=True` + stub → neutral signal returned
-- All tests pass, digest unchanged when disabled
+- [x] `ml_enabled=False` → no ML code path executed
+- [x] `ml_enabled=True` + no signal.json → baseline digest (safe-by-default)
+- [x] SSOT selection rule: max(signal.ts_ms) where signal.ts_ms <= snapshot.ts_ms
+- [x] All tests pass, digest unchanged when disabled
 
 ### M8-02: ONNX Integration
 
