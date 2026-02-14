@@ -561,6 +561,48 @@ FEATURE_ORDER = (
 - 15 guard tests per ADR-065 Test Requirements
 - Kill-switch activates immediately (per-snapshot)
 
+#### M8-02c-3: Structured Logs & Observability
+
+**Status:** ✅ Implemented (PR #149)
+
+**Log Events (SSOT):**
+
+| Event | Level | When | Key Fields |
+|-------|-------|------|------------|
+| `ML_MODE_INIT` | info | Model loaded | `mode`, `artifact_dir` |
+| `ML_KILL_SWITCH_ON` | warning | Kill-switch active | `ts`, `symbol`, `reason` |
+| `ML_ACTIVE_ON` | info | Inference succeeded | `ts`, `symbol` |
+| `ML_ACTIVE_BLOCKED` | warning | ACTIVE blocked | `ts`, `symbol`, `reason`, `latency_ms` (optional) |
+| `ML_INFER_OK` | info | Inference success | `ts`, `symbol`, `regime`, `probs_bps`, `spacing_x1000`, `latency_ms`, `artifact_dir` |
+| `ML_INFER_ERROR` | error | Inference exception | `ts`, `symbol`, `error`, `latency_ms`, `artifact_dir` |
+
+**Prometheus Metrics:**
+
+| Metric | Type | Description |
+|--------|------|-------------|
+| `grinder_ml_active_on` | gauge | 1 if ACTIVE inference succeeded this tick, 0 otherwise |
+| `grinder_ml_block_total{reason="..."}` | counter | Count of ACTIVE blocks by reason code |
+| `grinder_ml_inference_total` | counter | Total successful inferences |
+| `grinder_ml_inference_errors_total` | counter | Total inference errors |
+
+**Reason Codes (MlBlockReason enum, priority order):**
+
+1. `KILL_SWITCH_ENV` - `ML_KILL_SWITCH=1` env var active
+2. `KILL_SWITCH_CONFIG` - `ml_kill_switch=True` config
+3. `INFER_DISABLED` - `ml_infer_enabled=False`
+4. `ACTIVE_DISABLED` - `ml_active_enabled=False`
+5. `BAD_ACK` - `ml_active_ack` != expected string
+6. `ONNX_UNAVAILABLE` - `onnxruntime` not installed
+7. `ARTIFACT_DIR_MISSING` - `onnx_artifact_dir` not found
+8. `MANIFEST_INVALID` - `manifest.json` invalid or missing
+9. `MODEL_NOT_LOADED` - ONNX model is `None`
+10. `ENV_NOT_ALLOWED` - `GRINDER_ENV` not in allowlist
+
+**Source files:**
+- `src/grinder/ml/metrics.py` - SSOT for reason codes, gauge state, Prometheus export
+- `src/grinder/paper/engine.py` - Log emission points
+- `tests/unit/test_ml_log_events.py` - caplog tests for log events
+
 ---
 
 ## 12.7 ML Use Cases

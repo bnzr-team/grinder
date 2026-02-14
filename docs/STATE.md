@@ -1397,10 +1397,13 @@ Comprehensive adaptive grid system design:
     - SSOT rule: max(signal.ts_ms) where signal.ts_ms <= snapshot.ts_ms
     - Digest-locked fixtures: `sample_day_ml_multisignal_basic`, `sample_day_ml_multisignal_no_prior` (PR #142)
     - 26 unit tests (14 contract + 12 selection)
-  - 🟡 **M8-02 (ONNX):** In progress
+  - ✅ **M8-02 (ONNX):** Complete
     - ✅ **M8-02a:** Artifact plumbing (types, loader, config fields, 19 tests)
     - ✅ **M8-02b:** Shadow mode (OnnxMlModel, vectorize, soft-fail, 19 tests)
-    - 🔄 **M8-02c:** Active inference mode (ADR-065 proposed, guards + tests pending)
+    - ✅ **M8-02c:** Active inference mode (ADR-065)
+      - ✅ M8-02c-1: Config guards + 15 ADR-065 tests (PR #147)
+      - ✅ M8-02c-2: Observability: gauge, reason codes, metrics (PR #148)
+      - ✅ M8-02c-3: Structured logs + SSOT docs (PR #149)
 
 ### Multi-venue
 - **Current:** Binance Futures USDT-M only
