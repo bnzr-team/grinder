@@ -12,8 +12,10 @@ Reason code priority (first match wins):
 4. ACTIVE_DISABLED - ml_active_enabled=False
 5. BAD_ACK - ml_active_ack != expected
 6. ONNX_UNAVAILABLE - onnxruntime not installed
-7. MODEL_NOT_LOADED - ONNX model is None
-8. ENV_NOT_ALLOWED - GRINDER_ENV not in allowlist
+7. ARTIFACT_DIR_MISSING - onnx_artifact_dir not found
+8. MANIFEST_INVALID - manifest.json invalid or missing
+9. MODEL_NOT_LOADED - ONNX model is None
+10. ENV_NOT_ALLOWED - GRINDER_ENV not in allowlist
 """
 
 from __future__ import annotations
@@ -35,6 +37,8 @@ class MlBlockReason(StrEnum):
     ACTIVE_DISABLED = "ACTIVE_DISABLED"
     BAD_ACK = "BAD_ACK"
     ONNX_UNAVAILABLE = "ONNX_UNAVAILABLE"
+    ARTIFACT_DIR_MISSING = "ARTIFACT_DIR_MISSING"
+    MANIFEST_INVALID = "MANIFEST_INVALID"
     MODEL_NOT_LOADED = "MODEL_NOT_LOADED"
     ENV_NOT_ALLOWED = "ENV_NOT_ALLOWED"
 

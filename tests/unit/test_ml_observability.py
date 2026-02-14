@@ -39,12 +39,14 @@ class TestMlBlockReason:
         assert MlBlockReason.ACTIVE_DISABLED.value == "ACTIVE_DISABLED"
         assert MlBlockReason.BAD_ACK.value == "BAD_ACK"
         assert MlBlockReason.ONNX_UNAVAILABLE.value == "ONNX_UNAVAILABLE"
+        assert MlBlockReason.ARTIFACT_DIR_MISSING.value == "ARTIFACT_DIR_MISSING"
+        assert MlBlockReason.MANIFEST_INVALID.value == "MANIFEST_INVALID"
         assert MlBlockReason.MODEL_NOT_LOADED.value == "MODEL_NOT_LOADED"
         assert MlBlockReason.ENV_NOT_ALLOWED.value == "ENV_NOT_ALLOWED"
 
-    def test_all_8_reason_codes_exist(self) -> None:
-        """ADR-065 requires 8 distinct reason codes."""
-        assert len(MlBlockReason) == 8
+    def test_all_10_reason_codes_exist(self) -> None:
+        """ADR-065 requires 10 distinct reason codes."""
+        assert len(MlBlockReason) == 10
 
 
 class TestMlMetricsState:
@@ -185,4 +187,34 @@ class TestGaugePerSnapshot:
 
         # Active ON clears the reason
         set_ml_active_on(True)
+        assert get_ml_metrics_state().last_block_reason is None
+
+    def test_gauge_transitions_on_to_off(self) -> None:
+        """Tick N: ACTIVE ON → Tick N+1: disabled → gauge = 0.
+
+        Simulates: active on tick N, then ml_active_enabled turned off on tick N+1.
+        Gauge must not "stick" at 1.
+        """
+        # Tick N: ACTIVE inference succeeds
+        set_ml_active_on(True)
+        assert get_ml_metrics_state().ml_active_on == 1
+
+        # Tick N+1: ACTIVE mode disabled (simulated by setting gauge off with reason)
+        set_ml_active_on(False, MlBlockReason.ACTIVE_DISABLED)
+        assert get_ml_metrics_state().ml_active_on == 0
+        assert get_ml_metrics_state().last_block_reason == MlBlockReason.ACTIVE_DISABLED
+
+    def test_gauge_inference_failure_resets_to_zero(self) -> None:
+        """If inference fails after being allowed, gauge should be 0.
+
+        Simulates: active allowed but inference returns False (no block reason).
+        """
+        # Start with successful inference
+        set_ml_active_on(True)
+        assert get_ml_metrics_state().ml_active_on == 1
+
+        # Next tick: inference allowed but fails (no reason code)
+        set_ml_active_on(False)
+        assert get_ml_metrics_state().ml_active_on == 0
+        # No block reason when inference fails (it's a runtime failure, not gate block)
         assert get_ml_metrics_state().last_block_reason is None

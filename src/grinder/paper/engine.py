@@ -1140,15 +1140,19 @@ class PaperEngine:
         if not ml_kill_switch_active and self._ml_active_enabled:
             active_allowed, block_reason = self._is_ml_active_allowed(ts)
             if active_allowed:
-                # Update gauge: ACTIVE is ON
-                set_ml_active_on(True)
                 ml_active_applied = self._run_active_inference(ts, symbol, policy_features)
                 if ml_active_applied:
+                    # Update gauge: ACTIVE inference succeeded this tick
+                    set_ml_active_on(True)
                     logger.info(
                         "ML_ACTIVE_ON: ts=%d symbol=%s",
                         ts,
                         symbol,
                     )
+                else:
+                    # Inference failed (error already tracked by record_ml_inference_error)
+                    # Gauge = 0, no block reason (this is runtime failure, not gate block)
+                    set_ml_active_on(False)
             elif block_reason is not None:
                 # Update gauge: ACTIVE blocked
                 set_ml_active_on(False, block_reason)
