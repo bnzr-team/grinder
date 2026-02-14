@@ -14,6 +14,7 @@ See: docs/10_RISK_SPEC.md for gating limits
 
 from __future__ import annotations
 
+import bisect
 import hashlib
 import json
 from dataclasses import dataclass, field
@@ -487,7 +488,8 @@ class PaperEngine:
 
         # M8: ML signal integration
         self._ml_enabled = ml_enabled
-        self._ml_signals: dict[str, MlSignalSnapshot] = {}  # symbol -> latest signal
+        # M8-01b: Time-indexed signal storage: symbol -> sorted list of signals
+        self._ml_signals: dict[str, list[MlSignalSnapshot]] = {}
 
         # Per-symbol execution state
         self._states: dict[str, ExecutionState] = {}
@@ -768,11 +770,13 @@ class PaperEngine:
         if policy_feature_inputs is not None:
             policy_features.update(policy_feature_inputs)
 
-        # M8: Inject ML signal features if available
-        # Safe-by-default: if ml_enabled but no signal, policy_features unchanged
-        if self._ml_enabled and symbol in self._ml_signals:
-            ml_signal = self._ml_signals[symbol]
-            policy_features.update(ml_signal.to_policy_features())
+        # M8-01b: Inject ML signal features using time-indexed lookup
+        # SSOT rule: select signal with max(ts_ms) where ts_ms <= snapshot.ts
+        # Safe-by-default: if no valid signal, policy_features unchanged
+        if self._ml_enabled:
+            ml_signal = self._get_ml_signal(symbol, ts)
+            if ml_signal is not None:
+                policy_features.update(ml_signal.to_policy_features())
 
         # Determine which policy to use
         if self._adaptive_policy_enabled and self._adaptive_policy is not None:
@@ -1286,10 +1290,11 @@ class PaperEngine:
     def _load_ml_signals(self, fixture_path: Path) -> None:
         """Load ML signals from fixture ml/signal.json.
 
-        M8: Safe-by-default behavior:
-        - If ml_enabled=True but no signal.json exists, log info and continue
-        - Signals are stored per-symbol for lookup during processing
-        - Invalid signals are logged and skipped
+        M8-01b: Time-indexed signal storage with SSOT selection rule:
+        - Signals stored as sorted list per symbol (by ts_ms ASC)
+        - Duplicate ts_ms per symbol raises error (non-deterministic)
+        - If ml_enabled=True but no signal.json exists, continue (safe-by-default)
+        - Invalid signals are skipped (safe-by-default)
         """
         signal_path = fixture_path / "ml" / "signal.json"
         if not signal_path.exists():
@@ -1300,15 +1305,59 @@ class PaperEngine:
             data = json.load(f)
 
         # Support both single signal and list of signals
-        signals = data if isinstance(data, list) else [data]
+        raw_signals = data if isinstance(data, list) else [data]
 
-        for signal_data in signals:
+        # Build per-symbol lists
+        by_symbol: dict[str, list[MlSignalSnapshot]] = {}
+        for signal_data in raw_signals:
             try:
                 signal = MlSignalSnapshot.from_dict(signal_data)
-                self._ml_signals[signal.symbol] = signal
+                if signal.symbol not in by_symbol:
+                    by_symbol[signal.symbol] = []
+                by_symbol[signal.symbol].append(signal)
             except Exception:
-                # Log and skip invalid signals (safe-by-default)
+                # Skip invalid signals (safe-by-default)
                 pass
+
+        # Sort each symbol's signals by ts_ms and validate no duplicates
+        for symbol, signals in by_symbol.items():
+            signals.sort(key=lambda s: s.ts_ms)
+            # Check for duplicate ts_ms (would break determinism)
+            for i in range(1, len(signals)):
+                if signals[i].ts_ms == signals[i - 1].ts_ms:
+                    raise ValueError(
+                        f"Duplicate ts_ms {signals[i].ts_ms} for symbol {symbol} "
+                        "in ml/signal.json (non-deterministic)"
+                    )
+            self._ml_signals[symbol] = signals
+
+    def _get_ml_signal(self, symbol: str, ts_ms: int) -> MlSignalSnapshot | None:
+        """Get ML signal for symbol at given timestamp.
+
+        M8-01b SSOT selection rule:
+        - Return the signal with max(signal.ts_ms) where signal.ts_ms <= ts_ms
+        - Return None if no such signal exists (safe-by-default)
+
+        Uses bisect for O(log n) lookup.
+        """
+        if symbol not in self._ml_signals:
+            return None
+
+        signals = self._ml_signals[symbol]
+        if not signals:
+            return None
+
+        # Build list of ts_ms for bisect (signals already sorted by ts_ms)
+        ts_list = [s.ts_ms for s in signals]
+
+        # Find rightmost signal where ts_ms <= target
+        idx = bisect.bisect_right(ts_list, ts_ms) - 1
+
+        if idx < 0:
+            # All signals are in the future
+            return None
+
+        return signals[idx]
 
     def _parse_snapshot(self, event: dict[str, Any]) -> Snapshot | None:
         """Parse event dict into Snapshot if it's a SNAPSHOT type."""
