@@ -19,10 +19,10 @@ Reason code priority (first match wins):
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from enum import Enum
+from enum import StrEnum
 
 
-class MlBlockReason(str, Enum):
+class MlBlockReason(StrEnum):
     """Reason codes for ACTIVE mode blocking (ADR-065).
 
     Priority order: first match in truth table wins.
