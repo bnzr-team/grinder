@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 # Optional import - onnxruntime is in [ml] extras
 try:
-    import onnxruntime as ort
+    import onnxruntime as ort  # type: ignore[import-not-found]
 
     ONNX_AVAILABLE = True
 except ImportError:
