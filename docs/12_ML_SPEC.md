@@ -506,12 +506,39 @@ M8 (ML Integration) is divided into three sub-milestones.
 - `onnx_artifact_dir=None` (default)
 - Existing digests unchanged when all flags are off
 
-#### M8-02b: Shadow Mode (planned)
+#### M8-02b: Shadow Mode ✅
 
 **Deliverables:**
-- [ ] Model loading with soft-fail
-- [ ] Shadow logging (predicted vs actual)
-- [ ] Latency metrics
+- [x] `OnnxMlModel` with `load_from_dir()` and `predict()` methods
+- [x] `vectorize()` for feature vectorization with `FEATURE_ORDER` SSOT
+- [x] Model loading with soft-fail (returns None on error)
+- [x] Shadow logging (predicted regime, latency metrics)
+- [x] Config validation guards (ort check, shadow+infer combo, artifact_dir)
+- [x] 19 unit tests (9 model tests + 10 shadow mode tests)
+- [x] Tiny test ONNX artifact (`tiny_regime/`)
+
+**ONNX Runtime Integration:**
+- `onnxruntime>=1.17,<2.0` added to `[ml]` extras
+- `ONNX_AVAILABLE` constant for optional import
+- CPU-only execution for determinism (single-threaded)
+
+**Feature Vectorization:**
+```python
+FEATURE_ORDER = (
+    "price_mid", "price_bid", "price_ask", "spread_bps",
+    "volume_24h", "volume_1h",
+    "volatility_1h_bps", "volatility_24h_bps",
+    "position_size", "position_notional", "position_pnl_bps",
+    "grid_levels_active", "grid_utilization_pct",
+    "trend_strength", "momentum_1h",
+)
+```
+
+**Config Guards:**
+1. `ml_infer_enabled=True && !ONNX_AVAILABLE` → ConfigError
+2. `ml_infer_enabled=True && !ml_shadow_mode` → ConfigError (real inference not yet supported)
+3. `ml_shadow_mode=True && !ml_infer_enabled` → ConfigError
+4. `ml_shadow_mode=True && !onnx_artifact_dir` → ConfigError
 
 #### M8-02c: Real Inference (planned)
 

@@ -70,6 +70,8 @@ ml = [
     "lightgbm>=4.0,<5.0",
     "optuna>=3.5,<4.0",
     "shap>=0.44,<1.0",
+    "onnx>=1.15,<2.0",  # M8-02b: ONNX model format
+    "onnxruntime>=1.17,<2.0",  # M8-02b: ONNX inference
 ]
 backtest = [
     "pandas>=2.0,<3.0",
