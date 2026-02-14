@@ -18,6 +18,7 @@ import bisect
 import hashlib
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from decimal import Decimal
@@ -306,6 +307,11 @@ class PaperEngine:
         ml_shadow_mode: bool = False,
         ml_infer_enabled: bool = False,
         onnx_artifact_dir: str | None = None,
+        # M8-02c ACTIVE mode config (ADR-065)
+        ml_active_enabled: bool = False,
+        ml_active_ack: str | None = None,
+        ml_kill_switch: bool = False,
+        ml_active_allowed_envs: list[str] | None = None,
     ) -> None:
         """Initialize paper trading engine.
 
@@ -509,7 +515,14 @@ class PaperEngine:
         self._onnx_artifact_dir = onnx_artifact_dir
         self._onnx_model: OnnxMlModel | None = None
 
-        # M8-02b: Config validation guards
+        # M8-02c: ACTIVE mode config (ADR-065)
+        self._ml_active_enabled = ml_active_enabled
+        self._ml_active_ack = ml_active_ack
+        self._ml_kill_switch = ml_kill_switch
+        self._ml_active_allowed_envs = ml_active_allowed_envs or []
+        self._grinder_env = os.environ.get("GRINDER_ENV", "")
+
+        # M8-02b/02c: Config validation guards
         self._validate_onnx_config()
 
         # Per-symbol execution state
@@ -527,45 +540,173 @@ class PaperEngine:
         self._last_prices: dict[str, Decimal] = {}
 
     def _validate_onnx_config(self) -> None:
-        """Validate ONNX configuration (M8-02b guards).
+        """Validate ONNX configuration (M8-02b/02c guards).
+
+        Guards (ADR-065):
+            G1: ml_infer_enabled=True + !ONNX_AVAILABLE → ConfigError
+            G2: ml_infer_enabled=True + !ml_shadow_mode + !ml_active_enabled → ConfigError (ambiguous)
+            G3: ml_active_enabled=True + !ml_infer_enabled → ConfigError
+            G4: ml_active_enabled=True + ml_active_ack wrong/missing → ConfigError
+            G5: ml_active_enabled=True + onnx_artifact_dir=None → ConfigError
+            G6: ml_active_enabled=True + env not in ml_active_allowed_envs → ConfigError
+            G7: ml_active_enabled=True + manifest invalid → ConfigError (checked at load time)
 
         Raises:
             ValueError: If configuration is invalid.
         """
-        # Guard 1: If inference enabled, onnxruntime must be installed
+        # G1: If inference enabled, onnxruntime must be installed
         if self._ml_infer_enabled and not ONNX_AVAILABLE:
             raise ValueError(
                 "ml_infer_enabled=True but onnxruntime not installed; "
                 "install with: pip install .[ml]"
             )
 
-        # Guard 2: Real inference without shadow mode is not yet supported
-        if self._ml_infer_enabled and not self._ml_shadow_mode:
+        # G2: Inference enabled requires either shadow OR active mode
+        if self._ml_infer_enabled and not self._ml_shadow_mode and not self._ml_active_enabled:
             raise ValueError(
-                "ml_infer_enabled=True requires ml_shadow_mode=True; "
-                "real inference affecting trading is not yet supported (planned: M8-02c)"
+                "ml_infer_enabled=True requires ml_shadow_mode=True OR ml_active_enabled=True; "
+                "ambiguous configuration"
             )
 
-        # Guard 3: Shadow mode requires inference enabled and artifact dir
+        # G3: ACTIVE requires inference enabled (two-key activation)
+        if self._ml_active_enabled and not self._ml_infer_enabled:
+            raise ValueError(
+                "ml_active_enabled=True requires ml_infer_enabled=True (two-key activation)"
+            )
+
+        # G4: ACTIVE requires explicit acknowledgment
+        if self._ml_active_enabled:
+            expected_ack = "I_UNDERSTAND_THIS_AFFECTS_TRADING"
+            if self._ml_active_ack != expected_ack:
+                raise ValueError(
+                    f"ACTIVE mode requires explicit acknowledgment. "
+                    f'Set ml_active_ack="{expected_ack}"'
+                )
+
+        # G5: ACTIVE requires artifact directory
+        if self._ml_active_enabled and not self._onnx_artifact_dir:
+            raise ValueError("ml_active_enabled=True requires onnx_artifact_dir to be set")
+
+        # G6: ACTIVE environment allowlist check
+        if self._ml_active_enabled and self._ml_active_allowed_envs:
+            if not self._grinder_env:
+                raise ValueError(
+                    f"ACTIVE mode requires GRINDER_ENV to be set when "
+                    f"ml_active_allowed_envs is non-empty. Allowed: {self._ml_active_allowed_envs}"
+                )
+            if self._grinder_env not in self._ml_active_allowed_envs:
+                raise ValueError(
+                    f"ACTIVE mode not allowed in environment '{self._grinder_env}'. "
+                    f"Allowed: {self._ml_active_allowed_envs}"
+                )
+
+        # Shadow mode requires inference enabled and artifact dir (M8-02b)
         if self._ml_shadow_mode:
             if not self._ml_infer_enabled:
                 raise ValueError("ml_shadow_mode=True requires ml_infer_enabled=True")
             if not self._onnx_artifact_dir:
                 raise ValueError("ml_shadow_mode=True requires onnx_artifact_dir to be set")
 
-    def _load_onnx_model(self) -> None:
-        """Load ONNX model for shadow mode inference (M8-02b).
+    def _is_ml_kill_switch_active(self) -> bool:
+        """Check if ML kill-switch is active (K1/K2).
 
-        Soft-fail: If loading fails, log error and continue without model.
-        This ensures the trading loop runs even if ML is broken.
+        Kill-switch is evaluated per-snapshot (not just at startup).
+        Takes effect immediately without process restart.
+
+        Returns:
+            True if kill-switch is ON (force mode OFF).
+        """
+        # K1: Check env var (re-read every time for per-snapshot behavior)
+        if os.environ.get("ML_KILL_SWITCH") == "1":
+            return True
+        # K2: Check config
+        return self._ml_kill_switch
+
+    def _is_ml_active_allowed(self, ts_ms: int) -> tuple[bool, str]:  # noqa: ARG002, PLR0911
+        """Check if ACTIVE mode is allowed per ADR-065 truth table.
+
+        All 8 conditions must be true for ACTIVE to be allowed:
+        1. ML_KILL_SWITCH env var is NOT "1"
+        2. ml_kill_switch config is NOT True
+        3. ml_infer_enabled = True
+        4. ml_active_enabled = True
+        5. ml_active_ack = "I_UNDERSTAND_THIS_AFFECTS_TRADING"
+        6. ONNX_AVAILABLE = True
+        7. onnx_artifact_dir is set and model loaded
+        8. If ml_active_allowed_envs non-empty → GRINDER_ENV in allowlist
+
+        Args:
+            ts_ms: Timestamp for logging
+
+        Returns:
+            Tuple of (allowed: bool, reason_code: str)
+            reason_code is empty string if allowed, otherwise explains why blocked
+        """
+        # K1/K2: Kill-switch (highest priority, per-snapshot)
+        if self._is_ml_kill_switch_active():
+            return False, "KILL_SWITCH"
+
+        # Condition 3: ml_infer_enabled
+        if not self._ml_infer_enabled:
+            return False, "INFER_DISABLED"
+
+        # Condition 4: ml_active_enabled
+        if not self._ml_active_enabled:
+            return False, "ACTIVE_DISABLED"
+
+        # Condition 5: Explicit ack (already validated at startup, but double-check)
+        expected_ack = "I_UNDERSTAND_THIS_AFFECTS_TRADING"
+        if self._ml_active_ack != expected_ack:
+            return False, "WRONG_ACK"
+
+        # Condition 6: ONNX available
+        if not ONNX_AVAILABLE:
+            return False, "ONNX_MISSING"
+
+        # Condition 7: Model loaded
+        if self._onnx_model is None:
+            return False, "MODEL_NOT_LOADED"
+
+        # Condition 8: Environment allowlist (empty = allow all)
+        if self._ml_active_allowed_envs and (
+            not self._grinder_env or self._grinder_env not in self._ml_active_allowed_envs
+        ):
+            return False, "ENV_NOT_ALLOWED"
+
+        return True, ""
+
+    def _load_onnx_model(self) -> None:
+        """Load ONNX model for shadow/active mode inference (M8-02b/02c).
+
+        Failure modes (ADR-065):
+        - SHADOW: Soft-fail (log warning, continue without model)
+        - ACTIVE: Fail-closed (raise ConfigError)
+
+        Raises:
+            ValueError: If ACTIVE mode enabled and model loading fails (G7).
         """
         if not self._onnx_artifact_dir:
             return
 
         try:
             self._onnx_model = OnnxMlModel.load_from_dir(Path(self._onnx_artifact_dir))
+            logger.info(
+                "ML_MODE_INIT: mode=%s artifact_dir=%s",
+                "ACTIVE" if self._ml_active_enabled else "SHADOW",
+                self._onnx_artifact_dir,
+            )
         except Exception as e:
-            # Soft-fail: log and continue without model
+            if self._ml_active_enabled:
+                # G7: ACTIVE fail-closed - raise ConfigError
+                logger.error(
+                    "ML_ACTIVE_BLOCKED: reason=ARTIFACT_INVALID error=%s",
+                    str(e),
+                )
+                raise ValueError(
+                    f"ACTIVE mode: Failed to load ONNX model from {self._onnx_artifact_dir}: {e}"
+                ) from e
+
+            # SHADOW: Soft-fail - log and continue without model
             logger.warning(
                 "Failed to load ONNX model from %s: %s (shadow mode disabled)",
                 self._onnx_artifact_dir,
@@ -624,6 +765,71 @@ class PaperEngine:
                 str(e),
                 latency_ms,
             )
+
+    def _run_active_inference(self, ts: int, symbol: str, policy_features: dict[str, Any]) -> bool:
+        """Run ONNX inference in ACTIVE mode (M8-02c).
+
+        ACTIVE mode is fail-closed: if inference errors, policy_features
+        are NOT modified. ML features are only injected on success.
+
+        Args:
+            ts: Timestamp in milliseconds
+            symbol: Trading symbol
+            policy_features: Current policy features (modified on success)
+
+        Returns:
+            True if ML features were successfully injected, False otherwise.
+        """
+        if self._onnx_model is None:
+            logger.warning(
+                "ML_ACTIVE_BLOCKED: ts=%d symbol=%s reason=MODEL_NOT_LOADED",
+                ts,
+                symbol,
+            )
+            return False
+
+        start_time = time.perf_counter()
+
+        try:
+            prediction = self._onnx_model.predict(ts, symbol, policy_features)
+            latency_ms = (time.perf_counter() - start_time) * 1000
+
+            if prediction is None:
+                logger.debug(
+                    "ML_ACTIVE_BLOCKED: ts=%d symbol=%s reason=PREDICTION_NONE latency_ms=%.2f",
+                    ts,
+                    symbol,
+                    latency_ms,
+                )
+                return False
+
+            # ACTIVE: Inject ML features into policy_features
+            ml_features = prediction.to_policy_features()
+            policy_features.update(ml_features)
+
+            logger.info(
+                "ML_ACTIVE_ENABLED: ts=%d symbol=%s regime=%s "
+                "probs_bps=%s spacing_x1000=%d latency_ms=%.2f",
+                ts,
+                symbol,
+                prediction.predicted_regime,
+                prediction.regime_probs_bps,
+                prediction.spacing_multiplier_x1000,
+                latency_ms,
+            )
+            return True
+
+        except Exception as e:
+            # Fail-closed: log error and do NOT modify policy_features
+            latency_ms = (time.perf_counter() - start_time) * 1000
+            logger.error(
+                "ML_INFER_ERROR: ts=%d symbol=%s error=%s latency_ms=%.2f",
+                ts,
+                symbol,
+                str(e),
+                latency_ms,
+            )
+            return False
 
     def _get_state(self, symbol: str) -> ExecutionState:
         """Get or create execution state for symbol."""
@@ -898,9 +1104,39 @@ class PaperEngine:
             if ml_signal is not None:
                 policy_features.update(ml_signal.to_policy_features())
 
+        # M8-02c: Per-snapshot kill-switch check (K1/K2)
+        # If kill-switch active, skip all ML inference
+        ml_kill_switch_active = self._is_ml_kill_switch_active()
+        if ml_kill_switch_active:
+            logger.debug(
+                "ML_ACTIVE_DISABLED: ts=%d symbol=%s reason=KILL_SWITCH",
+                ts,
+                symbol,
+            )
+
+        # M8-02c: ACTIVE mode inference (affects policy_features if allowed)
+        ml_active_applied = False
+        if not ml_kill_switch_active and self._ml_active_enabled:
+            active_allowed, reason = self._is_ml_active_allowed(ts)
+            if active_allowed:
+                ml_active_applied = self._run_active_inference(ts, symbol, policy_features)
+            elif reason:
+                logger.debug(
+                    "ML_ACTIVE_BLOCKED: ts=%d symbol=%s reason=%s",
+                    ts,
+                    symbol,
+                    reason,
+                )
+
         # M8-02b: Shadow mode inference (does NOT affect policy_features)
         # Run inference for logging/metrics only; result is discarded
-        if self._ml_shadow_mode and self._onnx_model is not None:
+        # Skip if ACTIVE already applied (to avoid double inference)
+        if (
+            not ml_kill_switch_active
+            and self._ml_shadow_mode
+            and not ml_active_applied
+            and self._onnx_model is not None
+        ):
             self._run_shadow_inference(ts, symbol, policy_features)
 
         # Determine which policy to use
