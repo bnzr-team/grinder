@@ -1,0 +1,9 @@
+{
+  "description": "M8-01b: Multi-signal time-indexed selection test",
+  "symbols": ["BTCUSDT"],
+  "duration_ms": 3000,
+  "ml_enabled": true,
+  "expected_digest": "d902f6e8c8745239",
+  "expected_paper_digest": "b8ebc9294118ff63",
+  "schema_version": "v1"
+}
