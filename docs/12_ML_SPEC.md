@@ -540,19 +540,26 @@ FEATURE_ORDER = (
 3. `ml_shadow_mode=True && !ml_infer_enabled` → ConfigError
 4. `ml_shadow_mode=True && !onnx_artifact_dir` → ConfigError
 
-#### M8-02c: Real Inference (planned)
+#### M8-02c: Active Inference Mode
 
-**Deliverables:**
-- [ ] `OnnxMlModel` implementation
-- [ ] ONNX Runtime integration
-- [ ] Determinism tests with pinned artifacts
-- [ ] Sample model artifact
+**Reference:** ADR-065 (Shadow → Active Inference Transition)
+
+**Sub-PRs:**
+- M8-02c-0: ADR-065 (docs only) — defines state machine, guards, observability
+- M8-02c-1: Config guards + tests (no inference logic)
+- M8-02c-2: Active inference implementation
+
+**Key Safety Requirements (from ADR-065):**
+- Two-key activation: `ml_infer_enabled` + `ml_active_enabled`
+- Explicit ack: `ml_active_ack="I_UNDERSTAND_THIS_AFFECTS_TRADING"`
+- Kill-switch: `ML_KILL_SWITCH=1` env var (per-snapshot, instant OFF)
+- Fail-closed: ACTIVE errors do NOT mutate policy
 
 **Acceptance criteria:**
 - Determinism verified across 2 runs
 - Inference latency < 10ms on sample fixture
-- Fallback works on invalid model
-- Shadow mode logs ML output without affecting decisions
+- 15 guard tests per ADR-065 Test Requirements
+- Kill-switch activates immediately (per-snapshot)
 
 ---
 

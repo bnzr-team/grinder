@@ -1400,7 +1400,7 @@ Comprehensive adaptive grid system design:
   - 🟡 **M8-02 (ONNX):** In progress
     - ✅ **M8-02a:** Artifact plumbing (types, loader, config fields, 19 tests)
     - ✅ **M8-02b:** Shadow mode (OnnxMlModel, vectorize, soft-fail, 19 tests)
-    - 🔜 **M8-02c:** Real inference with ONNX Runtime
+    - 🔄 **M8-02c:** Active inference mode (ADR-065 proposed, guards + tests pending)
 
 ### Multi-venue
 - **Current:** Binance Futures USDT-M only
