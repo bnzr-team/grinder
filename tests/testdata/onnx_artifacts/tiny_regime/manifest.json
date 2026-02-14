@@ -1,0 +1,9 @@
+{
+  "schema_version": "v1",
+  "model_file": "model.onnx",
+  "sha256": {
+    "model.onnx": "5d401d8783314d2c48a90f17ab7c3079d4a266ea0dd3468ee845c28f0dd71c14"
+  },
+  "created_at": "2026-02-14T00:00:00Z",
+  "notes": "Tiny regime classifier for M8-02b tests"
+}

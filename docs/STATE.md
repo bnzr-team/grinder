@@ -1399,7 +1399,7 @@ Comprehensive adaptive grid system design:
     - 26 unit tests (14 contract + 12 selection)
   - 🟡 **M8-02 (ONNX):** In progress
     - ✅ **M8-02a:** Artifact plumbing (types, loader, config fields, 19 tests)
-    - 🔜 **M8-02b:** Shadow mode
+    - ✅ **M8-02b:** Shadow mode (OnnxMlModel, vectorize, soft-fail, 19 tests)
     - 🔜 **M8-02c:** Real inference with ONNX Runtime
 
 ### Multi-venue

@@ -17,9 +17,11 @@ from __future__ import annotations
 import bisect
 import hashlib
 import json
+import logging
+import time
 from dataclasses import dataclass, field
 from decimal import Decimal
-from pathlib import Path  # noqa: TC003 - used at runtime
+from pathlib import Path
 from typing import Any
 
 from grinder.contracts import Snapshot
@@ -38,6 +40,7 @@ from grinder.execution import (
 from grinder.features import FeatureEngine, FeatureEngineConfig, L2FeatureSnapshot
 from grinder.gating import GateReason, GatingResult, RateLimiter, RiskGate, ToxicityGate
 from grinder.ml import MlSignalSnapshot
+from grinder.ml.onnx import ONNX_AVAILABLE, OnnxMlModel
 from grinder.paper.cycle_engine import CycleEngine
 from grinder.paper.fills import Fill, check_pending_fills, simulate_fills
 from grinder.paper.ledger import Ledger
@@ -55,6 +58,8 @@ from grinder.risk import (
     OrderIntent,
 )
 from grinder.selection import SelectionCandidate, SelectionResult, TopKConfigV1, select_topk_v1
+
+logger = logging.getLogger(__name__)
 
 # Output schema version for contract stability
 SCHEMA_VERSION = "v1"
@@ -498,12 +503,14 @@ class PaperEngine:
         # M8-01b: Time-indexed signal storage: symbol -> sorted list of signals
         self._ml_signals: dict[str, list[MlSignalSnapshot]] = {}
 
-        # M8-02a: ONNX artifact plumbing (no inference yet)
+        # M8-02a/b: ONNX artifact plumbing and shadow mode
         self._ml_shadow_mode = ml_shadow_mode
         self._ml_infer_enabled = ml_infer_enabled
         self._onnx_artifact_dir = onnx_artifact_dir
-        # Artifact will be loaded in run() if needed; stored here for future use
-        self._onnx_artifact: Any = None  # OnnxArtifact once loaded
+        self._onnx_model: OnnxMlModel | None = None
+
+        # M8-02b: Config validation guards
+        self._validate_onnx_config()
 
         # Per-symbol execution state
         self._states: dict[str, ExecutionState] = {}
@@ -518,6 +525,105 @@ class PaperEngine:
 
         # Last prices for unrealized PnL calculation
         self._last_prices: dict[str, Decimal] = {}
+
+    def _validate_onnx_config(self) -> None:
+        """Validate ONNX configuration (M8-02b guards).
+
+        Raises:
+            ValueError: If configuration is invalid.
+        """
+        # Guard 1: If inference enabled, onnxruntime must be installed
+        if self._ml_infer_enabled and not ONNX_AVAILABLE:
+            raise ValueError(
+                "ml_infer_enabled=True but onnxruntime not installed; "
+                "install with: pip install .[ml]"
+            )
+
+        # Guard 2: Real inference without shadow mode is not yet supported
+        if self._ml_infer_enabled and not self._ml_shadow_mode:
+            raise ValueError(
+                "ml_infer_enabled=True requires ml_shadow_mode=True; "
+                "real inference affecting trading is not yet supported (planned: M8-02c)"
+            )
+
+        # Guard 3: Shadow mode requires inference enabled and artifact dir
+        if self._ml_shadow_mode:
+            if not self._ml_infer_enabled:
+                raise ValueError("ml_shadow_mode=True requires ml_infer_enabled=True")
+            if not self._onnx_artifact_dir:
+                raise ValueError("ml_shadow_mode=True requires onnx_artifact_dir to be set")
+
+    def _load_onnx_model(self) -> None:
+        """Load ONNX model for shadow mode inference (M8-02b).
+
+        Soft-fail: If loading fails, log error and continue without model.
+        This ensures the trading loop runs even if ML is broken.
+        """
+        if not self._onnx_artifact_dir:
+            return
+
+        try:
+            self._onnx_model = OnnxMlModel.load_from_dir(Path(self._onnx_artifact_dir))
+        except Exception as e:
+            # Soft-fail: log and continue without model
+            logger.warning(
+                "Failed to load ONNX model from %s: %s (shadow mode disabled)",
+                self._onnx_artifact_dir,
+                e,
+            )
+            self._onnx_model = None
+
+    def _run_shadow_inference(self, ts: int, symbol: str, policy_features: dict[str, Any]) -> None:
+        """Run ONNX inference in shadow mode (M8-02b).
+
+        This runs inference and logs the prediction, but does NOT modify
+        policy_features or affect trading decisions. The result is used
+        for shadow logging and metrics only.
+
+        Args:
+            ts: Timestamp in milliseconds
+            symbol: Trading symbol
+            policy_features: Current policy features (not modified)
+        """
+        if self._onnx_model is None:
+            return
+
+        start_time = time.perf_counter()
+
+        try:
+            prediction = self._onnx_model.predict(ts, symbol, policy_features)
+            latency_ms = (time.perf_counter() - start_time) * 1000
+
+            if prediction is not None:
+                # Log shadow prediction event (structured log)
+                logger.info(
+                    "ML_SHADOW_PREDICTION: ts=%d symbol=%s regime=%s "
+                    "probs_bps=%s spacing_x1000=%d latency_ms=%.2f",
+                    ts,
+                    symbol,
+                    prediction.predicted_regime,
+                    prediction.regime_probs_bps,
+                    prediction.spacing_multiplier_x1000,
+                    latency_ms,
+                )
+            else:
+                latency_ms = (time.perf_counter() - start_time) * 1000
+                logger.debug(
+                    "ML_SHADOW_PREDICTION: ts=%d symbol=%s result=None latency_ms=%.2f",
+                    ts,
+                    symbol,
+                    latency_ms,
+                )
+
+        except Exception as e:
+            latency_ms = (time.perf_counter() - start_time) * 1000
+            logger.warning(
+                "ML_SHADOW_PREDICTION: ts=%d symbol=%s error=%s latency_ms=%.2f",
+                ts,
+                symbol,
+                str(e),
+                latency_ms,
+            )
 
     def _get_state(self, symbol: str) -> ExecutionState:
         """Get or create execution state for symbol."""
@@ -792,6 +898,11 @@ class PaperEngine:
             if ml_signal is not None:
                 policy_features.update(ml_signal.to_policy_features())
 
+        # M8-02b: Shadow mode inference (does NOT affect policy_features)
+        # Run inference for logging/metrics only; result is discarded
+        if self._ml_shadow_mode and self._onnx_model is not None:
+            self._run_shadow_inference(ts, symbol, policy_features)
+
         # Determine which policy to use
         if self._adaptive_policy_enabled and self._adaptive_policy is not None:
             # AdaptiveGridPolicy: needs preliminary toxicity check for regime classification
@@ -1056,6 +1167,10 @@ class PaperEngine:
         # M8: Load ML signals if enabled
         if self._ml_enabled:
             self._load_ml_signals(fixture_path)
+
+        # M8-02b: Load ONNX model if shadow mode enabled
+        if self._ml_shadow_mode and self._onnx_artifact_dir:
+            self._load_onnx_model()
 
         if not events:
             result.errors.append("No events found in fixture")
