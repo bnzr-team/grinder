@@ -3449,3 +3449,220 @@ Before implementing code, we need clear contracts for:
 - docs/12_ML_SPEC.md (SSOT for ML contracts)
 - src/grinder/features/types.py (FeatureSnapshot input)
 - src/grinder/features/l2_types.py (L2FeatureSnapshot input)
+
+## ADR-065 — M8-02c: Shadow → Active Inference Transition
+
+- **Date:** 2026-02-14
+- **Status:** proposed
+- **Context:** M8-02b delivered shadow mode — ONNX inference runs but does NOT affect trading decisions or digests. Before enabling "active" mode (where inference results affect policy), we need explicit safety gates to prevent accidental activation and ensure instant rollback.
+
+### State Machine
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     ML Inference Modes                          │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│   ┌─────┐    ml_infer_enabled    ┌────────┐    ml_active_     ┌────────┐
+│   │ OFF │ ──────────────────────▶│ SHADOW │ ──────enabled────▶│ ACTIVE │
+│   └─────┘                        └────────┘                    └────────┘
+│      ▲                               │                             │
+│      │                               │                             │
+│      │       kill-switch OR          │       kill-switch OR        │
+│      │       config change           │       config change         │
+│      └───────────────────────────────┴─────────────────────────────┘
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+| Mode | `ml_infer_enabled` | `ml_shadow_mode` | `ml_active_enabled` | Affects Decisions |
+|------|-------------------|------------------|---------------------|-------------------|
+| OFF | `False` | `False` | `False` | No |
+| SHADOW | `True` | `True` | `False` | No (log only) |
+| ACTIVE | `True` | `False` | `True` | **YES** |
+
+---
+
+### Decision
+
+#### 1. Two-key activation (2-man rule)
+
+ACTIVE mode requires BOTH `ml_infer_enabled=True` AND `ml_active_enabled=True`.
+Missing either key → `ConfigError` (no silent degradation).
+
+#### 2. Kill-switch priority (highest)
+
+Kill-switch is evaluated **per snapshot** (every decision tick), not just at startup.
+Takes effect immediately without process restart.
+
+| Source | Check |
+|--------|-------|
+| Env var | `ML_KILL_SWITCH=1` |
+| Config | `ml_kill_switch=True` |
+
+Kill-switch checked BEFORE any inference logic. If set → force OFF mode (no error, just skip inference).
+
+#### 3. Explicit acknowledgment for ACTIVE
+
+Config must include exact string:
+```
+ml_active_ack = "I_UNDERSTAND_THIS_AFFECTS_TRADING"
+```
+Any other value or missing → `ConfigError` with message:
+```
+ACTIVE mode requires explicit acknowledgment. Set ml_active_ack="I_UNDERSTAND_THIS_AFFECTS_TRADING"
+```
+
+#### 4. Environment allowlist
+
+| Config | Env var | Semantics |
+|--------|---------|-----------|
+| `ml_active_allowed_envs` | `GRINDER_ENV` | List of allowed environments |
+
+**Default behavior:**
+- `ml_active_allowed_envs=[]` (empty) → **allowed everywhere** (two-key + ack still required)
+- `ml_active_allowed_envs=["prod"]` → ACTIVE only if `GRINDER_ENV=prod`
+
+If set and mismatch → `ConfigError`:
+```
+ACTIVE mode not allowed in environment 'dev'. Allowed: ['prod']
+```
+
+#### 5. Failure modes: Shadow vs Active
+
+| Mode | Failure Type | Behavior |
+|------|--------------|----------|
+| SHADOW | ONNX load fails | **Soft-fail**: log warning, continue without ML |
+| SHADOW | Inference error | **Soft-fail**: log warning, return None |
+| SHADOW | Invalid manifest | **Soft-fail**: log warning, skip inference |
+| ACTIVE | ONNX load fails | **Fail-closed**: `ConfigError` at startup |
+| ACTIVE | Inference error | **Fail-closed**: log error, do NOT affect policy |
+| ACTIVE | Invalid manifest | **Fail-closed**: `ConfigError` at startup |
+
+**Principle:** ACTIVE mode is fail-closed. Any error → do NOT mutate policy. Shadow can continue degraded.
+
+---
+
+### Truth Table: ACTIVE Mode Activation
+
+ACTIVE inference affects policy **only if ALL conditions are true**:
+
+| # | Condition | Required |
+|---|-----------|----------|
+| 1 | `ML_KILL_SWITCH` env var is NOT `1` | ✓ |
+| 2 | `ml_kill_switch` config is NOT `True` | ✓ |
+| 3 | `ml_infer_enabled = True` | ✓ |
+| 4 | `ml_active_enabled = True` | ✓ |
+| 5 | `ml_active_ack = "I_UNDERSTAND_THIS_AFFECTS_TRADING"` | ✓ |
+| 6 | `ONNX_AVAILABLE = True` | ✓ |
+| 7 | `onnx_artifact_dir` is set and manifest valid | ✓ |
+| 8 | If `ml_active_allowed_envs` non-empty → `GRINDER_ENV` ∈ allowlist; if empty → allow all | ✓ |
+
+**Any violation → ACTIVE disabled.** Guards G1-G7 raise `ConfigError` at startup; kill-switch forces OFF silently.
+
+---
+
+### Config Guards
+
+| # | Condition | Action |
+|---|-----------|--------|
+| K1 | `ML_KILL_SWITCH=1` env var | Force OFF (silent, per-snapshot) |
+| K2 | `ml_kill_switch=True` config | Force OFF (silent, per-snapshot) |
+| G1 | `ml_infer_enabled=True` + `!ONNX_AVAILABLE` | `ConfigError` |
+| G2 | `ml_infer_enabled=True` + `!ml_shadow_mode` + `!ml_active_enabled` | `ConfigError` (ambiguous) |
+| G3 | `ml_active_enabled=True` + `!ml_infer_enabled` | `ConfigError` |
+| G4 | `ml_active_enabled=True` + `ml_active_ack` missing/wrong | `ConfigError` |
+| G5 | `ml_active_enabled=True` + `onnx_artifact_dir=None` | `ConfigError` |
+| G6 | `ml_active_enabled=True` + env not in `ml_active_allowed_envs` (if set) | `ConfigError` |
+| G7 | `ml_active_enabled=True` + manifest invalid/missing | `ConfigError` |
+
+---
+
+### Observability Requirements
+
+#### Metrics (required for ACTIVE)
+
+| Metric | Type | Labels | Purpose |
+|--------|------|--------|---------|
+| `grinder_ml_mode` | Gauge | `mode=OFF\|SHADOW\|ACTIVE` | Current mode |
+| `grinder_ml_active_on` | Gauge | — | 0/1 flag for alerts |
+| `grinder_ml_inference_total` | Counter | `mode`, `result=ok\|error\|skip` | Inference count |
+| `grinder_ml_inference_latency_ms` | Histogram | `mode` | Latency |
+| `grinder_ml_active_decision_impact_total` | Counter | — | Decisions affected by ML |
+
+#### Logs (required)
+
+| Event | When | Fields |
+|-------|------|--------|
+| `ML_MODE_INIT` | Startup | `mode`, `config_hash` |
+| `ML_ACTIVE_ENABLED` | Enter ACTIVE | `artifact_sha`, `env` |
+| `ML_ACTIVE_DISABLED` | Exit ACTIVE | `reason`, `trigger` |
+| `ML_ACTIVE_BLOCKED` | ACTIVE denied | `reason=wrong_ack\|kill_switch\|artifact_invalid\|env_not_allowed\|onnx_missing\|missing_flag` |
+| `ML_KILL_SWITCH_TRIGGERED` | Kill-switch activates | `source=env\|config` |
+
+---
+
+### Rollback Paths
+
+| Action | Effect | Latency |
+|--------|--------|---------|
+| Set `ML_KILL_SWITCH=1` | Force OFF | **Immediate** (next snapshot) |
+| Set `ml_kill_switch=True` | Force OFF | **Immediate** (next snapshot) |
+| Set `ml_active_enabled=False` | Downgrade to SHADOW | Immediate (hot-reload) or restart |
+| Remove `ml_active_ack` | Downgrade to SHADOW | Restart required |
+
+---
+
+### Consequences
+
+- **ACTIVE mode is never accidental:** requires explicit `ml_active_enabled=True` + `ml_active_ack` + passing all guards
+- **Instant rollback:** kill-switch evaluated per-snapshot, no restart needed
+- **Fail-closed for ACTIVE:** any error → do NOT mutate policy
+- **Audit trail:** all mode changes logged with timestamp + reason
+- **Determinism preserved:** same config → same mode → same behavior
+- **Alerting:** `grinder_ml_active_on=1` gauge enables "unexpected ACTIVE" alerts
+
+### Alternatives Considered
+
+1. **Single flag for ACTIVE** — rejected: too easy to enable accidentally
+2. **ML affects decisions by default** — rejected: violates safe-by-default
+3. **Soft-fail for ACTIVE errors** — rejected: ACTIVE must be fail-closed
+4. **File-based kill-switch only** — rejected: env var is faster for k8s
+5. **Empty allowlist = blocked everywhere** — rejected: two-key + ack sufficient
+
+---
+
+### Test Requirements (M8-02c-1)
+
+| # | Test | Description |
+|---|------|-------------|
+| T1 | `test_active_requires_both_flags` | `ml_active_enabled=True` without `ml_infer_enabled=True` → ConfigError |
+| T2 | `test_active_requires_ack` | `ml_active_enabled=True` without ack → ConfigError |
+| T3 | `test_active_wrong_ack_string` | `ml_active_ack="yes"` → ConfigError |
+| T4 | `test_kill_switch_env_overrides_all` | `ML_KILL_SWITCH=1` → mode OFF regardless of config |
+| T5 | `test_kill_switch_config_overrides_all` | `ml_kill_switch=True` → mode OFF |
+| T6 | `test_kill_switch_per_snapshot` | Kill-switch activates mid-run → next snapshot is OFF |
+| T7 | `test_default_config_is_off` | Empty/default config → mode OFF |
+| T8 | `test_shadow_soft_fail_continues` | ONNX load error in SHADOW → continues without ML |
+| T9 | `test_active_load_fail_raises` | ONNX load error in ACTIVE → ConfigError |
+| T10 | `test_active_inference_error_no_policy_mutation` | Inference error → policy_features unchanged |
+| T11 | `test_shadow_does_not_affect_decisions` | Shadow predictions logged but not used |
+| T12 | `test_active_never_mutates_without_all_keys` | Missing any key → policy_features unchanged |
+| T13 | `test_env_allowlist_blocks_wrong_env` | `ml_active_allowed_envs=["prod"]` + `GRINDER_ENV=dev` → ConfigError |
+| T14 | `test_env_allowlist_empty_allows_all` | `ml_active_allowed_envs=[]` → ACTIVE allowed |
+| T15 | `test_manifest_invalid_blocks_active` | Invalid manifest SHA → ConfigError for ACTIVE |
+
+---
+
+### Implementation PRs
+
+| PR | Scope | Status |
+|----|-------|--------|
+| M8-02c-0 | This ADR + DECISIONS.md update | proposed |
+| M8-02c-1 | Guards + tests (no inference logic) | blocked on M8-02c-0 |
+| M8-02c-2 | Active inference implementation | blocked on M8-02c-1 |
+
+### Related
+
+- ADR-064 (M8-00: ML Integration Specification)
+- docs/12_ML_SPEC.md (SSOT for ML contracts)
