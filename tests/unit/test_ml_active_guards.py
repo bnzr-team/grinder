@@ -21,6 +21,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from grinder.contracts import Snapshot
+from grinder.ml.metrics import MlBlockReason
 from grinder.ml.onnx import ONNX_AVAILABLE
 from grinder.paper.engine import PaperEngine
 
@@ -161,36 +162,46 @@ class TestKillSwitch:
     """Tests 6-7: Kill-switch behavior."""
 
     def test_kill_switch_env_forces_off(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """ML_KILL_SWITCH=1 → _is_ml_kill_switch_active() returns True."""
+        """ML_KILL_SWITCH=1 → _is_ml_kill_switch_active() returns (True, KILL_SWITCH_ENV)."""
         monkeypatch.setenv("ML_KILL_SWITCH", "1")
 
         engine = PaperEngine()
-        assert engine._is_ml_kill_switch_active() is True
+        is_active, reason = engine._is_ml_kill_switch_active()
+        assert is_active is True
+        assert reason == MlBlockReason.KILL_SWITCH_ENV
 
     def test_kill_switch_config_forces_off(self) -> None:
-        """ml_kill_switch=True → _is_ml_kill_switch_active() returns True."""
+        """ml_kill_switch=True → _is_ml_kill_switch_active() returns (True, KILL_SWITCH_CONFIG)."""
         engine = PaperEngine(ml_kill_switch=True)
-        assert engine._is_ml_kill_switch_active() is True
+        is_active, reason = engine._is_ml_kill_switch_active()
+        assert is_active is True
+        assert reason == MlBlockReason.KILL_SWITCH_CONFIG
 
     def test_kill_switch_per_snapshot(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Kill-switch activates mid-run → affects next snapshot."""
         engine = PaperEngine()
 
         # Initially OFF
-        assert engine._is_ml_kill_switch_active() is False
+        is_active, reason = engine._is_ml_kill_switch_active()
+        assert is_active is False
+        assert reason is None
 
         # Activate mid-run
         monkeypatch.setenv("ML_KILL_SWITCH", "1")
 
         # Should now be active (per-snapshot check)
-        assert engine._is_ml_kill_switch_active() is True
+        is_active, reason = engine._is_ml_kill_switch_active()
+        assert is_active is True
+        assert reason == MlBlockReason.KILL_SWITCH_ENV
 
     def test_kill_switch_not_active_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Without kill-switch, _is_ml_kill_switch_active() returns False."""
+        """Without kill-switch, _is_ml_kill_switch_active() returns (False, None)."""
         monkeypatch.delenv("ML_KILL_SWITCH", raising=False)
 
         engine = PaperEngine(ml_kill_switch=False)
-        assert engine._is_ml_kill_switch_active() is False
+        is_active, reason = engine._is_ml_kill_switch_active()
+        assert is_active is False
+        assert reason is None
 
 
 class TestOnnxLoadFailure:
@@ -358,11 +369,11 @@ class TestIsActiveAllowed:
 
         allowed, reason = engine._is_ml_active_allowed(1000)
         assert allowed is True
-        assert reason == ""
+        assert reason is None
 
     @pytest.mark.skipif(not ONNX_AVAILABLE, reason="onnxruntime not installed")
     def test_kill_switch_blocks(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Kill-switch ON → ACTIVE blocked."""
+        """Kill-switch ON → ACTIVE blocked with KILL_SWITCH_ENV reason."""
         monkeypatch.setenv("ML_KILL_SWITCH", "1")
 
         engine = PaperEngine(
@@ -376,10 +387,10 @@ class TestIsActiveAllowed:
 
         allowed, reason = engine._is_ml_active_allowed(1000)
         assert allowed is False
-        assert reason == "KILL_SWITCH"
+        assert reason == MlBlockReason.KILL_SWITCH_ENV
 
     def test_infer_disabled_blocks(self) -> None:
-        """ml_infer_enabled=False → ACTIVE blocked."""
+        """ml_infer_enabled=False → ACTIVE blocked with INFER_DISABLED reason."""
         engine = PaperEngine(
             ml_infer_enabled=False,
             ml_active_enabled=False,
@@ -387,11 +398,11 @@ class TestIsActiveAllowed:
 
         allowed, reason = engine._is_ml_active_allowed(1000)
         assert allowed is False
-        assert reason == "INFER_DISABLED"
+        assert reason == MlBlockReason.INFER_DISABLED
 
     @pytest.mark.skipif(not ONNX_AVAILABLE, reason="onnxruntime not installed")
     def test_active_disabled_blocks(self) -> None:
-        """ml_active_enabled=False → ACTIVE blocked."""
+        """ml_active_enabled=False → ACTIVE blocked with ACTIVE_DISABLED reason."""
         engine = PaperEngine(
             ml_infer_enabled=True,
             ml_shadow_mode=True,  # To pass G2
@@ -401,10 +412,10 @@ class TestIsActiveAllowed:
 
         allowed, reason = engine._is_ml_active_allowed(1000)
         assert allowed is False
-        assert reason == "ACTIVE_DISABLED"
+        assert reason == MlBlockReason.ACTIVE_DISABLED
 
     def test_model_not_loaded_blocks(self) -> None:
-        """Model not loaded → ACTIVE blocked."""
+        """Model not loaded → ACTIVE blocked with MODEL_NOT_LOADED reason."""
         if not ONNX_AVAILABLE:
             pytest.skip("onnxruntime not installed")
 
@@ -420,4 +431,4 @@ class TestIsActiveAllowed:
 
         allowed, reason = engine._is_ml_active_allowed(1000)
         assert allowed is False
-        assert reason == "MODEL_NOT_LOADED"
+        assert reason == MlBlockReason.MODEL_NOT_LOADED
