@@ -270,7 +270,7 @@ groups:
         annotations:
           summary: "ML inference p99 latency exceeds SLO"
           description: "ML inference p99 latency is {{ $value | printf \"%.1f\" }}ms (SLO: 100ms). Check ONNX model performance."
-          runbook_url: "docs/runbooks/17_ML_INFERENCE_SLOS.md#mlinferencelatencyhigh"
+          runbook_url: "docs/runbooks/18_ML_INFERENCE_SLOS.md#mlinferencelatencyhigh"
 
       # Critical: ML inference p99.9 latency exceeds 250ms
       - alert: MlInferenceLatencyCritical
@@ -284,7 +284,7 @@ groups:
         annotations:
           summary: "ML inference p99.9 latency critically high"
           description: "ML inference p99.9 latency is {{ $value | printf \"%.1f\" }}ms (threshold: 250ms). Consider model optimization or kill-switch."
-          runbook_url: "docs/runbooks/17_ML_INFERENCE_SLOS.md#mlinferencelatencycritical"
+          runbook_url: "docs/runbooks/18_ML_INFERENCE_SLOS.md#mlinferencelatencycritical"
 
       # Warning: ML inference error rate exceeds 5%
       - alert: MlInferenceErrorRateHigh
@@ -300,7 +300,7 @@ groups:
         annotations:
           summary: "ML inference error rate exceeds 5%"
           description: "ML inference error rate is {{ $value | printf \"%.1f\" }}%. Check model and input data."
-          runbook_url: "docs/runbooks/17_ML_INFERENCE_SLOS.md#mlinferenceerrorratehigh"
+          runbook_url: "docs/runbooks/18_ML_INFERENCE_SLOS.md#mlinferenceerrorratehigh"
 
       # Info: ML ACTIVE mode is persistently blocked
       - alert: MlActiveModePersistentlyBlocked
@@ -314,7 +314,7 @@ groups:
         annotations:
           summary: "ML ACTIVE mode persistently blocked"
           description: "ML ACTIVE mode has been blocked for 15+ minutes. Check block reasons in metrics."
-          runbook_url: "docs/runbooks/17_ML_INFERENCE_SLOS.md#mlactivemodepersistentlyblocked"
+          runbook_url: "docs/runbooks/18_ML_INFERENCE_SLOS.md#mlactivemodepersistentlyblocked"
 
       # Warning: No ML inferences in 10 minutes (when ML should be active)
       - alert: MlInferenceStalled
@@ -330,4 +330,4 @@ groups:
         annotations:
           summary: "No ML inferences detected"
           description: "No ML inferences (success or error) in 10 minutes while GRINDER is up. Check ML configuration."
-          runbook_url: "docs/runbooks/17_ML_INFERENCE_SLOS.md#mlinferencestalled"
+          runbook_url: "docs/runbooks/18_ML_INFERENCE_SLOS.md#mlinferencestalled"
