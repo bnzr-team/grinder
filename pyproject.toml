@@ -196,6 +196,8 @@ module = [
     "sklearn.*",  # M8-03b: sklearn has no py.typed
     "skl2onnx",  # M8-03b: skl2onnx has no py.typed
     "skl2onnx.*",  # M8-03b: skl2onnx has no py.typed
+    "onnx",  # M8-03b: optional ML dep
+    "onnx.*",  # M8-03b: optional ML dep
 ]
 ignore_missing_imports = true
 
