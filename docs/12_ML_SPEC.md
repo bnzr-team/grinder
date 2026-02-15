@@ -603,6 +603,92 @@ FEATURE_ORDER = (
 - `src/grinder/paper/engine.py` - Log emission points
 - `tests/unit/test_ml_log_events.py` - caplog tests for log events
 
+### M8-03: Training Pipeline
+
+**Scope:** Reproducible training pipeline for ONNX model artifacts.
+
+#### M8-03b-1: Training/Export Pipeline MVP
+
+**Status:** 🔄 In Progress
+
+**Deliverables:**
+- [x] `scripts/train_regime_model.py` CLI for training and ONNX export
+- [x] Deterministic data generation with seed control
+- [x] RandomForest classifier → ONNX conversion via skl2onnx
+- [x] Golden test artifact (`tests/testdata/onnx_artifacts/golden_regime/`)
+- [x] 23 unit tests for training pipeline
+- [x] 5 integration tests for train→artifact→inference roundtrip
+
+**CLI Usage:**
+```bash
+# Basic training with defaults
+python -m scripts.train_regime_model \
+    --out-dir /tmp/regime_v1 \
+    --dataset-id production_data
+
+# Custom parameters
+python -m scripts.train_regime_model \
+    --out-dir /tmp/regime_v2 \
+    --dataset-id production_data \
+    --seed 42 \
+    --n-samples 1000 \
+    --notes "Initial production model"
+```
+
+**Output Artifact:**
+```
+<out-dir>/
+├── model.onnx          # ONNX model file
+├── manifest.json       # Artifact manifest with SHA256
+└── train_report.json   # Training metrics and metadata
+```
+
+**train_report.json Schema:**
+```json
+{
+  "dataset_id": "production_data",
+  "n_samples": 1000,
+  "seed": 42,
+  "n_features": 15,
+  "train_accuracy": 0.95,
+  "regime_distribution": {"LOW": 50, "MID": 400, "HIGH": 550},
+  "created_at": "2026-02-15T00:00:00Z",
+  "model_sha256": "abc123...",
+  "onnx_opset_version": 15,
+  "sklearn_version": "1.8.0",
+  "skl2onnx_version": "1.20.0"
+}
+```
+
+**Determinism Guarantees:**
+- Same `--seed` + `--dataset-id` + `--n-samples` → identical model SHA256
+- Achieved by:
+  1. Deterministic synthetic data generation (numpy rng with combined seed)
+  2. sklearn RandomForest with `random_state=seed`, `n_jobs=1`
+  3. Fixed ONNX graph name (skl2onnx defaults to random UUID)
+
+**Model Contract:**
+- Input: `"input"` tensor shape `(batch, 15)` matching `FEATURE_ORDER`
+- Output: `"regime_probs"` tensor shape `(batch, 3)` for [LOW, MID, HIGH]
+- No spacing_multiplier in MVP (defaults to 1.0 in OnnxMlModel)
+
+**Dependencies:**
+```toml
+# pyproject.toml [project.optional-dependencies]
+ml = [
+    "scikit-learn>=1.4,<2.0",
+    "onnx>=1.15,<2.0",
+    "onnxruntime>=1.17,<2.0",
+    "skl2onnx>=1.16,<2.0",  # M8-03b: sklearn to ONNX conversion
+]
+```
+
+**Source files:**
+- `scripts/train_regime_model.py` - Training CLI
+- `tests/unit/test_train_regime_model.py` - Unit tests
+- `tests/integration/test_train_to_artifact_roundtrip.py` - Integration tests
+- `tests/testdata/onnx_artifacts/golden_regime/` - Golden test artifact
+
 ---
 
 ## 12.7 ML Use Cases
