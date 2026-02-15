@@ -729,6 +729,129 @@ Two types of determinism are validated:
 - `tests/unit/test_onnx_model.py` - Runtime determinism tests
 - `src/grinder/ml/onnx/features.py` - SSOT FEATURE_ORDER and vectorize()
 
+### M8-03c: Model Registry & Promotion
+
+**Scope:** Governance layer for model lifecycle: versioning, promotion, rollback, audit trail.
+
+#### M8-03c-1a: Registry Spec & Runbook
+
+**Status:** ✅ Done (PR #155)
+
+**Goal:** Define SSOT model registry schema and promotion policy.
+
+#### Registry Schema (v1)
+
+Registry file: `ml/registry/models.json`
+
+```json
+{
+  "schema_version": "v1",
+  "models": {
+    "regime_classifier": {
+      "active": {
+        "artifact_id": "regime_v2026_02_15_001",
+        "artifact_dir": "artifacts/onnx/regime_v2026_02_15_001",
+        "model_sha256": "...",
+        "git_sha": "abc123",
+        "dataset_id": "production_data_v3",
+        "created_at_utc": "2026-02-15T10:00:00Z",
+        "promoted_at_utc": "2026-02-15T12:00:00Z",
+        "notes": "Promoted after 24h shadow pass"
+      },
+      "shadow": {
+        "artifact_id": "regime_v2026_02_16_001",
+        "artifact_dir": "artifacts/onnx/regime_v2026_02_16_001",
+        "model_sha256": "...",
+        "git_sha": "def456",
+        "dataset_id": "production_data_v4",
+        "created_at_utc": "2026-02-16T08:00:00Z",
+        "notes": "Shadow testing new dataset"
+      },
+      "staging": null,
+      "history": [
+        {
+          "timestamp_utc": "2026-02-15T12:00:00Z",
+          "action": "promote",
+          "from_stage": "shadow",
+          "to_stage": "active",
+          "artifact_id": "regime_v2026_02_15_001",
+          "by": "operator@example.com",
+          "reason": "SLO compliance: p99<50ms, error rate<1%"
+        }
+      ]
+    }
+  }
+}
+```
+
+#### Environments (Stages)
+
+| Stage | Purpose | Policy Impact | Rollback |
+|-------|---------|---------------|----------|
+| **staging** | Pre-flight validation | None | Delete entry |
+| **shadow** | Shadow mode inference | Metrics only | Swap artifact_id |
+| **active** | Live trading decisions | Affects orders | Swap artifact_id (PR) |
+
+#### Promotion Flow
+
+```
+staging → shadow → active
+                ↑
+                └── rollback (swap artifact_id to previous)
+```
+
+#### Promotion Requirements
+
+**staging → shadow:**
+- [ ] `verify_onnx_artifact` PASS
+- [ ] Unit tests pass on artifact
+- [ ] Golden test determinism PASS
+
+**shadow → active:**
+- [ ] 24h shadow window (configurable)
+- [ ] Latency SLO: p99 < 100ms, p99.9 < 250ms
+- [ ] Error rate < 5%
+- [ ] No MlActiveModePersistentlyBlocked alerts (unless intentional)
+- [ ] Dashboard review: baseline stable
+- [ ] Explicit ACK: `--ack I_UNDERSTAND_THIS_AFFECTS_TRADING`
+
+**active → rollback:**
+- [ ] PR changing `active.artifact_id` to previous
+- [ ] No ACK required (emergency)
+- [ ] Post-rollback: investigate root cause
+
+#### Artifact ID Convention
+
+Format: `{model_name}_v{YYYY}_{MM}_{DD}_{seq}`
+
+Examples:
+- `regime_v2026_02_15_001` — first regime model on Feb 15
+- `regime_v2026_02_15_002` — second regime model same day
+- `spacing_v2026_02_16_001` — spacing model
+
+#### Config Integration
+
+```yaml
+# grinder config
+ml_registry_path: "ml/registry/models.json"  # SSOT
+ml_model_name: "regime_classifier"           # Model to load
+ml_stage: "shadow"                           # staging|shadow|active
+
+# Legacy fallback (if ml_registry_path not set)
+onnx_artifact_dir: "artifacts/onnx/regime_v2026_02_15_001"
+```
+
+**Resolution order:**
+1. If `ml_registry_path` set → load artifact_dir from registry by `ml_model_name` + `ml_stage`
+2. Else → use `onnx_artifact_dir` directly (backward compatible)
+
+#### Source files (planned)
+- `ml/registry/models.json` - SSOT registry
+- `src/grinder/ml/onnx/registry.py` - Registry loader
+- `scripts/verify_ml_registry.py` - Validation CLI
+- `scripts/promote_model.py` - Promotion CLI (optional)
+- `docs/runbooks/19_ML_MODEL_PROMOTION.md` - Operational runbook
+
 ---
 
 ## 12.7 ML Use Cases
