@@ -609,7 +609,7 @@ FEATURE_ORDER = (
 
 #### M8-03b-1: Training/Export Pipeline MVP
 
-**Status:** 🔄 In Progress
+**Status:** ✅ Done (PR #152)
 
 **Deliverables:**
 - [x] `scripts/train_regime_model.py` CLI for training and ONNX export
@@ -688,6 +688,46 @@ ml = [
 - `tests/unit/test_train_regime_model.py` - Unit tests
 - `tests/integration/test_train_to_artifact_roundtrip.py` - Integration tests
 - `tests/testdata/onnx_artifacts/golden_regime/` - Golden test artifact
+
+#### M8-03b-2: Runtime Integration & Determinism
+
+**Status:** ✅ Done (PR #153)
+
+**Scope:** Validate that artifacts from M8-03b-1 integrate correctly with `OnnxMlModel`
+runtime and produce bit-for-bit identical predictions for fixed inputs.
+
+**Deliverables:**
+- [x] Golden artifact runtime tests (load twice → predict → compare)
+- [x] `test_vectorize_order_matches_feature_order_exactly` - SSOT contract verification
+- [x] Full FEATURE_ORDER fixture (all 15 features populated)
+- [x] Multiple prediction stability test
+
+**Determinism Guarantees:**
+
+Two types of determinism are validated:
+
+1. **Training determinism** (M8-03b-1):
+   - Same `--seed` + `--dataset-id` + `--n-samples` → identical model SHA256
+   - Verified by comparing model hashes from two independent training runs
+
+2. **Runtime determinism** (M8-03b-2):
+   - Same model file + same input features → identical output
+   - Verified by loading model twice, predicting, and comparing `regime_probs_bps`
+   - No float comparison (all outputs are quantized to bps/x1000 integers)
+
+**Test Matrix:**
+
+| Test | What it validates |
+|------|-------------------|
+| `test_golden_load_twice_predict_identical` | Runtime determinism across model instances |
+| `test_golden_multiple_predictions_stable` | Prediction stability within single instance |
+| `test_golden_predict_with_full_feature_vector` | All 15 FEATURE_ORDER features work |
+| `test_vectorize_order_matches_feature_order_exactly` | SSOT vectorize contract |
+| `test_vectorize_preserves_feature_order_tuple` | FEATURE_ORDER is immutable (15 elements) |
+
+**Source files:**
+- `tests/unit/test_onnx_model.py` - Runtime determinism tests
+- `src/grinder/ml/onnx/features.py` - SSOT FEATURE_ORDER and vectorize()
 
 ---
 
