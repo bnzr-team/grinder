@@ -9,7 +9,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 MODEL_NAME_PATTERN = re.compile(r"^[a-z0-9_]+$")
 
 
-class Stage(str, Enum):
+class Stage(StrEnum):
     """Model deployment stage."""
 
     SHADOW = "shadow"
