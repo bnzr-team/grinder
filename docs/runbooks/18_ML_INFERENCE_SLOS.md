@@ -287,7 +287,7 @@ unset ML_KILL_SWITCH
 ml_kill_switch: false
 ml_infer_enabled: true
 ml_active_enabled: true
-ml_active_ack: "I_UNDERSTAND_ML_AFFECTS_TRADING"
+ml_active_ack: "I_UNDERSTAND_THIS_AFFECTS_TRADING"
 ```
 
 ### Disable ML Inference (Emergency)
