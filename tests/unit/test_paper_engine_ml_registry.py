@@ -119,6 +119,9 @@ def test_registry_resolution_active_mode(tmp_path: Path) -> None:
                         "active": {
                             "artifact_dir": "artifacts/active",
                             "artifact_id": "active_v1",
+                            "git_sha": "93e64007df6e7823b09cdea24237bc8138be28aa",
+                            "dataset_id": "market_data_2025_q4_btcusdt",
+                            "promoted_at_utc": "2026-02-15T14:30:00Z",
                         },
                     }
                 },

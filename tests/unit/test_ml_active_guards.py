@@ -267,6 +267,9 @@ class TestOnnxLoadFailure:
                             "active": {
                                 "artifact_dir": "invalid_artifact",
                                 "artifact_id": "invalid_v1",
+                                "git_sha": "1234567890abcdef1234567890abcdef12345678",
+                                "dataset_id": "test_dataset_v1",
+                                "promoted_at_utc": "2026-01-01T00:00:00Z",
                             },
                         }
                     },
