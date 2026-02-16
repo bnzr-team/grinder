@@ -1404,6 +1404,17 @@ Comprehensive adaptive grid system design:
       - ✅ M8-02c-1: Config guards + 15 ADR-065 tests (PR #147)
       - ✅ M8-02c-2: Observability: gauge, reason codes, metrics (PR #148)
       - ✅ M8-02c-3: Structured logs + SSOT docs (PR #149)
+    - ✅ **M8-02d:** Latency histogram + SLO alerts (PR #151)
+    - ✅ **M8-02e:** Grafana dashboards (PR #154)
+  - ✅ **M8-03 (Training & Registry):** Complete
+    - ✅ **M8-03a:** Artifact pack v1.1 + build CLI (PR #150)
+    - ✅ **M8-03b-1:** Training pipeline MVP (PR #152)
+    - ✅ **M8-03b-2:** Runtime integration + determinism tests (PR #153)
+    - ✅ **M8-03c-1a:** Registry spec + runbook (PR #155)
+    - ✅ **M8-03c-1b:** Registry implementation (PR #157)
+    - ✅ **M8-03c-2:** PaperEngine config wiring (PR #158)
+    - ✅ **M8-03c-3:** Promotion CLI + history[] audit trail (PR #159)
+  - Remaining: Feature store for training data (not yet scoped)
 
 ### Multi-venue
 - **Current:** Binance Futures USDT-M only

@@ -634,7 +634,7 @@ FEATURE_ORDER = (
 
 #### M8-03a: Artifact Pack Spec + Build CLI
 
-**Status:** 🚧 In Progress
+**Status:** ✅ Done (PR #150)
 
 **Scope:** Extend manifest to v1.1, add build CLI for artifact generation
 
@@ -913,7 +913,7 @@ onnx_artifact_dir: "artifacts/onnx/regime_v2026_02_15_001"
 
 #### M8-03c-1b: Registry Implementation
 
-**Status:** 🚧 In Review (PR #157)
+**Status:** ✅ Done (PR #157)
 
 **Goal:** Implement Git-based model registry with strict validation and CLI tools.
 
@@ -1010,7 +1010,7 @@ Integration tests ([tests/integration/test_registry_to_predict_roundtrip.py](../
 
 #### M8-03c-2: PaperEngine Config Wiring
 
-**Status:** 🚧 In Progress (PR #TBD)
+**Status:** ✅ Done (PR #158)
 
 **Goal:** Wire ML registry into PaperEngine runtime for artifact resolution.
 
@@ -1122,8 +1122,7 @@ Unit tests ([tests/unit/test_paper_engine_ml_registry.py](../../tests/unit/test_
 - [scripts/verify_determinism_suite.py](../../scripts/verify_determinism_suite.py:84) - Config wiring (79 lines)
 - [tests/unit/test_paper_engine_ml_registry.py](../../tests/unit/test_paper_engine_ml_registry.py:1) - 9 unit tests
 
-**Next Steps:**
-- M8-03c-3: Promotion CLI script (`promote_model.py`)
+**Next Steps:** M8-03c complete. See M8-03c-3 below.
 
 ---
 
