@@ -20,6 +20,7 @@ from .model import OnnxMlModel, OnnxModelError
 from .runtime import ONNX_AVAILABLE, OnnxRuntimeError, OnnxSession
 from .types import (
     ARTIFACT_SCHEMA_VERSION,
+    ARTIFACT_SCHEMA_VERSIONS,
     OnnxArtifact,
     OnnxArtifactError,
     OnnxArtifactManifest,
@@ -30,6 +31,7 @@ from .types import (
 
 __all__ = [
     "ARTIFACT_SCHEMA_VERSION",
+    "ARTIFACT_SCHEMA_VERSIONS",
     "FEATURE_ORDER",
     "ONNX_AVAILABLE",
     "OnnxArtifact",
