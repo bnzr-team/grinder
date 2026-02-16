@@ -154,16 +154,21 @@ class TestReasonCodePriority:
     """Tests for truth table reason code priority."""
 
     @pytest.mark.skipif(not ONNX_AVAILABLE, reason="onnxruntime not installed")
-    def test_kill_switch_has_highest_priority(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_kill_switch_has_highest_priority(
+        self, monkeypatch: pytest.MonkeyPatch, ml_registry_for_active: tuple[str, str, str]
+    ) -> None:
         """Kill-switch reason takes priority over other reasons."""
         monkeypatch.setenv("ML_KILL_SWITCH", "1")
+        registry_path, model_name, stage = ml_registry_for_active
 
         engine = PaperEngine(
             ml_infer_enabled=True,
             ml_active_enabled=True,
             ml_active_ack="I_UNDERSTAND_THIS_AFFECTS_TRADING",
             ml_active_allowed_envs=[],
-            onnx_artifact_dir=str(TEST_ARTIFACT_DIR),
+            ml_registry_path=registry_path,
+            ml_model_name=model_name,
+            ml_stage=stage,
         )
 
         allowed, reason = engine._is_ml_active_allowed(1000)
@@ -184,14 +189,20 @@ class TestReasonCodePriority:
         assert reason == MlBlockReason.INFER_DISABLED
 
     @pytest.mark.skipif(not ONNX_AVAILABLE, reason="onnxruntime not installed")
-    def test_model_not_loaded_checked_after_config(self) -> None:
+    def test_model_not_loaded_checked_after_config(
+        self, ml_registry_for_active: tuple[str, str, str]
+    ) -> None:
         """MODEL_NOT_LOADED only checked if config conditions pass."""
+        registry_path, model_name, stage = ml_registry_for_active
+
         engine = PaperEngine(
             ml_infer_enabled=True,
             ml_active_enabled=True,
             ml_active_ack="I_UNDERSTAND_THIS_AFFECTS_TRADING",
             ml_active_allowed_envs=[],
-            onnx_artifact_dir=str(TEST_ARTIFACT_DIR),
+            ml_registry_path=registry_path,
+            ml_model_name=model_name,
+            ml_stage=stage,
         )
         # Explicitly set model to None to test MODEL_NOT_LOADED
         engine._onnx_model = None

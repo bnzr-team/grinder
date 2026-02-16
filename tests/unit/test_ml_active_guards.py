@@ -13,6 +13,7 @@ Tests 15 scenarios from ADR-065:
 
 from __future__ import annotations
 
+import json
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
@@ -114,9 +115,12 @@ class TestEnvAllowlist:
     """Tests 4-5: Environment allowlist."""
 
     @pytest.mark.skipif(not ONNX_AVAILABLE, reason="onnxruntime not installed")
-    def test_env_allowlist_empty_allows_all(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_env_allowlist_empty_allows_all(
+        self, monkeypatch: pytest.MonkeyPatch, ml_registry_for_active: tuple[str, str, str]
+    ) -> None:
         """Empty allowlist → ACTIVE allowed (with other conditions met)."""
         monkeypatch.setenv("GRINDER_ENV", "dev")
+        registry_path, model_name, stage = ml_registry_for_active
 
         # Should NOT raise with empty allowlist
         engine = PaperEngine(
@@ -125,14 +129,19 @@ class TestEnvAllowlist:
             ml_shadow_mode=True,  # Both modes for flexibility
             ml_active_ack="I_UNDERSTAND_THIS_AFFECTS_TRADING",
             ml_active_allowed_envs=[],  # Empty = allow all
-            onnx_artifact_dir=str(TEST_ARTIFACT_DIR),
+            ml_registry_path=registry_path,
+            ml_model_name=model_name,
+            ml_stage=stage,
         )
         assert engine._ml_active_enabled is True
 
     @pytest.mark.skipif(not ONNX_AVAILABLE, reason="onnxruntime not installed")
-    def test_env_allowlist_blocks_wrong_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_env_allowlist_blocks_wrong_env(
+        self, monkeypatch: pytest.MonkeyPatch, ml_registry_for_active: tuple[str, str, str]
+    ) -> None:
         """ml_active_allowed_envs=['prod'] + GRINDER_ENV=dev → ConfigError."""
         monkeypatch.setenv("GRINDER_ENV", "dev")
+        registry_path, model_name, stage = ml_registry_for_active
 
         with pytest.raises(ValueError, match="not allowed in environment 'dev'"):
             PaperEngine(
@@ -140,13 +149,18 @@ class TestEnvAllowlist:
                 ml_infer_enabled=True,
                 ml_active_ack="I_UNDERSTAND_THIS_AFFECTS_TRADING",
                 ml_active_allowed_envs=["prod"],
-                onnx_artifact_dir=str(TEST_ARTIFACT_DIR),
+                ml_registry_path=registry_path,
+                ml_model_name=model_name,
+                ml_stage=stage,
             )
 
     @pytest.mark.skipif(not ONNX_AVAILABLE, reason="onnxruntime not installed")
-    def test_env_allowlist_missing_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_env_allowlist_missing_env(
+        self, monkeypatch: pytest.MonkeyPatch, ml_registry_for_active: tuple[str, str, str]
+    ) -> None:
         """Non-empty allowlist + GRINDER_ENV missing → ConfigError."""
         monkeypatch.delenv("GRINDER_ENV", raising=False)
+        registry_path, model_name, stage = ml_registry_for_active
 
         with pytest.raises(ValueError, match="GRINDER_ENV to be set"):
             PaperEngine(
@@ -154,7 +168,9 @@ class TestEnvAllowlist:
                 ml_infer_enabled=True,
                 ml_active_ack="I_UNDERSTAND_THIS_AFFECTS_TRADING",
                 ml_active_allowed_envs=["prod"],
-                onnx_artifact_dir=str(TEST_ARTIFACT_DIR),
+                ml_registry_path=registry_path,
+                ml_model_name=model_name,
+                ml_stage=stage,
             )
 
 
@@ -239,13 +255,34 @@ class TestOnnxLoadFailure:
         artifact_dir.mkdir()
         (artifact_dir / "manifest.json").write_text('{"model_sha256":"abc"}')
 
+        # Create registry pointing to invalid artifact
+        registry_file = tmp_path / "models.json"
+        registry_file.write_text(
+            json.dumps(
+                {
+                    "schema_version": "v1",
+                    "models": {
+                        "test_model": {
+                            "shadow": None,
+                            "active": {
+                                "artifact_dir": "invalid_artifact",
+                                "artifact_id": "invalid_v1",
+                            },
+                        }
+                    },
+                }
+            )
+        )
+
         engine = PaperEngine(
             ml_active_enabled=True,
             ml_infer_enabled=True,
             ml_shadow_mode=True,
             ml_active_ack="I_UNDERSTAND_THIS_AFFECTS_TRADING",
             ml_active_allowed_envs=[],
-            onnx_artifact_dir=str(artifact_dir),
+            ml_registry_path=str(registry_file),
+            ml_model_name="test_model",
+            ml_stage="active",
         )
 
         # Load should raise for ACTIVE mode
@@ -347,13 +384,16 @@ class TestActivePath:
 class TestIsActiveAllowed:
     """Test _is_ml_active_allowed() truth table."""
 
-    def test_all_conditions_met(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_all_conditions_met(
+        self, monkeypatch: pytest.MonkeyPatch, ml_registry_for_active: tuple[str, str, str]
+    ) -> None:
         """All conditions true → ACTIVE allowed."""
         if not ONNX_AVAILABLE:
             pytest.skip("onnxruntime not installed")
 
         monkeypatch.delenv("ML_KILL_SWITCH", raising=False)
         monkeypatch.setenv("GRINDER_ENV", "prod")
+        registry_path, model_name, stage = ml_registry_for_active
 
         engine = PaperEngine(
             ml_infer_enabled=True,
@@ -361,7 +401,9 @@ class TestIsActiveAllowed:
             ml_active_ack="I_UNDERSTAND_THIS_AFFECTS_TRADING",
             ml_active_allowed_envs=["prod"],
             ml_kill_switch=False,
-            onnx_artifact_dir=str(TEST_ARTIFACT_DIR),
+            ml_registry_path=registry_path,
+            ml_model_name=model_name,
+            ml_stage=stage,
         )
 
         # Mock model loaded
@@ -372,16 +414,21 @@ class TestIsActiveAllowed:
         assert reason is None
 
     @pytest.mark.skipif(not ONNX_AVAILABLE, reason="onnxruntime not installed")
-    def test_kill_switch_blocks(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_kill_switch_blocks(
+        self, monkeypatch: pytest.MonkeyPatch, ml_registry_for_active: tuple[str, str, str]
+    ) -> None:
         """Kill-switch ON → ACTIVE blocked with KILL_SWITCH_ENV reason."""
         monkeypatch.setenv("ML_KILL_SWITCH", "1")
+        registry_path, model_name, stage = ml_registry_for_active
 
         engine = PaperEngine(
             ml_infer_enabled=True,
             ml_active_enabled=True,
             ml_active_ack="I_UNDERSTAND_THIS_AFFECTS_TRADING",
             ml_active_allowed_envs=[],
-            onnx_artifact_dir=str(TEST_ARTIFACT_DIR),
+            ml_registry_path=registry_path,
+            ml_model_name=model_name,
+            ml_stage=stage,
         )
         engine._onnx_model = MagicMock()
 
@@ -414,17 +461,21 @@ class TestIsActiveAllowed:
         assert allowed is False
         assert reason == MlBlockReason.ACTIVE_DISABLED
 
-    def test_model_not_loaded_blocks(self) -> None:
+    def test_model_not_loaded_blocks(self, ml_registry_for_active: tuple[str, str, str]) -> None:
         """Model not loaded → ACTIVE blocked with MODEL_NOT_LOADED reason."""
         if not ONNX_AVAILABLE:
             pytest.skip("onnxruntime not installed")
+
+        registry_path, model_name, stage = ml_registry_for_active
 
         engine = PaperEngine(
             ml_infer_enabled=True,
             ml_active_enabled=True,
             ml_active_ack="I_UNDERSTAND_THIS_AFFECTS_TRADING",
             ml_active_allowed_envs=[],
-            onnx_artifact_dir=str(TEST_ARTIFACT_DIR),
+            ml_registry_path=registry_path,
+            ml_model_name=model_name,
+            ml_stage=stage,
         )
         # Don't load model
         engine._onnx_model = None
