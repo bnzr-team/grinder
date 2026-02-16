@@ -45,7 +45,7 @@ class TestTrainToInferenceRoundtrip:
 
             # Step 2: Validate artifact
             artifact = load_artifact(artifact_dir)
-            assert artifact.manifest.schema_version == "v1"
+            assert artifact.manifest.schema_version == "v1.1"
             assert artifact.model_path.exists()
 
             # Step 3: Load model for inference

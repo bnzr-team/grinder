@@ -911,6 +911,105 @@ onnx_artifact_dir: "artifacts/onnx/regime_v2026_02_15_001"
 - `scripts/promote_model.py` - Promotion CLI (optional)
 - `docs/runbooks/19_ML_MODEL_PROMOTION.md` - Operational runbook
 
+#### M8-03c-1b: Registry Implementation
+
+**Status:** 🚧 In Review (PR #157)
+
+**Goal:** Implement Git-based model registry with strict validation and CLI tools.
+
+**Deliverables:**
+- [x] `ml/registry/models.json` - SSOT registry file pointing to model artifacts
+- [x] `src/grinder/ml/onnx/registry.py` - Registry loader with strict validation
+- [x] `scripts/verify_ml_registry.py` - CLI tool to validate registry and artifacts
+- [x] 18 unit tests for registry validation
+- [x] 3 integration tests for registry → artifact → predict flow
+- [x] `ml/registry/README.md` - Registry usage documentation
+
+**Registry Loader API:**
+
+```python
+from grinder.ml.onnx.registry import ModelRegistry, Stage
+
+# Load registry from Git SSOT
+registry = ModelRegistry.load("ml/registry/models.json")
+
+# Get artifact directory for specific stage
+pointer = registry.get_stage_pointer("regime_classifier", Stage.SHADOW)
+if pointer:
+    artifact_dir = registry.resolve_artifact_dir(pointer, base_dir=Path("."))
+    # Load artifact using existing load_artifact()
+    artifact = load_artifact(artifact_dir)
+```
+
+**Validation Rules:**
+
+| Rule | Enforcement |
+|------|-------------|
+| No path traversal (`..`) | Hard error |
+| No absolute paths | Hard error |
+| `git_sha` must be 40-char hex (if not null) | Hard error |
+| `artifact_dir` must exist | Error (deferred to runtime) |
+| Model name must match `[a-z0-9_]+` | Hard error |
+| Stage must be `shadow`, `active`, or `staging` | Hard error |
+| Pointer can be `null` (stage not configured) | Allowed |
+
+**CLI Usage:**
+
+```bash
+# Validate registry schema and all referenced artifacts
+python -m scripts.verify_ml_registry \
+    --path ml/registry/models.json \
+    --base-dir .
+
+# Expected output:
+# Loading registry: ml/registry/models.json
+# Registry schema: v1
+# Models: 1
+#
+# === Model: regime_classifier ===
+#   SHADOW:
+#     artifact_id: golden_regime_v1
+#     artifact_dir: tests/testdata/onnx_artifacts/golden_regime
+#     resolved_path: /home/user/grinder/tests/testdata/onnx_artifacts/golden_regime
+#     ✓ Artifact valid: 2 files verified
+#
+# ✓ All checks passed
+```
+
+**Security Design:**
+
+- **Fail-closed**: Invalid registry → error, no fallback
+- **Path safety**: All paths validated before resolution
+- **Git-based SSOT**: Registry committed to Git, reviewed in PR
+- **No symbolic link traversal**: `Path.resolve()` used for containment check
+
+**Test Coverage:**
+
+Unit tests ([tests/unit/test_ml_registry.py](../../tests/unit/test_ml_registry.py:1)):
+- Schema validation (v1 only)
+- Path traversal blocking (`../../etc/passwd`)
+- Absolute path blocking (`/tmp/model`)
+- git_sha validation (40-char hex, null allowed)
+- Model name pattern validation
+- Stage enum validation
+
+Integration tests ([tests/integration/test_registry_to_predict_roundtrip.py](../../tests/integration/test_registry_to_predict_roundtrip.py:1)):
+- Load registry → resolve artifact → load artifact → predict
+- Verify predictions match expected structure (regime_probs_bps dict)
+- Validate MlSignalSnapshot contract (sum = 10000 bps)
+
+**Source files:**
+- [ml/registry/models.json](../../ml/registry/models.json:1) - SSOT registry
+- [src/grinder/ml/onnx/registry.py](../../src/grinder/ml/onnx/registry.py:1) - Registry loader (268 lines)
+- [scripts/verify_ml_registry.py](../../scripts/verify_ml_registry.py:1) - Validation CLI (167 lines)
+- [tests/unit/test_ml_registry.py](../../tests/unit/test_ml_registry.py:1) - 18 unit tests
+- [tests/integration/test_registry_to_predict_roundtrip.py](../../tests/integration/test_registry_to_predict_roundtrip.py:1) - 3 integration tests
+- [ml/registry/README.md](../../ml/registry/README.md:1) - Usage guide
+
+**Next Steps:**
+- M8-03c-2: PaperEngine config wiring (`ml_registry_path`, `ml_model_name`, `ml_stage`)
+- M8-03c-3: Promotion CLI script (`promote_model.py`)
+
 ---
 
 ## 12.7 ML Use Cases

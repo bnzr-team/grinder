@@ -152,7 +152,7 @@ class TestTrainAndExport:
             train_and_export(out_dir, "test", n_samples=50)
 
             manifest = load_artifact(out_dir).manifest
-            assert manifest.schema_version == "v1"
+            assert manifest.schema_version == "v1.1"
             assert manifest.model_file == "model.onnx"
             assert "model.onnx" in manifest.sha256
 

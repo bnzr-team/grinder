@@ -1,0 +1,23 @@
+{
+  "schema_version": "v1",
+  "models": {
+    "regime_classifier": {
+      "shadow": {
+        "artifact_dir": "tests/testdata/onnx_artifacts/golden_regime",
+        "artifact_id": "golden_regime_v1",
+        "git_sha": null,
+        "dataset_id": "golden_synthetic_v1"
+      },
+      "active": null,
+      "history": [
+        {
+          "ts_utc": "2026-02-16T00:00:00Z",
+          "stage": "shadow",
+          "artifact_id": "golden_regime_v1",
+          "artifact_dir": "tests/testdata/onnx_artifacts/golden_regime",
+          "note": "Initial shadow baseline using golden test artifact"
+        }
+      ]
+    }
+  }
+}
