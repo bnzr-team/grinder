@@ -1,375 +1,407 @@
-# Runbook 19: ML Model Promotion
+# Runbook: ML Model Promotion
 
-Operational guide for ML model lifecycle: staging, promotion, rollback (M8-03c).
+> **Purpose:** Safe promotion of ML models from shadow → staging → active with full audit trail
+>
+> **Audience:** ML Engineers, DevOps, Production Support
+>
+> **Status:** M8-03c-3 Implementation
+>
+> **Last Updated:** 2026-02-16
+
+---
+
+## Table of Contents
+
+1. [Overview](#overview)
+2. [Prerequisites](#prerequisites)
+3. [Stage Lifecycle](#stage-lifecycle)
+4. [Promotion Workflow](#promotion-workflow)
+5. [Safety Checks](#safety-checks)
+6. [Rollback Procedures](#rollback-procedures)
+7. [Troubleshooting](#troubleshooting)
+8. [Emergency Contacts](#emergency-contacts)
+
+---
 
 ## Overview
 
-This runbook covers:
-- Model registry structure and conventions
-- Promotion flow: staging → shadow → active
-- Pre-promotion checklist
-- Rollback procedures
-- Emergency procedures
+The ML model promotion system provides a controlled, audited pathway for moving trained models from validation (SHADOW) to production (ACTIVE) deployment.
+
+### Key Principles
+
+- **Fail-closed**: ACTIVE mode requires full metadata (git_sha, dataset_id, timestamp)
+- **Audit trail**: Every promotion creates an immutable history[] entry
+- **Path safety**: No directory traversal or absolute paths allowed
+- **Artifact integrity**: All models verified before promotion
+
+### Promotion Tool
+
+\`\`\`bash
+scripts/promote_ml_model.py
+\`\`\`
+
+- Located in repository root
+- Requires Python 3.10+
+- Uses grinder.ml.onnx.registry module
 
 ---
 
-## Registry Structure
+## Prerequisites
 
-**SSOT:** `ml/registry/models.json`
+### Environment Setup
 
-```
-ml/registry/
-└── models.json    # Model registry (staging/shadow/active pointers)
+1. **Git working tree must be clean**
+   \`\`\`bash
+   git status
+   # Ensure no uncommitted changes
+   \`\`\`
 
-artifacts/onnx/
-├── regime_v2026_02_15_001/
-│   ├── model.onnx
-│   ├── manifest.json
-│   └── train_report.json
-└── regime_v2026_02_16_001/
-    └── ...
-```
+2. **Set promotion actor (optional)**
+   \`\`\`bash
+   export ML_PROMOTION_ACTOR="alice@grinder.dev"
+   # Falls back to git config user.email if not set
+   \`\`\`
 
-### Stages
+3. **Verify artifact integrity**
+   \`\`\`bash
+   python -m scripts.verify_ml_registry \\
+       --path ml/registry/models.json \\
+       --base-dir .
+   \`\`\`
 
-| Stage | Purpose | Trading Impact | Who Can Promote |
-|-------|---------|----------------|-----------------|
-| staging | Pre-flight validation | None | Any developer |
-| shadow | Shadow inference (metrics only) | None | Any developer |
-| active | Live trading decisions | **Affects orders** | Operator with ACK |
+### Required Metadata for ACTIVE Promotion
 
----
-
-## Promotion Flow
-
-```
-                    ┌─────────┐
-                    │ staging │
-                    └────┬────┘
-                         │ verify_onnx_artifact PASS
-                         │ unit tests PASS
-                         ▼
-                    ┌─────────┐
-                    │ shadow  │◄────────────────────┐
-                    └────┬────┘                     │
-                         │ 24h soak window          │
-                         │ SLO compliance           │
-                         │ dashboard review         │ rollback
-                         │ ACK required             │
-                         ▼                          │
-                    ┌─────────┐                     │
-                    │ active  │─────────────────────┘
-                    └─────────┘
-```
+| Field | Format | Example | Notes |
+|-------|--------|---------|-------|
+| \`git_sha\` | 40-char hex | \`93e64007df...\` | Commit SHA of training code |
+| \`dataset_id\` | Non-empty string | \`market_data_2026_q1_btcusdt\` | Training dataset identifier |
+| \`artifact_dir\` | Relative path | \`ml/artifacts/regime_v1\` | No \`..\`, no absolute paths |
+| \`artifact_id\` | Human-readable | \`regime_v1_prod\` | Semantic version identifier |
 
 ---
 
-## Procedures
+## Stage Lifecycle
 
-### 1. Add New Model to Staging
-
-**When:** New model trained and artifact created.
-
-**Steps:**
-
-1. Train model and create artifact:
-   ```bash
-   python -m scripts.train_regime_model \
-       --out-dir artifacts/onnx/regime_v2026_02_16_001 \
-       --dataset-id production_data_v4 \
-       --seed 42 \
-       --notes "New training data Feb 2026"
-   ```
-
-2. Verify artifact:
-   ```bash
-   python -m scripts.verify_onnx_artifact artifacts/onnx/regime_v2026_02_16_001 -v
-   ```
-
-3. Update registry (staging):
-   ```json
-   {
-     "staging": {
-       "artifact_id": "regime_v2026_02_16_001",
-       "artifact_dir": "artifacts/onnx/regime_v2026_02_16_001",
-       "model_sha256": "<from train_report.json>",
-       "git_sha": "<current commit>",
-       "dataset_id": "production_data_v4",
-       "created_at_utc": "2026-02-16T08:00:00Z",
-       "notes": "New training data Feb 2026"
-     }
-   }
-   ```
-
-4. Create PR with artifact + registry update.
-
-5. CI validates: `verify_onnx_artifact`, unit tests, determinism.
+\`\`\`
+┌──────────────────────────────────────────────────────────────────┐
+│                     PROMOTION STAGES                              │
+├──────────────────────────────────────────────────────────────────┤
+│                                                                   │
+│  1. SHADOW (Validation)                                          │
+│     ├── Purpose: Offline validation, A/B testing                 │
+│     ├── Impact: No production trading decisions                  │
+│     ├── Duration: 7-14 days recommended                          │
+│     └── Requirements: artifact_dir, artifact_id                  │
+│                                                                   │
+│  2. STAGING (Optional Pre-Production)                            │
+│     ├── Purpose: Integration testing, canary deployment          │
+│     ├── Impact: Limited production exposure (1-5% capital)       │
+│     ├── Duration: 2-7 days                                       │
+│     └── Requirements: artifact_dir, artifact_id                  │
+│                                                                   │
+│  3. ACTIVE (Production)                                          │
+│     ├── Purpose: Full production deployment                      │
+│     ├── Impact: Affects real trading decisions                   │
+│     ├── Duration: Until next model promoted                      │
+│     └── Requirements: artifact_dir, artifact_id, git_sha,        │
+│                       dataset_id, promoted_at_utc (auto)         │
+│                                                                   │
+└──────────────────────────────────────────────────────────────────┘
+\`\`\`
 
 ---
 
-### 2. Promote staging → shadow
+## Promotion Workflow
 
-**When:** Model passes staging validation, ready for shadow testing.
+### Step 1: Shadow Deployment (Validation)
 
-**Pre-requisites:**
-- [ ] `verify_onnx_artifact` PASS
-- [ ] Unit tests PASS
-- [ ] No regressions in golden artifact tests
+**Goal:** Deploy new model for offline validation without production impact
 
-**Steps:**
+\`\`\`bash
+# 1. Verify artifact exists and is valid
+ls -la ml/artifacts/regime_v2/
+cat ml/artifacts/regime_v2/manifest.json
 
-1. Update registry:
-   ```json
-   {
-     "shadow": {
-       "artifact_id": "regime_v2026_02_16_001",
-       ...
-     },
-     "staging": null
-   }
-   ```
+# 2. Dry-run promotion to preview changes
+python -m scripts.promote_ml_model \\
+    --dry-run \\
+    --model regime_classifier \\
+    --stage shadow \\
+    --artifact-dir ml/artifacts/regime_v2 \\
+    --artifact-id regime_v2_candidate \\
+    --dataset-id market_data_2026_q1_multi \\
+    --notes "New candidate model trained on Q1 2026 data"
 
-2. Add history entry:
-   ```json
-   {
-     "timestamp_utc": "2026-02-16T10:00:00Z",
-     "action": "promote",
-     "from_stage": "staging",
-     "to_stage": "shadow",
-     "artifact_id": "regime_v2026_02_16_001",
-     "by": "developer@example.com",
-     "reason": "Staging validation passed"
-   }
-   ```
+# 3. Review dry-run output (JSON diff)
+# Verify:
+#   - artifact_dir is correct
+#   - artifact_id is semantic
+#   - dataset_id matches training data
+#   - history[] entry looks correct
 
-3. Create PR.
+# 4. Execute promotion (no --dry-run)
+python -m scripts.promote_ml_model \\
+    --model regime_classifier \\
+    --stage shadow \\
+    --artifact-dir ml/artifacts/regime_v2 \\
+    --artifact-id regime_v2_candidate \\
+    --dataset-id market_data_2026_q1_multi \\
+    --notes "New candidate model trained on Q1 2026 data"
 
-4. After merge, deploy with `ml_stage: shadow`.
+# 5. Verify registry was updated
+python -m scripts.verify_ml_registry \\
+    --path ml/registry/models.json \\
+    --base-dir .
 
-5. Monitor dashboards:
-   - [ML Overview Dashboard](../grafana/dashboards/grinder_ml_overview.json)
-   - [ML Latency Dashboard](../grafana/dashboards/grinder_ml_latency.json)
+# 6. Commit registry changes
+git add ml/registry/models.json
+git commit -m "feat(ml): Promote regime_v2_candidate to SHADOW"
+git push origin main
+\`\`\`
 
----
+**Validation Period:** 7-14 days
+- Monitor shadow metrics vs baseline
+- Compare predictions to actual outcomes
+- Check for drift in feature distributions
 
-### 3. Promote shadow → active
+### Step 2: Staging Deployment (Optional)
 
-**When:** Model passes shadow soak window with SLO compliance.
+**Goal:** Limited production exposure for integration testing
 
-**Pre-requisites (ALL REQUIRED):**
-- [ ] **Soak window:** 24h minimum in shadow mode
-- [ ] **Latency SLO:** p99 < 100ms, p99.9 < 250ms (5m rolling)
-- [ ] **Error rate:** < 5%
-- [ ] **No alerts:** MlInferenceLatencyHigh/Critical not firing
-- [ ] **Dashboard review:** Baseline stable, no anomalies
-- [ ] **Explicit ACK:** Required in PR
+\`\`\`bash
+# Same process as SHADOW, but with stage=staging
+python -m scripts.promote_ml_model \\
+    --model regime_classifier \\
+    --stage staging \\
+    --artifact-dir ml/artifacts/regime_v2 \\
+    --artifact-id regime_v2_staging \\
+    --dataset-id market_data_2026_q1_multi \\
+    --notes "Staging deployment for canary testing"
+\`\`\`
 
-**Steps:**
+**Canary Configuration:**
+- Allocate 1-5% of trading capital to staging model
+- Monitor performance metrics closely
+- Compare to shadow and active models
 
-1. Verify SLO compliance:
-   ```promql
-   # p99 latency
-   histogram_quantile(0.99, sum(rate(grinder_ml_inference_latency_ms_bucket{mode="shadow"}[24h])) by (le))
+### Step 3: Active Deployment (Production)
 
-   # Error rate
-   rate(grinder_ml_inference_errors_total[24h]) / (rate(grinder_ml_inference_total[24h]) + 0.001)
-   ```
+**Goal:** Promote validated model to full production
 
-2. Document evidence in PR body:
-   ```markdown
-   ## Promotion Evidence
+**CRITICAL**: ACTIVE promotion requires additional metadata
 
-   - Shadow soak: 24h (2026-02-15 10:00 to 2026-02-16 10:00)
-   - p99 latency: 42ms (SLO: <100ms) ✅
-   - p99.9 latency: 78ms (SLO: <250ms) ✅
-   - Error rate: 0.3% (SLO: <5%) ✅
-   - Alerts: None firing ✅
-   - Dashboard: [link to screenshot]
-   ```
+\`\`\`bash
+# 1. Get current git SHA (training code commit)
+GIT_SHA=\$(git rev-parse HEAD)
+echo "Using git SHA: \$GIT_SHA"
 
-3. Update registry:
-   ```json
-   {
-     "active": {
-       "artifact_id": "regime_v2026_02_16_001",
-       "promoted_at_utc": "2026-02-16T10:00:00Z",
-       ...
-     },
-     "shadow": null
-   }
-   ```
+# 2. Dry-run with ACTIVE requirements
+python -m scripts.promote_ml_model \\
+    --dry-run \\
+    --model regime_classifier \\
+    --stage active \\
+    --artifact-dir ml/artifacts/regime_v2 \\
+    --artifact-id regime_v2_prod \\
+    --dataset-id market_data_2026_q1_multi \\
+    --git-sha \$GIT_SHA \\
+    --reason "SHADOW validation passed: 95% accuracy over 14 days" \\
+    --notes "First production deployment of regime_v2"
 
-4. Add history entry with reason.
+# 3. Review dry-run output
+# VERIFY:
+#   - git_sha matches training code commit
+#   - dataset_id matches training dataset
+#   - artifact passes integrity check
+#   - history[] preserves previous ACTIVE pointer
 
-5. Create PR with **ACK in body:**
-   ```markdown
-   ACK: I_UNDERSTAND_THIS_AFFECTS_TRADING
+# 4. Execute ACTIVE promotion
+python -m scripts.promote_ml_model \\
+    --model regime_classifier \\
+    --stage active \\
+    --artifact-dir ml/artifacts/regime_v2 \\
+    --artifact-id regime_v2_prod \\
+    --dataset-id market_data_2026_q1_multi \\
+    --git-sha \$GIT_SHA \\
+    --reason "SHADOW validation passed: 95% accuracy over 14 days" \\
+    --notes "First production deployment of regime_v2"
 
-   I have reviewed the shadow metrics and confirm this model
-   is safe to promote to active trading decisions.
-   ```
+# 5. Verify and commit
+python -m scripts.verify_ml_registry \\
+    --path ml/registry/models.json \\
+    --base-dir .
 
-6. After merge, deploy with `ml_stage: active`.
+git add ml/registry/models.json
+git commit -m "feat(ml): Promote regime_v2 to ACTIVE (production)"
+git push origin main
 
-7. Monitor closely for first 1h:
-   - Real-time latency
-   - Error rate
-   - Block reasons
-
----
-
-### 4. Rollback active → previous
-
-**When:** Active model causing issues, need immediate rollback.
-
-**Severity:** Emergency — no ACK required.
-
-**Steps:**
-
-1. **Immediate:** If critical, enable kill-switch first:
-   ```bash
-   export ML_KILL_SWITCH=1
-   ```
-
-2. Identify previous artifact_id from history:
-   ```bash
-   cat ml/registry/models.json | jq '.models.regime_classifier.history[-2]'
-   ```
-
-3. Update registry to previous artifact:
-   ```json
-   {
-     "active": {
-       "artifact_id": "regime_v2026_02_15_001",  # Previous
-       ...
-     }
-   }
-   ```
-
-4. Add history entry:
-   ```json
-   {
-     "timestamp_utc": "2026-02-16T14:00:00Z",
-     "action": "rollback",
-     "from_stage": "active",
-     "to_stage": "active",
-     "artifact_id": "regime_v2026_02_15_001",
-     "by": "operator@example.com",
-     "reason": "EMERGENCY: p99 latency spike to 500ms after promotion"
-   }
-   ```
-
-5. Create PR (expedited review).
-
-6. After merge, deploy.
-
-7. Disable kill-switch if enabled:
-   ```bash
-   unset ML_KILL_SWITCH
-   ```
-
-8. Post-incident: investigate root cause.
+# 6. Monitor production metrics
+# - Check ml_regime injected into policy_features
+# - Monitor prediction accuracy vs baseline
+# - Watch for performance degradation
+\`\`\`
 
 ---
 
-## Quick Reference
+## Safety Checks
 
-### Check Current Model State
+### Pre-Promotion Checklist
 
-```bash
-# View registry
-cat ml/registry/models.json | jq '.models.regime_classifier'
+- [ ] Artifact exists and passes integrity check
+- [ ] Dataset ID matches training data provenance
+- [ ] Git SHA matches training code commit (ACTIVE only)
+- [ ] Dry-run output reviewed and approved
+- [ ] Registry verification passes
+- [ ] Git working tree is clean
+- [ ] Promotion reason documented
 
-# Current active model
-cat ml/registry/models.json | jq '.models.regime_classifier.active.artifact_id'
+### Post-Promotion Verification
 
-# Current shadow model
-cat ml/registry/models.json | jq '.models.regime_classifier.shadow.artifact_id'
+\`\`\`bash
+# 1. Verify registry loads without errors
+python -c "
+from grinder.ml.onnx.registry import ModelRegistry
+registry = ModelRegistry.load('ml/registry/models.json')
+pointer = registry.get_stage_pointer('regime_classifier', 'active')
+print(f'ACTIVE artifact: {pointer.artifact_id if pointer else None}')
+print(f'Git SHA: {pointer.git_sha if pointer else None}')
+"
 
-# Promotion history
-cat ml/registry/models.json | jq '.models.regime_classifier.history[-3:]'
-```
+# 2. Check history[] audit trail
+python -c "
+from grinder.ml.onnx.registry import ModelRegistry
+import json
+registry = ModelRegistry.load('ml/registry/models.json')
+history = registry.history.get('regime_classifier', [])
+print(f'History entries: {len(history)}')
+if history:
+    latest = history[0]
+    print(f'Latest promotion: {latest.from_stage} → {latest.to_stage}')
+    print(f'Actor: {latest.actor}')
+    print(f'Timestamp: {latest.ts_utc}')
+"
 
-### Verify Artifact
-
-```bash
-python -m scripts.verify_onnx_artifact <artifact_dir> -v
-```
-
-### Check SLO Compliance (PromQL)
-
-```promql
-# p99 latency (shadow, last 24h)
-histogram_quantile(0.99, sum(rate(grinder_ml_inference_latency_ms_bucket{mode="shadow"}[24h])) by (le))
-
-# p99.9 latency
-histogram_quantile(0.999, sum(rate(grinder_ml_inference_latency_ms_bucket{mode="shadow"}[24h])) by (le))
-
-# Error rate
-rate(grinder_ml_inference_errors_total[24h]) / (rate(grinder_ml_inference_total[24h]) + 0.001)
-
-# Active mode status
-grinder_ml_active_on
-```
-
-### Emergency Kill-Switch
-
-```bash
-# Disable all ML inference
-export ML_KILL_SWITCH=1
-
-# Re-enable
-unset ML_KILL_SWITCH
-```
+# 3. Test artifact loading in runtime
+python -c "
+from grinder.ml.onnx.artifact import load_artifact
+from pathlib import Path
+artifact = load_artifact(Path('ml/artifacts/regime_v2'))
+print(f'Artifact files: {len(artifact.manifest.sha256)}')
+print(f'Model SHA256: {artifact.manifest.model_sha256}')
+"
+\`\`\`
 
 ---
 
-## Artifact ID Convention
+## Rollback Procedures
 
-Format: `{model_name}_v{YYYY}_{MM}_{DD}_{seq}`
+### Emergency Rollback (Production Incident)
 
-| Component | Description |
-|-----------|-------------|
-| model_name | Model type: `regime`, `spacing`, etc. |
-| YYYY_MM_DD | Training date |
-| seq | Sequence number (001, 002, ...) |
+**Scenario:** ACTIVE model is causing production issues (accuracy drop, crashes, etc.)
 
-Examples:
-- `regime_v2026_02_15_001` — First regime model trained Feb 15, 2026
-- `regime_v2026_02_15_002` — Second regime model same day
-- `spacing_v2026_02_16_001` — Spacing model
+**Action:**
+
+\`\`\`bash
+# 1. Check history[] for previous ACTIVE pointer
+python -c "
+from grinder.ml.onnx.registry import ModelRegistry
+registry = ModelRegistry.load('ml/registry/models.json')
+history = registry.history.get('regime_classifier', [])
+for i, event in enumerate(history[:5]):
+    if event.to_stage == 'active':
+        print(f'[{i}] {event.ts_utc}: {event.pointer.artifact_id}')
+        print(f'    git_sha: {event.pointer.git_sha}')
+        print(f'    dataset_id: {event.pointer.dataset_id}')
+"
+
+# 2. Re-promote previous ACTIVE artifact
+python -m scripts.promote_ml_model \\
+    --model regime_classifier \\
+    --stage active \\
+    --artifact-dir <PREVIOUS_ARTIFACT_DIR> \\
+    --artifact-id <PREVIOUS_ARTIFACT_ID>_rollback \\
+    --dataset-id <PREVIOUS_DATASET_ID> \\
+    --git-sha <PREVIOUS_GIT_SHA> \\
+    --reason "EMERGENCY ROLLBACK: Production incident #123" \\
+    --notes "Rolled back to previous stable version"
+
+# 3. Verify rollback
+python -m scripts.verify_ml_registry \\
+    --path ml/registry/models.json \\
+    --base-dir .
+
+# 4. Commit and deploy
+git add ml/registry/models.json
+git commit -m "fix(ml): Emergency rollback of regime_classifier (incident #123)"
+git push origin main
+
+# 5. Restart PaperEngine to load rolled-back model
+# (Implementation-specific: systemctl restart, kubectl rollout, etc.)
+\`\`\`
 
 ---
 
 ## Troubleshooting
 
-### Model not loading after promotion
+### Issue: "ACTIVE promotion requires --git-sha"
 
-1. Check config has correct `ml_registry_path` and `ml_stage`
-2. Verify artifact_dir path exists
-3. Check `verify_onnx_artifact` output
-4. Check logs for `ML_REGISTRY` or `ONNX_` errors
+**Cause:** Attempting to promote to ACTIVE without required metadata
 
-### Latency spike after promotion
+**Solution:**
+\`\`\`bash
+# Get current git SHA
+git rev-parse HEAD
 
-1. Compare model sizes:
-   ```bash
-   ls -lh artifacts/onnx/*/model.onnx
-   ```
-2. Check if new model has more parameters
-3. Consider rollback if SLO breached
+# Re-run with --git-sha
+python -m scripts.promote_ml_model \\
+    --model regime_classifier \\
+    --stage active \\
+    --git-sha <40-CHAR-HEX-SHA> \\
+    ...
+\`\`\`
 
-### Shadow and active showing different results
+### Issue: "Path traversal not allowed"
 
-This is expected — they're different models. Compare:
-```promql
-histogram_quantile(0.99, sum(rate(grinder_ml_inference_latency_ms_bucket[5m])) by (le, mode))
-```
+**Cause:** Artifact directory contains ".." or absolute path
+
+**Solution:**
+\`\`\`bash
+# Use relative path from registry parent (usually repo root)
+# ❌ Bad: --artifact-dir ../../../etc/passwd
+# ❌ Bad: --artifact-dir /absolute/path
+# ✓ Good: --artifact-dir ml/artifacts/regime_v2
+\`\`\`
+
+### Issue: "Artifact directory not found"
+
+**Cause:** Artifact directory doesn't exist or path is wrong
+
+**Solution:**
+\`\`\`bash
+# Verify artifact exists
+ls -la ml/artifacts/regime_v2/
+
+# Check manifest.json
+cat ml/artifacts/regime_v2/manifest.json
+
+# Ensure artifact_dir is relative to --base-dir
+python -m scripts.verify_ml_registry \\
+    --path ml/registry/models.json \\
+    --base-dir .
+\`\`\`
 
 ---
 
-## Related Documentation
+## Emergency Contacts
 
-- [12_ML_SPEC.md](../12_ML_SPEC.md) - ML architecture and M8-03c spec
-- [18_ML_INFERENCE_SLOS.md](18_ML_INFERENCE_SLOS.md) - ML inference alerts and SLOs
-- [04_KILL_SWITCH.md](04_KILL_SWITCH.md) - Kill-switch operations
+| Role | Contact | Responsibilities |
+|------|---------|------------------|
+| ML Engineer | ml-team@grinder.dev | Model training, validation |
+| DevOps | devops@grinder.dev | Registry deployment, rollback |
+| Production Support | support@grinder.dev | Incident response, monitoring |
+| On-Call | oncall@grinder.dev | 24/7 emergency escalation |
+
+---
+
+**Document Version:** 1.0
+**Last Review:** 2026-02-16
+**Next Review:** 2026-03-16
