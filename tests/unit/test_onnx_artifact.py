@@ -1,12 +1,14 @@
-"""Tests for M8-02a ONNX artifact loader.
+"""Tests for M8-02a/M8-03a ONNX artifact loader.
 
-Tests artifact loading, manifest validation, and SHA256 integrity checks.
+Tests artifact loading, manifest validation, SHA256 integrity checks,
+and v1.1 schema extensions (feature_order, git_sha, dataset_id).
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import tempfile
 from pathlib import Path
 from typing import Any
@@ -15,6 +17,7 @@ import pytest
 
 from grinder.ml.onnx import (
     ARTIFACT_SCHEMA_VERSION,
+    ARTIFACT_SCHEMA_VERSIONS,
     OnnxArtifact,
     OnnxArtifactManifest,
     OnnxChecksumError,
@@ -23,6 +26,8 @@ from grinder.ml.onnx import (
     load_artifact,
     load_manifest,
 )
+from grinder.ml.onnx.artifact import validate_feature_order
+from grinder.ml.onnx.features import FEATURE_ORDER
 
 
 def _compute_sha256(data: bytes) -> str:
@@ -310,5 +315,217 @@ class TestLoadManifest:
             artifact_dir = _create_artifact_dir(Path(tmpdir))
             manifest = load_manifest(artifact_dir)
 
-            assert manifest.schema_version == ARTIFACT_SCHEMA_VERSION
+            # _create_artifact_dir creates v1 artifacts by default
+            assert manifest.schema_version == "v1"
             assert manifest.model_file == "model.onnx"
+
+
+class TestManifestV11:
+    """Tests for v1.1 manifest schema extensions (M8-03a)."""
+
+    def test_schema_version_constants(self) -> None:
+        """Test schema version constants are correctly defined."""
+        assert ARTIFACT_SCHEMA_VERSION == "v1.1"
+        assert ARTIFACT_SCHEMA_VERSIONS == ("v1", "v1.1")
+
+    def test_valid_v11_manifest(self) -> None:
+        """Test creating a valid v1.1 manifest with all optional fields."""
+        manifest = OnnxArtifactManifest(
+            schema_version="v1.1",
+            model_file="model.onnx",
+            sha256={"model.onnx": "a" * 64},
+            created_at="2026-02-14T00:00:00Z",
+            created_at_utc="2026-02-14T00:00:00Z",
+            git_sha="b" * 40,
+            dataset_id="train_2026Q1",
+            feature_order=FEATURE_ORDER,
+            notes="Test v1.1 manifest",
+        )
+        assert manifest.schema_version == "v1.1"
+        assert manifest.git_sha == "b" * 40
+        assert manifest.dataset_id == "train_2026Q1"
+        assert manifest.feature_order == FEATURE_ORDER
+
+    def test_v11_manifest_optional_fields_default_none(self) -> None:
+        """Test that v1.1 optional fields default to None."""
+        manifest = OnnxArtifactManifest(
+            schema_version="v1.1",
+            model_file="model.onnx",
+            sha256={"model.onnx": "a" * 64},
+            created_at="2026-02-14T00:00:00Z",
+        )
+        assert manifest.created_at_utc is None
+        assert manifest.git_sha is None
+        assert manifest.dataset_id is None
+        assert manifest.feature_order is None
+
+    def test_invalid_git_sha_length(self) -> None:
+        """Test that git_sha must be exactly 40 characters."""
+        with pytest.raises(OnnxManifestError, match="40-char hex"):
+            OnnxArtifactManifest(
+                schema_version="v1.1",
+                model_file="model.onnx",
+                sha256={"model.onnx": "a" * 64},
+                created_at="2026-02-14T00:00:00Z",
+                git_sha="abc123",  # Too short
+            )
+
+    def test_invalid_git_sha_hex(self) -> None:
+        """Test that git_sha must be valid hex."""
+        with pytest.raises(OnnxManifestError, match="not a valid hex"):
+            OnnxArtifactManifest(
+                schema_version="v1.1",
+                model_file="model.onnx",
+                sha256={"model.onnx": "a" * 64},
+                created_at="2026-02-14T00:00:00Z",
+                git_sha="g" * 40,  # Invalid hex
+            )
+
+    def test_from_dict_with_v11_fields(self) -> None:
+        """Test creating v1.1 manifest from dict."""
+        manifest = OnnxArtifactManifest.from_dict(
+            {
+                "schema_version": "v1.1",
+                "model_file": "model.onnx",
+                "sha256": {"model.onnx": "a" * 64},
+                "created_at": "2026-02-14T00:00:00Z",
+                "created_at_utc": "2026-02-14T00:00:00Z",
+                "git_sha": "c" * 40,
+                "dataset_id": "test_dataset",
+                "feature_order": ["feat1", "feat2"],
+            }
+        )
+        assert manifest.schema_version == "v1.1"
+        assert manifest.git_sha == "c" * 40
+        assert manifest.dataset_id == "test_dataset"
+        assert manifest.feature_order == ("feat1", "feat2")
+
+    def test_to_dict_roundtrip(self) -> None:
+        """Test to_dict preserves all fields."""
+        original = OnnxArtifactManifest(
+            schema_version="v1.1",
+            model_file="model.onnx",
+            sha256={"model.onnx": "d" * 64},
+            created_at="2026-02-14T12:00:00Z",
+            created_at_utc="2026-02-14T12:00:00Z",
+            git_sha="e" * 40,
+            dataset_id="roundtrip_test",
+            feature_order=("price_mid", "volume_24h"),
+            notes="Roundtrip test",
+        )
+
+        d = original.to_dict()
+        restored = OnnxArtifactManifest.from_dict(d)
+
+        assert restored.schema_version == original.schema_version
+        assert restored.git_sha == original.git_sha
+        assert restored.dataset_id == original.dataset_id
+        assert restored.feature_order == original.feature_order
+        assert restored.notes == original.notes
+
+    def test_to_dict_omits_none_fields(self) -> None:
+        """Test that to_dict omits fields that are None."""
+        manifest = OnnxArtifactManifest(
+            schema_version="v1.1",
+            model_file="model.onnx",
+            sha256={"model.onnx": "a" * 64},
+            created_at="2026-02-14T00:00:00Z",
+        )
+
+        d = manifest.to_dict()
+        assert "git_sha" not in d
+        assert "dataset_id" not in d
+        assert "feature_order" not in d
+        assert "created_at_utc" not in d
+
+    def test_load_v11_artifact(self) -> None:
+        """Test loading a v1.1 artifact."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            artifact_dir = _create_artifact_dir(
+                Path(tmpdir),
+                manifest_override={
+                    "schema_version": "v1.1",
+                    "git_sha": "f" * 40,
+                    "dataset_id": "test_v11",
+                    "feature_order": list(FEATURE_ORDER),
+                },
+            )
+            artifact = load_artifact(artifact_dir)
+
+            assert artifact.manifest.schema_version == "v1.1"
+            assert artifact.manifest.git_sha == "f" * 40
+            assert artifact.manifest.dataset_id == "test_v11"
+            assert artifact.manifest.feature_order == FEATURE_ORDER
+
+
+class TestFeatureOrderValidation:
+    """Tests for feature_order validation against SSOT (M8-03a)."""
+
+    def test_matching_feature_order_no_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Test that matching feature_order doesn't log warning."""
+        manifest = OnnxArtifactManifest(
+            schema_version="v1.1",
+            model_file="model.onnx",
+            sha256={"model.onnx": "a" * 64},
+            created_at="2026-02-14T00:00:00Z",
+            feature_order=FEATURE_ORDER,
+        )
+
+        with caplog.at_level(logging.DEBUG):
+            validate_feature_order(manifest)
+
+        assert "FEATURE_ORDER_MISMATCH" not in caplog.text
+
+    def test_missing_feature_order_no_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Test that missing feature_order (v1) doesn't log warning."""
+        manifest = OnnxArtifactManifest(
+            schema_version="v1",
+            model_file="model.onnx",
+            sha256={"model.onnx": "a" * 64},
+            created_at="2026-02-14T00:00:00Z",
+            feature_order=None,
+        )
+
+        with caplog.at_level(logging.WARNING):
+            validate_feature_order(manifest)
+
+        assert "FEATURE_ORDER_MISMATCH" not in caplog.text
+
+    def test_mismatched_feature_order_logs_warning(self, caplog: pytest.LogCaptureFixture) -> None:
+        """Test that mismatched feature_order logs warning with details."""
+        # Create manifest with different feature order
+        different_features = ("custom_feat1", "custom_feat2")
+        manifest = OnnxArtifactManifest(
+            schema_version="v1.1",
+            model_file="model.onnx",
+            sha256={"model.onnx": "a" * 64},
+            created_at="2026-02-14T00:00:00Z",
+            feature_order=different_features,
+        )
+
+        with caplog.at_level(logging.WARNING):
+            validate_feature_order(manifest)
+
+        assert "FEATURE_ORDER_MISMATCH" in caplog.text
+        assert "manifest_len=2" in caplog.text
+        assert f"ssot_len={len(FEATURE_ORDER)}" in caplog.text
+
+    def test_feature_order_order_mismatch_logs_warning(
+        self, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Test that same features in different order logs warning."""
+        # Same features, different order
+        reversed_features = tuple(reversed(FEATURE_ORDER))
+        manifest = OnnxArtifactManifest(
+            schema_version="v1.1",
+            model_file="model.onnx",
+            sha256={"model.onnx": "a" * 64},
+            created_at="2026-02-14T00:00:00Z",
+            feature_order=reversed_features,
+        )
+
+        with caplog.at_level(logging.WARNING):
+            validate_feature_order(manifest)
+
+        assert "FEATURE_ORDER_MISMATCH" in caplog.text
+        assert "order_differs=True" in caplog.text

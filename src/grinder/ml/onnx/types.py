@@ -1,6 +1,7 @@
 """ONNX artifact type definitions.
 
 M8-02a: Artifact manifest and validation types (no inference).
+M8-03a: Extended manifest v1.1 with git_sha, dataset_id, feature_order.
 """
 
 from __future__ import annotations
@@ -34,8 +35,10 @@ class OnnxPathError(OnnxArtifactError):
     pass
 
 
-# Supported schema version
-ARTIFACT_SCHEMA_VERSION = "v1"
+# Supported schema versions (v1 = legacy, v1.1 = extended with traceability)
+ARTIFACT_SCHEMA_VERSIONS = ("v1", "v1.1")
+# Default schema version for new artifacts
+ARTIFACT_SCHEMA_VERSION = "v1.1"
 
 
 @dataclass(frozen=True)
@@ -44,11 +47,17 @@ class OnnxArtifactManifest:
 
     Defines the structure and integrity checksums for an ONNX model artifact.
 
-    Fields:
-        schema_version: Must be "v1"
+    Fields (required):
+        schema_version: Must be "v1" or "v1.1"
         model_file: Relative path to the ONNX model file (e.g., "model.onnx")
         sha256: Map of relative file paths to their SHA256 hex digests
-        created_at: ISO 8601 timestamp when artifact was created
+        created_at: ISO 8601 timestamp when artifact was created (legacy, use created_at_utc)
+
+    Fields (optional, v1.1):
+        created_at_utc: ISO 8601 UTC timestamp (e.g., "2026-02-14T19:10:00Z")
+        git_sha: Git commit SHA (40 hex chars) or None if unavailable
+        dataset_id: Identifier for the training dataset
+        feature_order: List of feature names in expected order
         notes: Optional human-readable notes
     """
 
@@ -56,6 +65,11 @@ class OnnxArtifactManifest:
     model_file: str
     sha256: dict[str, str]
     created_at: str
+    # v1.1 optional fields
+    created_at_utc: str | None = None
+    git_sha: str | None = None
+    dataset_id: str | None = None
+    feature_order: tuple[str, ...] | None = None
     notes: str | None = None
 
     def __post_init__(self) -> None:
@@ -68,11 +82,11 @@ class OnnxArtifactManifest:
         Raises:
             OnnxManifestError: If validation fails.
         """
-        # Check schema version
-        if self.schema_version != ARTIFACT_SCHEMA_VERSION:
+        # Check schema version (accept v1 and v1.1)
+        if self.schema_version not in ARTIFACT_SCHEMA_VERSIONS:
             raise OnnxManifestError(
                 f"Unsupported schema_version: {self.schema_version!r}, "
-                f"expected {ARTIFACT_SCHEMA_VERSION!r}"
+                f"expected one of {ARTIFACT_SCHEMA_VERSIONS}"
             )
 
         # Check sha256 map is not empty
@@ -94,6 +108,17 @@ class OnnxArtifactManifest:
                     f"Invalid SHA256 for {path!r}: not a valid hex string"
                 ) from None
 
+        # Validate git_sha format if present
+        if self.git_sha is not None:
+            if not isinstance(self.git_sha, str) or len(self.git_sha) != 40:
+                raise OnnxManifestError(
+                    f"Invalid git_sha: expected 40-char hex string, got {self.git_sha!r}"
+                )
+            try:
+                int(self.git_sha, 16)
+            except ValueError:
+                raise OnnxManifestError("Invalid git_sha: not a valid hex string") from None
+
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> OnnxArtifactManifest:
         """Create manifest from dict (parsed JSON).
@@ -112,13 +137,47 @@ class OnnxArtifactManifest:
         if missing:
             raise OnnxManifestError(f"Missing required fields: {missing}")
 
+        # Convert feature_order list to tuple if present
+        feature_order = d.get("feature_order")
+        if feature_order is not None:
+            feature_order = tuple(feature_order)
+
         return cls(
             schema_version=d["schema_version"],
             model_file=d["model_file"],
             sha256=dict(d["sha256"]),
             created_at=d["created_at"],
+            created_at_utc=d.get("created_at_utc"),
+            git_sha=d.get("git_sha"),
+            dataset_id=d.get("dataset_id"),
+            feature_order=feature_order,
             notes=d.get("notes"),
         )
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert manifest to dict for JSON serialization.
+
+        Returns:
+            Dict representation of manifest.
+        """
+        result: dict[str, Any] = {
+            "schema_version": self.schema_version,
+            "model_file": self.model_file,
+            "sha256": self.sha256,
+            "created_at": self.created_at,
+        }
+        # Add optional fields if present
+        if self.created_at_utc is not None:
+            result["created_at_utc"] = self.created_at_utc
+        if self.git_sha is not None:
+            result["git_sha"] = self.git_sha
+        if self.dataset_id is not None:
+            result["dataset_id"] = self.dataset_id
+        if self.feature_order is not None:
+            result["feature_order"] = list(self.feature_order)
+        if self.notes is not None:
+            result["notes"] = self.notes
+        return result
 
 
 @dataclass
@@ -145,6 +204,7 @@ class OnnxArtifact:
 
 __all__ = [
     "ARTIFACT_SCHEMA_VERSION",
+    "ARTIFACT_SCHEMA_VERSIONS",
     "OnnxArtifact",
     "OnnxArtifactError",
     "OnnxArtifactManifest",
