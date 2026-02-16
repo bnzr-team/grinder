@@ -1,23 +1,22 @@
 {
   "schema_version": "v1",
+  "generated_at_utc": "2026-02-16T00:00:00Z",
   "models": {
     "regime_classifier": {
       "shadow": {
         "artifact_dir": "tests/testdata/onnx_artifacts/golden_regime",
         "artifact_id": "golden_regime_v1",
         "git_sha": null,
-        "dataset_id": "golden_synthetic_v1"
+        "dataset_id": "golden_synthetic_v1",
+        "promoted_at_utc": null,
+        "notes": null,
+        "actor": null,
+        "source": null,
+        "feature_order_hash": null
       },
+      "staging": null,
       "active": null,
-      "history": [
-        {
-          "ts_utc": "2026-02-16T00:00:00Z",
-          "stage": "shadow",
-          "artifact_id": "golden_regime_v1",
-          "artifact_dir": "tests/testdata/onnx_artifacts/golden_regime",
-          "note": "Initial shadow baseline using golden test artifact"
-        }
-      ]
+      "history": []
     }
   }
 }

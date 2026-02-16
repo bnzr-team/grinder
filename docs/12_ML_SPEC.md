@@ -1498,6 +1498,164 @@ class ModelRegistry:
         return None
 ```
 
+### 12.10.1 M8-03c-3: Promotion CLI + Registry History
+
+**Implementation:** [M8-03c-3](../src/grinder/ml/onnx/registry.py)
+**Status:** Implemented
+**Purpose:** Safe model promotion workflow with full audit trail
+
+#### Registry Schema v1 with History
+
+```json
+{
+  "schema_version": "v1",
+  "generated_at_utc": "2026-02-16T00:00:00Z",
+  "models": {
+    "regime_classifier": {
+      "shadow": {
+        "artifact_dir": "tests/testdata/onnx_artifacts/golden_regime",
+        "artifact_id": "golden_regime_v1",
+        "git_sha": null,
+        "dataset_id": "golden_synthetic_v1",
+        "promoted_at_utc": null,
+        "notes": null,
+        "actor": null,
+        "source": null,
+        "feature_order_hash": null
+      },
+      "staging": null,
+      "active": {
+        "artifact_dir": "ml/artifacts/regime_v1",
+        "artifact_id": "regime_v1_prod",
+        "git_sha": "93e64007df6e7823b09cdea24237bc8138be28aa",
+        "dataset_id": "market_data_2025_q4_btcusdt",
+        "promoted_at_utc": "2026-02-15T14:30:00Z",
+        "notes": "Promoted after 7 days SHADOW validation",
+        "actor": "alice@grinder.dev",
+        "source": "cli",
+        "feature_order_hash": null
+      },
+      "history": [
+        {
+          "ts_utc": "2026-02-15T14:30:00Z",
+          "from_stage": "shadow",
+          "to_stage": "active",
+          "actor": "alice@grinder.dev",
+          "source": "cli",
+          "reason": "SHADOW validation passed: 95% accuracy over 7 days",
+          "notes": "First production promotion",
+          "pointer": {
+            "artifact_id": "regime_v1_prod",
+            "artifact_dir": "ml/artifacts/regime_v1",
+            "git_sha": "93e64007df6e7823b09cdea24237bc8138be28aa",
+            "dataset_id": "market_data_2025_q4_btcusdt",
+            "promoted_at_utc": "2026-02-15T14:30:00Z",
+            "notes": "Promoted after 7 days SHADOW validation",
+            "actor": "alice@grinder.dev",
+            "source": "cli",
+            "feature_order_hash": null
+          },
+          "registry_git_sha": "1234567890abcdef1234567890abcdef12345678"
+        }
+      ]
+    }
+  }
+}
+```
+
+#### Stage Lifecycle
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    STAGE LIFECYCLE                           │
+├─────────────────────────────────────────────────────────────┤
+│                                                              │
+│  SHADOW                                                      │
+│   └── Validation/testing stage                              │
+│   └── No production impact                                  │
+│   └── git_sha/dataset_id optional                           │
+│                                                              │
+│  STAGING (optional)                                          │
+│   └── Pre-production verification                           │
+│   └── git_sha/dataset_id optional                           │
+│                                                              │
+│  ACTIVE                                                      │
+│   └── Production deployment                                 │
+│   └── git_sha REQUIRED (40-char hex)                        │
+│   └── dataset_id REQUIRED (non-empty)                       │
+│   └── promoted_at_utc REQUIRED (ISO8601 Z)                  │
+│   └── Fail-closed validation                                │
+│                                                              │
+└─────────────────────────────────────────────────────────────┘
+```
+
+#### Promotion CLI Usage
+
+```bash
+# Promote to SHADOW (validation)
+python -m scripts.promote_ml_model \
+    --model regime_classifier \
+    --stage shadow \
+    --artifact-dir ml/artifacts/regime_v2 \
+    --artifact-id regime_v2_candidate \
+    --dataset-id market_data_2026_q1 \
+    --notes "New candidate model for validation"
+
+# Promote to ACTIVE (production) - requires git_sha
+python -m scripts.promote_ml_model \
+    --model regime_classifier \
+    --stage active \
+    --artifact-dir ml/artifacts/regime_v2 \
+    --artifact-id regime_v2_prod \
+    --dataset-id market_data_2026_q1 \
+    --git-sha 93e64007df6e7823b09cdea24237bc8138be28aa \
+    --reason "Passed 7 days SHADOW validation" \
+    --notes "Promoted to production"
+
+# Dry-run mode (preview changes)
+python -m scripts.promote_ml_model \
+    --dry-run \
+    --model regime_classifier \
+    --stage active \
+    ...
+```
+
+#### Fail-Closed Guards
+
+| Guard | Rule | Enforcement |
+|-------|------|-------------|
+| **G-PROM-1** | ACTIVE requires git_sha (40-char hex) | Hard fail at promotion |
+| **G-PROM-2** | ACTIVE requires dataset_id (non-empty) | Hard fail at promotion |
+| **G-PROM-3** | ACTIVE requires promoted_at_utc (ISO8601 Z) | Auto-generated |
+| **G-PROM-4** | Path safety (no .., no absolute paths) | Hard fail at promotion |
+| **G-PROM-5** | Artifact integrity verification | Hard fail at promotion |
+| **G-PROM-6** | Max 50 history entries per model | Auto-truncate (newest first) |
+
+#### Audit Trail (history[])
+
+- **Newest first** (recommended): history[0] = most recent promotion
+- **Max 50 entries** per model (auto-truncated)
+- **Full pointer snapshot** preserved in each entry
+- **Actor tracking**: ML_PROMOTION_ACTOR env or git user.email
+- **Immutable history**: never delete, only append
+
+#### Registry Verification
+
+```bash
+# Verify registry + all artifacts
+python -m scripts.verify_ml_registry \
+    --path ml/registry/models.json \
+    --base-dir .
+
+# Output:
+# ✓ Registry schema: v1
+# ✓ Models: 1
+# ✓ regime_classifier/SHADOW: artifact valid (1 files verified)
+# ✓ regime_classifier/ACTIVE: artifact valid (1 files verified)
+# ✓ HISTORY: 1 entries
+# ✓ All checks passed
+```
+
 ---
 
 ## 12.11 Model Monitoring

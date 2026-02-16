@@ -161,6 +161,9 @@ def test_registry_with_both_stages(tmp_path: Path) -> None:
                         "active": {
                             "artifact_dir": "tests/testdata/onnx_artifacts/tiny_regime",
                             "artifact_id": "active_v1",
+                            "git_sha": "1234567890abcdef1234567890abcdef12345678",
+                            "dataset_id": "test_dataset_v1",
+                            "promoted_at_utc": "2026-01-01T00:00:00Z",
                         },
                     }
                 },
