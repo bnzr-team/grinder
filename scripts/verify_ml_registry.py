@@ -2,6 +2,7 @@
 """Verify ML model registry and referenced artifacts.
 
 M8-03c-1b: Validates registry schema, paths, and artifact integrity.
+M8-03c-3: Validates history[] audit trail.
 
 Usage:
     python -m scripts.verify_ml_registry --path ml/registry/models.json
@@ -101,6 +102,43 @@ def verify_registry(registry_path: Path, base_dir: Path | None = None) -> bool: 
                     logger.error("    ERROR: Artifact validation failed: %s", e)
                     all_valid = False
                     continue
+
+            # Verify history[]
+            model_history = registry.history.get(model_name, [])
+            logger.info("  HISTORY: %d entries", len(model_history))
+
+            if len(model_history) > 50:
+                logger.error("    ERROR: History exceeds max 50 entries: %d", len(model_history))
+                all_valid = False
+
+            for idx, event in enumerate(model_history):
+                # Validate timestamp format
+                if not event.ts_utc.endswith("Z"):
+                    logger.error(
+                        "    ERROR: History[%d] ts_utc must end with 'Z' (UTC): %s",
+                        idx,
+                        event.ts_utc,
+                    )
+                    all_valid = False
+
+                # Validate stage values
+                if event.to_stage not in [s.value for s in Stage]:
+                    logger.error(
+                        "    ERROR: History[%d] invalid to_stage: %s",
+                        idx,
+                        event.to_stage,
+                    )
+                    all_valid = False
+
+                if event.from_stage is not None and event.from_stage not in [
+                    s.value for s in Stage
+                ]:
+                    logger.error(
+                        "    ERROR: History[%d] invalid from_stage: %s",
+                        idx,
+                        event.from_stage,
+                    )
+                    all_valid = False
 
         logger.info("")
         if all_valid:
