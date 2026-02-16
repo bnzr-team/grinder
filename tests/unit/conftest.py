@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -33,8 +34,6 @@ def ml_registry_for_active(tmp_path: Path) -> Generator[tuple[str, str, str], No
             ml_stage=stage,
         )
     """
-    import shutil
-
     # Copy test artifact to tmp_path to avoid absolute path issues
     artifact_dst = tmp_path / "test_artifact"
     if TEST_ARTIFACT_DIR.exists():
