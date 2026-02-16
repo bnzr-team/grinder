@@ -233,3 +233,4 @@ Please ensure:
 - Code follows project style (ruff)
 - Type hints are complete (mypy)
 - Documentation is updated
+
