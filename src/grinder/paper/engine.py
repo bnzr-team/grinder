@@ -595,7 +595,7 @@ class PaperEngine:
                 # Get stage pointer
                 pointer = registry.get_stage_pointer(
                     self._ml_model_name,
-                    self._ml_stage  # type: ignore[arg-type]  # Stage enum conversion handled by registry
+                    self._ml_stage,  # type: ignore[arg-type]  # Stage enum conversion handled by registry
                 )
 
                 if pointer is None:
@@ -620,9 +620,7 @@ class PaperEngine:
 
             except Exception as e:
                 # Registry resolution failed - fail-closed
-                raise ValueError(
-                    f"Failed to resolve artifact from registry: {e}"
-                ) from e
+                raise ValueError(f"Failed to resolve artifact from registry: {e}") from e
 
         # Path 2: Legacy fallback (onnx_artifact_dir)
         if self._onnx_artifact_dir:
