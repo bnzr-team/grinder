@@ -25,7 +25,7 @@ This section reflects **what is verified and merged on main** as of PR #117.
 | M5 — Observability Polish | ✅ Done | 2026-02-07 |
 | M6 — HA Leader Election | ✅ Done | 2026-02-08 |
 | M7 — Smart Grid v2.0 | ✅ Done | — |
-| M8 — ML Integration | 🔜 Planned | — |
+| M8 — ML Integration | 🚧 In Progress | — |
 | M9 — Multi-venue | 🔜 Planned | — |
 
 ### Stage D/E E2E Mainnet Verification
@@ -315,7 +315,7 @@ All 11 determinism fixtures pass (`verify_determinism_suite.py`).
 
 ---
 
-### M8 — ML Integration — 🔜 Planned
+### M8 — ML Integration — 🚧 In Progress
 
 **Goal:** ML-assisted regime classification and parameter tuning
 
@@ -327,9 +327,22 @@ All 11 determinism fixtures pass (`verify_determinism_suite.py`).
 - Inference integration with determinism tests
 - Feature store for training data
 
-**Current state:**
-- `src/grinder/ml/` — empty placeholder
-- Spec exists, no implementation
+**Current state (2026-02-16):**
+- M8-00: Spec — ✅ Done (PR #134)
+- M8-01: Stubs — ✅ Done (PR #140, #141, #142, #143)
+- M8-02a: Artifact plumbing — ✅ Done (PR #144)
+- M8-02b: Shadow mode — ✅ Done (PR #145)
+- M8-02c: Active inference (ADR-065) — ✅ Done (PR #146, #147, #148, #149)
+- M8-02d: Latency histogram — ✅ Done (PR #151)
+- M8-02e: Grafana dashboards — ✅ Done (PR #154)
+- M8-03a: Artifact pack + build CLI — ✅ Done (PR #150)
+- M8-03b-1: Training pipeline MVP — ✅ Done (PR #152)
+- M8-03b-2: Runtime integration + determinism — ✅ Done (PR #153)
+- M8-03c-1a: Registry spec + runbook — ✅ Done (PR #155)
+- M8-03c-1b: Registry implementation — ✅ Done (PR #157)
+- M8-03c-2: PaperEngine config wiring — ✅ Done (PR #158)
+- M8-03c-3: Promotion CLI + history — ✅ Done (PR #159)
+- Remaining: Feature store for training data (not yet scoped)
 
 ---
 
