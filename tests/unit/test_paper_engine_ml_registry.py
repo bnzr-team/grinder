@@ -90,7 +90,7 @@ def test_active_mode_requires_registry(tmp_path: Path) -> None:
     # Attempt ACTIVE mode with legacy config (should fail)
     with pytest.raises(
         ValueError,
-        match="ACTIVE mode requires ML registry.*Legacy onnx_artifact_dir is not allowed",
+        match=r"ACTIVE mode requires ML registry.*Legacy onnx_artifact_dir is not allowed",
     ):
         PaperEngine(
             ml_active_enabled=True,
@@ -206,7 +206,7 @@ def test_registry_resolution_stage_not_configured(tmp_path: Path) -> None:
     # Attempt to resolve null stage
     with pytest.raises(
         ValueError,
-        match="Failed to resolve artifact from registry.*No shadow stage pointer",
+        match=r"Failed to resolve artifact from registry.*No shadow stage pointer",
     ):
         PaperEngine(
             ml_shadow_mode=True,
