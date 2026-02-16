@@ -50,7 +50,7 @@ from grinder.ml.metrics import (
     set_ml_active_on,
 )
 from grinder.ml.onnx import ONNX_AVAILABLE, OnnxMlModel
-from grinder.ml.onnx.registry import ModelRegistry, RegistryError
+from grinder.ml.onnx.registry import ModelRegistry, RegistryError, Stage
 from grinder.paper.cycle_engine import CycleEngine
 from grinder.paper.fills import Fill, check_pending_fills, simulate_fills
 from grinder.paper.ledger import Ledger
@@ -592,11 +592,11 @@ class PaperEngine:
                 registry_path = Path(self._ml_registry_path)
                 registry = ModelRegistry.load(registry_path)
 
+                # Convert string stage to Stage enum
+                stage_enum = Stage(self._ml_stage)
+
                 # Get stage pointer
-                pointer = registry.get_stage_pointer(
-                    self._ml_model_name,
-                    self._ml_stage,  # type: ignore[arg-type]  # Stage enum conversion handled by registry
-                )
+                pointer = registry.get_stage_pointer(self._ml_model_name, stage_enum)
 
                 if pointer is None:
                     raise RegistryError(
