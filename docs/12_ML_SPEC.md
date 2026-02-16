@@ -1006,8 +1006,123 @@ Integration tests ([tests/integration/test_registry_to_predict_roundtrip.py](../
 - [tests/integration/test_registry_to_predict_roundtrip.py](../../tests/integration/test_registry_to_predict_roundtrip.py:1) - 3 integration tests
 - [ml/registry/README.md](../../ml/registry/README.md:1) - Usage guide
 
+---
+
+#### M8-03c-2: PaperEngine Config Wiring
+
+**Status:** 🚧 In Progress (PR #TBD)
+
+**Goal:** Wire ML registry into PaperEngine runtime for artifact resolution.
+
+**Deliverables:**
+- [x] Add `ml_registry_path`, `ml_model_name`, `ml_stage` config fields to PaperEngine
+- [x] Implement `_resolve_onnx_artifact_dir()` with resolution order: registry → legacy → none
+- [x] Fail-closed guard for ACTIVE mode (no legacy fallback)
+- [x] Update determinism suite to accept new registry config fields
+- [x] Unit tests for registry resolution paths
+- [ ] Integration test: determinism suite → registry → artifact → predict
+
+**Resolution Logic:**
+
+```python
+def _resolve_onnx_artifact_dir(self) -> tuple[str | None, str]:
+    """Resolve ONNX artifact directory (M8-03c-2).
+
+    Resolution order:
+    1. Registry (ml_registry_path + ml_model_name + ml_stage)
+    2. Legacy (onnx_artifact_dir) - SHADOW only
+    3. None (ML disabled)
+
+    Returns:
+        (artifact_dir, source) where source in {"registry", "legacy", "none"}
+    """
+    # Path 1: Registry resolution
+    if self._ml_registry_path and self._ml_model_name:
+        registry = ModelRegistry.load(Path(self._ml_registry_path))
+        pointer = registry.get_stage_pointer(self._ml_model_name, self._ml_stage)
+        if pointer is None:
+            raise ValueError(f"No {self._ml_stage} pointer for {self._ml_model_name}")
+        artifact_dir = registry.resolve_artifact_dir(pointer, base_dir)
+        return str(artifact_dir), "registry"
+
+    # Path 2: Legacy fallback (onnx_artifact_dir)
+    if self._onnx_artifact_dir:
+        return self._onnx_artifact_dir, "legacy"
+
+    # Path 3: No artifact configured
+    return None, "none"
+```
+
+**Fail-Closed Guards:**
+
+| Guard | Rule | Enforcement |
+|-------|------|-------------|
+| G-REG-1 | ACTIVE mode + legacy source → error | Hard fail at init |
+| G-REG-2 | ACTIVE mode + registry missing → error | Hard fail at init |
+| G-REG-3 | Registry resolution failure → error | Hard fail at init |
+| G-REG-4 | SHADOW mode + legacy → allowed | Backward compat |
+
+**PaperEngine Config:**
+
+```python
+# New registry-based config (preferred)
+engine = PaperEngine(
+    ml_shadow_mode=True,
+    ml_infer_enabled=True,
+    ml_registry_path="ml/registry/models.json",
+    ml_model_name="regime_classifier",
+    ml_stage="shadow",  # default: "shadow"
+)
+
+# Legacy config (backward compatible, SHADOW only)
+engine = PaperEngine(
+    ml_shadow_mode=True,
+    ml_infer_enabled=True,
+    onnx_artifact_dir="tests/testdata/onnx_artifacts/golden_regime",
+)
+
+# ACTIVE mode (must use registry)
+engine = PaperEngine(
+    ml_active_enabled=True,
+    ml_infer_enabled=True,
+    ml_active_ack="I_UNDERSTAND_THIS_AFFECTS_TRADING",
+    ml_registry_path="ml/registry/models.json",
+    ml_model_name="regime_classifier",
+    ml_stage="active",
+)
+```
+
+**Determinism Suite Integration:**
+
+```yaml
+# tests/determinism/golden_suite/paper_with_ml_registry/fixture_config.json
+{
+  "ml_enabled": false,
+  "ml_shadow_mode": true,
+  "ml_infer_enabled": true,
+  "ml_registry_path": "ml/registry/models.json",
+  "ml_model_name": "regime_classifier",
+  "ml_stage": "shadow"
+}
+```
+
+**Test Coverage:**
+
+Unit tests ([tests/unit/test_paper_engine_ml_registry.py](../../tests/unit/test_paper_engine_ml_registry.py:1)):
+- Registry resolution in SHADOW mode
+- Registry resolution in ACTIVE mode
+- Legacy fallback in SHADOW mode
+- ACTIVE mode blocks legacy (G-REG-1)
+- Registry resolution failure handling
+- Stage pointer null handling
+- Default stage="shadow"
+
+**Source files:**
+- [src/grinder/paper/engine.py](../../src/grinder/paper/engine.py:563) - Resolution logic (56 lines)
+- [scripts/verify_determinism_suite.py](../../scripts/verify_determinism_suite.py:84) - Config wiring (79 lines)
+- [tests/unit/test_paper_engine_ml_registry.py](../../tests/unit/test_paper_engine_ml_registry.py:1) - 9 unit tests
+
 **Next Steps:**
-- M8-03c-2: PaperEngine config wiring (`ml_registry_path`, `ml_model_name`, `ml_stage`)
 - M8-03c-3: Promotion CLI script (`promote_model.py`)
 
 ---

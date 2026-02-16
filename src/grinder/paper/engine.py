@@ -50,6 +50,7 @@ from grinder.ml.metrics import (
     set_ml_active_on,
 )
 from grinder.ml.onnx import ONNX_AVAILABLE, OnnxMlModel
+from grinder.ml.onnx.registry import ModelRegistry, RegistryError
 from grinder.paper.cycle_engine import CycleEngine
 from grinder.paper.fills import Fill, check_pending_fills, simulate_fills
 from grinder.paper.ledger import Ledger
@@ -315,6 +316,10 @@ class PaperEngine:
         ml_shadow_mode: bool = False,
         ml_infer_enabled: bool = False,
         onnx_artifact_dir: str | None = None,
+        # M8-03c-2: ML registry wiring
+        ml_registry_path: str | None = None,
+        ml_model_name: str | None = None,
+        ml_stage: str = "shadow",
         # M8-02c ACTIVE mode config (ADR-065)
         ml_active_enabled: bool = False,
         ml_active_ack: str | None = None,
@@ -372,8 +377,15 @@ class PaperEngine:
             l2_execution_impact_threshold_bps: Impact threshold in bps to skip order (default 50)
             ml_enabled: Enable ML signal integration (default False for safe-by-default)
             ml_shadow_mode: Enable ONNX shadow mode (load model but don't affect decisions)
-            ml_infer_enabled: Enable ONNX inference (requires onnx_artifact_dir)
-            onnx_artifact_dir: Path to ONNX artifact directory with manifest.json
+            ml_infer_enabled: Enable ONNX inference (requires onnx_artifact_dir or registry)
+            onnx_artifact_dir: Path to ONNX artifact directory with manifest.json (legacy)
+            ml_registry_path: Path to ML model registry JSON (M8-03c-2)
+            ml_model_name: Model name to resolve from registry (M8-03c-2)
+            ml_stage: Model stage to use (shadow/active, default shadow) (M8-03c-2)
+            ml_active_enabled: Enable ACTIVE mode (requires ml_infer_enabled)
+            ml_active_ack: Explicit acknowledgment for ACTIVE mode
+            ml_kill_switch: Kill-switch to disable ML inference (config)
+            ml_active_allowed_envs: Environment allowlist for ACTIVE mode
         """
         # Policy and execution
         self._policy = StaticGridPolicy(
@@ -523,12 +535,22 @@ class PaperEngine:
         self._onnx_artifact_dir = onnx_artifact_dir
         self._onnx_model: OnnxMlModel | None = None
 
+        # M8-03c-2: ML registry config
+        self._ml_registry_path = ml_registry_path
+        self._ml_model_name = ml_model_name
+        self._ml_stage = ml_stage
+
         # M8-02c: ACTIVE mode config (ADR-065)
         self._ml_active_enabled = ml_active_enabled
         self._ml_active_ack = ml_active_ack
         self._ml_kill_switch = ml_kill_switch
         self._ml_active_allowed_envs = ml_active_allowed_envs or []
         self._grinder_env = os.environ.get("GRINDER_ENV", "")
+
+        # M8-03c-2: Resolve artifact directory from registry or legacy
+        artifact_dir, artifact_source = self._resolve_onnx_artifact_dir()
+        self._onnx_artifact_dir = artifact_dir
+        self._onnx_artifact_source = artifact_source
 
         # M8-02b/02c: Config validation guards
         self._validate_onnx_config()
@@ -547,6 +569,72 @@ class PaperEngine:
         # Last prices for unrealized PnL calculation
         self._last_prices: dict[str, Decimal] = {}
 
+    def _resolve_onnx_artifact_dir(self) -> tuple[str | None, str]:
+        """Resolve ONNX artifact directory from registry or legacy config (M8-03c-2).
+
+        Resolution order:
+        1. Registry (ml_registry_path + ml_model_name + ml_stage)
+        2. Legacy (onnx_artifact_dir) - SHADOW only
+        3. None (ML disabled)
+
+        Returns:
+            Tuple of (artifact_dir: str | None, source: str) where source is:
+            - "registry": Resolved from ML model registry
+            - "legacy": Using legacy onnx_artifact_dir
+            - "none": No artifact configured
+
+        Raises:
+            ValueError: If registry resolution fails with invalid config.
+        """
+        # Path 1: Registry resolution
+        if self._ml_registry_path and self._ml_model_name:
+            try:
+                registry_path = Path(self._ml_registry_path)
+                registry = ModelRegistry.load(registry_path)
+
+                # Get stage pointer
+                pointer = registry.get_stage_pointer(
+                    self._ml_model_name,
+                    self._ml_stage  # type: ignore[arg-type]  # Stage enum conversion handled by registry
+                )
+
+                if pointer is None:
+                    raise RegistryError(
+                        f"No {self._ml_stage} stage pointer for model '{self._ml_model_name}' "
+                        f"in registry {self._ml_registry_path}"
+                    )
+
+                # Resolve artifact directory (relative to registry parent)
+                base_dir = registry_path.parent
+                artifact_dir = registry.resolve_artifact_dir(pointer, base_dir)
+
+                logger.info(
+                    "ML_REGISTRY_RESOLVED: model=%s stage=%s artifact_dir=%s artifact_id=%s",
+                    self._ml_model_name,
+                    self._ml_stage,
+                    artifact_dir,
+                    pointer.artifact_id,
+                )
+
+                return str(artifact_dir), "registry"
+
+            except Exception as e:
+                # Registry resolution failed - fail-closed
+                raise ValueError(
+                    f"Failed to resolve artifact from registry: {e}"
+                ) from e
+
+        # Path 2: Legacy fallback (onnx_artifact_dir)
+        if self._onnx_artifact_dir:
+            logger.info(
+                "ML_LEGACY_FALLBACK: artifact_dir=%s",
+                self._onnx_artifact_dir,
+            )
+            return self._onnx_artifact_dir, "legacy"
+
+        # Path 3: No artifact configured
+        return None, "none"
+
     def _validate_onnx_config(self) -> None:
         """Validate ONNX configuration (M8-02b/02c guards).
 
@@ -558,6 +646,9 @@ class PaperEngine:
             G5: ml_active_enabled=True + onnx_artifact_dir=None → ConfigError
             G6: ml_active_enabled=True + env not in ml_active_allowed_envs → ConfigError
             G7: ml_active_enabled=True + manifest invalid → ConfigError (checked at load time)
+
+        Guards (M8-03c-2):
+            G-REG-1: ml_active_enabled=True + artifact_source="legacy" → ConfigError (no legacy for ACTIVE)
 
         Raises:
             ValueError: If configuration is invalid.
@@ -590,6 +681,13 @@ class PaperEngine:
                     f"ACTIVE mode requires explicit acknowledgment. "
                     f'Set ml_active_ack="{expected_ack}"'
                 )
+
+        # G-REG-1: ACTIVE mode must use registry (no legacy fallback)
+        if self._ml_active_enabled and self._onnx_artifact_source == "legacy":
+            raise ValueError(
+                "ACTIVE mode requires ML registry (ml_registry_path + ml_model_name). "
+                "Legacy onnx_artifact_dir is not allowed for ACTIVE mode (fail-closed policy)."
+            )
 
         # G5: ACTIVE requires artifact directory
         if self._ml_active_enabled and not self._onnx_artifact_dir:
@@ -706,9 +804,10 @@ class PaperEngine:
         try:
             self._onnx_model = OnnxMlModel.load_from_dir(Path(self._onnx_artifact_dir))
             logger.info(
-                "ML_MODE_INIT: mode=%s artifact_dir=%s",
+                "ML_MODE_INIT: mode=%s artifact_dir=%s source=%s",
                 "ACTIVE" if self._ml_active_enabled else "SHADOW",
                 self._onnx_artifact_dir,
+                self._onnx_artifact_source,
             )
         except Exception as e:
             if self._ml_active_enabled:

@@ -107,6 +107,10 @@ class FixtureConfig:
     ml_shadow_mode: bool
     ml_infer_enabled: bool
     onnx_artifact_dir: str | None
+    # M8-03c-2: ML registry wiring
+    ml_registry_path: str | None
+    ml_model_name: str | None
+    ml_stage: str
 
 
 def parse_fixture_config(fixture_path: Path, config: dict[str, Any]) -> FixtureConfig:
@@ -170,6 +174,11 @@ def parse_fixture_config(fixture_path: Path, config: dict[str, Any]) -> FixtureC
     ml_infer_enabled = bool(config.get("ml_infer_enabled", False))
     onnx_artifact_dir = config.get("onnx_artifact_dir")
 
+    # M8-03c-2: ML registry wiring (safe-by-default: None/shadow)
+    ml_registry_path = config.get("ml_registry_path")
+    ml_model_name = config.get("ml_model_name")
+    ml_stage = config.get("ml_stage", "shadow")
+
     return FixtureConfig(
         controller_enabled=controller_enabled,
         feature_engine_enabled=feature_engine_enabled,
@@ -192,6 +201,9 @@ def parse_fixture_config(fixture_path: Path, config: dict[str, Any]) -> FixtureC
         ml_shadow_mode=ml_shadow_mode,
         ml_infer_enabled=ml_infer_enabled,
         onnx_artifact_dir=onnx_artifact_dir,
+        ml_registry_path=ml_registry_path,
+        ml_model_name=ml_model_name,
+        ml_stage=ml_stage,
     )
 
 
@@ -251,6 +263,10 @@ def run_paper(
     ml_shadow_mode: bool = False,
     ml_infer_enabled: bool = False,
     onnx_artifact_dir: str | None = None,
+    # M8-03c-2 ML registry wiring
+    ml_registry_path: str | None = None,
+    ml_model_name: str | None = None,
+    ml_stage: str = "shadow",
 ) -> str:
     """Run paper trading and return digest."""
     # Convert symbol_constraints dict to SymbolConstraints objects
@@ -281,6 +297,9 @@ def run_paper(
         "ml_shadow_mode": ml_shadow_mode,
         "ml_infer_enabled": ml_infer_enabled,
         "onnx_artifact_dir": onnx_artifact_dir,
+        "ml_registry_path": ml_registry_path,
+        "ml_model_name": ml_model_name,
+        "ml_stage": ml_stage,
     }
     if size_per_level is not None:
         kwargs["size_per_level"] = size_per_level
@@ -349,6 +368,9 @@ def check_fixture(fixture_path: Path, verbose: bool = False) -> FixtureCheck:
             ml_shadow_mode=fc.ml_shadow_mode,
             ml_infer_enabled=fc.ml_infer_enabled,
             onnx_artifact_dir=fc.onnx_artifact_dir,
+            ml_registry_path=fc.ml_registry_path,
+            ml_model_name=fc.ml_model_name,
+            ml_stage=fc.ml_stage,
         )
         paper_2 = run_paper(
             fixture_path,
@@ -371,6 +393,9 @@ def check_fixture(fixture_path: Path, verbose: bool = False) -> FixtureCheck:
             ml_shadow_mode=fc.ml_shadow_mode,
             ml_infer_enabled=fc.ml_infer_enabled,
             onnx_artifact_dir=fc.onnx_artifact_dir,
+            ml_registry_path=fc.ml_registry_path,
+            ml_model_name=fc.ml_model_name,
+            ml_stage=fc.ml_stage,
         )
     except Exception as e:
         errors.append(f"Paper error: {e}")
