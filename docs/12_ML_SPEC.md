@@ -913,7 +913,7 @@ onnx_artifact_dir: "artifacts/onnx/regime_v2026_02_15_001"
 
 #### M8-03c-1b: Registry Implementation
 
-**Status:** ✅ Done (PR #156)
+**Status:** 🚧 In Review (PR #157)
 
 **Goal:** Implement Git-based model registry with strict validation and CLI tools.
 
