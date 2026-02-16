@@ -630,6 +630,8 @@ FEATURE_ORDER = (
 
 ### M8-03: Training & Export Pipeline
 
+**Scope:** Reproducible training pipeline for ONNX model artifacts.
+
 #### M8-03a: Artifact Pack Spec + Build CLI
 
 **Status:** 🚧 In Progress
@@ -663,6 +665,128 @@ python -m scripts.build_onnx_artifact \
 - Artifact passes `verify_onnx_artifact.py` validation
 - `feature_order` matches SSOT (warning logged if mismatch)
 - `git_sha` null with warning if not in git repo
+
+#### M8-03b-1: Training/Export Pipeline MVP
+
+**Status:** ✅ Done (PR #152)
+
+**Deliverables:**
+- [x] `scripts/train_regime_model.py` CLI for training and ONNX export
+- [x] Deterministic data generation with seed control
+- [x] RandomForest classifier → ONNX conversion via skl2onnx
+- [x] Golden test artifact (`tests/testdata/onnx_artifacts/golden_regime/`)
+- [x] 23 unit tests for training pipeline
+- [x] 5 integration tests for train→artifact→inference roundtrip
+
+**CLI Usage:**
+```bash
+# Basic training with defaults
+python -m scripts.train_regime_model \
+    --out-dir /tmp/regime_v1 \
+    --dataset-id production_data
+
+# Custom parameters
+python -m scripts.train_regime_model \
+    --out-dir /tmp/regime_v2 \
+    --dataset-id production_data \
+    --seed 42 \
+    --n-samples 1000 \
+    --notes "Initial production model"
+```
+
+**Output Artifact:**
+```
+<out-dir>/
+├── model.onnx          # ONNX model file
+├── manifest.json       # Artifact manifest with SHA256
+└── train_report.json   # Training metrics and metadata
+```
+
+**train_report.json Schema:**
+```json
+{
+  "dataset_id": "production_data",
+  "n_samples": 1000,
+  "seed": 42,
+  "n_features": 15,
+  "train_accuracy": 0.95,
+  "regime_distribution": {"LOW": 50, "MID": 400, "HIGH": 550},
+  "created_at": "2026-02-15T00:00:00Z",
+  "model_sha256": "abc123...",
+  "onnx_opset_version": 15,
+  "sklearn_version": "1.8.0",
+  "skl2onnx_version": "1.20.0"
+}
+```
+
+**Determinism Guarantees:**
+- Same `--seed` + `--dataset-id` + `--n-samples` → identical model SHA256
+- Achieved by:
+  1. Deterministic synthetic data generation (numpy rng with combined seed)
+  2. sklearn RandomForest with `random_state=seed`, `n_jobs=1`
+  3. Fixed ONNX graph name (skl2onnx defaults to random UUID)
+
+**Model Contract:**
+- Input: `"input"` tensor shape `(batch, 15)` matching `FEATURE_ORDER`
+- Output: `"regime_probs"` tensor shape `(batch, 3)` for [LOW, MID, HIGH]
+- No spacing_multiplier in MVP (defaults to 1.0 in OnnxMlModel)
+
+**Dependencies:**
+```toml
+# pyproject.toml [project.optional-dependencies]
+ml = [
+    "scikit-learn>=1.4,<2.0",
+    "onnx>=1.15,<2.0",
+    "onnxruntime>=1.17,<2.0",
+    "skl2onnx>=1.16,<2.0",  # M8-03b: sklearn to ONNX conversion
+]
+```
+
+**Source files:**
+- `scripts/train_regime_model.py` - Training CLI
+- `tests/unit/test_train_regime_model.py` - Unit tests
+- `tests/integration/test_train_to_artifact_roundtrip.py` - Integration tests
+- `tests/testdata/onnx_artifacts/golden_regime/` - Golden test artifact
+
+#### M8-03b-2: Runtime Integration & Determinism
+
+**Status:** ✅ Done (PR #153)
+
+**Scope:** Validate that artifacts from M8-03b-1 integrate correctly with `OnnxMlModel`
+runtime and produce bit-for-bit identical predictions for fixed inputs.
+
+**Deliverables:**
+- [x] Golden artifact runtime tests (load twice → predict → compare)
+- [x] `test_vectorize_order_matches_feature_order_exactly` - SSOT contract verification
+- [x] Full FEATURE_ORDER fixture (all 15 features populated)
+- [x] Multiple prediction stability test
+
+**Determinism Guarantees:**
+
+Two types of determinism are validated:
+
+1. **Training determinism** (M8-03b-1):
+   - Same `--seed` + `--dataset-id` + `--n-samples` → identical model SHA256
+   - Verified by comparing model hashes from two independent training runs
+
+2. **Runtime determinism** (M8-03b-2):
+   - Same model file + same input features → identical output
+   - Verified by loading model twice, predicting, and comparing `regime_probs_bps`
+   - No float comparison (all outputs are quantized to bps/x1000 integers)
+
+**Test Matrix:**
+
+| Test | What it validates |
+|------|-------------------|
+| `test_golden_load_twice_predict_identical` | Runtime determinism across model instances |
+| `test_golden_multiple_predictions_stable` | Prediction stability within single instance |
+| `test_golden_predict_with_full_feature_vector` | All 15 FEATURE_ORDER features work |
+| `test_vectorize_order_matches_feature_order_exactly` | SSOT vectorize contract |
+| `test_vectorize_preserves_feature_order_tuple` | FEATURE_ORDER is immutable (15 elements) |
+
+**Source files:**
+- `tests/unit/test_onnx_model.py` - Runtime determinism tests
+- `src/grinder/ml/onnx/features.py` - SSOT FEATURE_ORDER and vectorize()
 
 ---
 

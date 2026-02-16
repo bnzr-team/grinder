@@ -43,7 +43,9 @@ from grinder.gating import GateReason, GatingResult, RateLimiter, RiskGate, Toxi
 from grinder.ml import MlSignalSnapshot
 from grinder.ml.metrics import (
     MlBlockReason,
+    MlInferenceMode,
     record_ml_inference_error,
+    record_ml_inference_latency,
     record_ml_inference_success,
     set_ml_active_on,
 )
@@ -748,6 +750,9 @@ class PaperEngine:
             prediction = self._onnx_model.predict(ts, symbol, policy_features)
             latency_ms = (time.perf_counter() - start_time) * 1000
 
+            # M8-02d: Record latency in histogram
+            record_ml_inference_latency(latency_ms, MlInferenceMode.SHADOW)
+
             if prediction is not None:
                 # Log shadow prediction event (structured log)
                 logger.info(
@@ -761,7 +766,6 @@ class PaperEngine:
                     latency_ms,
                 )
             else:
-                latency_ms = (time.perf_counter() - start_time) * 1000
                 logger.debug(
                     "ML_SHADOW_PREDICTION: ts=%d symbol=%s result=None latency_ms=%.2f",
                     ts,
@@ -771,6 +775,8 @@ class PaperEngine:
 
         except Exception as e:
             latency_ms = (time.perf_counter() - start_time) * 1000
+            # M8-02d: Record latency even on error
+            record_ml_inference_latency(latency_ms, MlInferenceMode.SHADOW)
             logger.warning(
                 "ML_SHADOW_PREDICTION: ts=%d symbol=%s error=%s latency_ms=%.2f",
                 ts,
@@ -807,6 +813,9 @@ class PaperEngine:
             prediction = self._onnx_model.predict(ts, symbol, policy_features)
             latency_ms = (time.perf_counter() - start_time) * 1000
 
+            # M8-02d: Record latency in histogram
+            record_ml_inference_latency(latency_ms, MlInferenceMode.ACTIVE)
+
             if prediction is None:
                 logger.warning(
                     "ML_ACTIVE_BLOCKED: ts=%d symbol=%s reason=PREDICTION_NONE latency_ms=%.2f",
@@ -841,6 +850,8 @@ class PaperEngine:
             # M8-02c-2: Record inference error
             record_ml_inference_error()
             latency_ms = (time.perf_counter() - start_time) * 1000
+            # M8-02d: Record latency even on error
+            record_ml_inference_latency(latency_ms, MlInferenceMode.ACTIVE)
             logger.error(
                 "ML_INFER_ERROR: ts=%d symbol=%s error=%s latency_ms=%.2f artifact_dir=%s",
                 ts,

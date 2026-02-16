@@ -1,8 +1,9 @@
-"""ML observability metrics (M8-02c-2, ADR-065).
+"""ML observability metrics (M8-02c-2, ADR-065, M8-02d).
 
 Provides:
 - Reason codes for ACTIVE mode blocking (SSOT constants)
 - ML active gauge state (per-snapshot 0/1)
+- Latency histogram for inference SLO tracking (M8-02d)
 - Prometheus metrics export
 
 Reason code priority (first match wins):
@@ -16,12 +17,29 @@ Reason code priority (first match wins):
 8. MANIFEST_INVALID - manifest.json invalid or missing
 9. MODEL_NOT_LOADED - ONNX model is None
 10. ENV_NOT_ALLOWED - GRINDER_ENV not in allowlist
+
+Latency SLO thresholds (M8-02d):
+- p95 < 50ms (target)
+- p99 < 100ms (warning)
+- p99.9 < 250ms (critical)
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import StrEnum
+
+
+class MlInferenceMode(StrEnum):
+    """Inference mode label for latency histogram."""
+
+    SHADOW = "shadow"
+    ACTIVE = "active"
+
+
+# Histogram buckets for inference latency (milliseconds)
+# Covers typical ONNX inference: 1ms to 500ms range
+LATENCY_BUCKETS_MS: tuple[float, ...] = (1.0, 2.0, 5.0, 10.0, 25.0, 50.0, 100.0, 250.0, 500.0)
 
 
 class MlBlockReason(StrEnum):
@@ -53,6 +71,9 @@ class MlMetricsState:
         block_counts: Count of blocks by reason {reason: count}
         inference_count: Total successful inferences
         inference_error_count: Total inference errors
+        latency_samples: Histogram samples by mode {mode: [latency_ms, ...]}
+        latency_sum: Sum of latency samples by mode {mode: total_ms}
+        latency_count: Count of latency samples by mode {mode: count}
     """
 
     ml_active_on: int = 0
@@ -60,6 +81,10 @@ class MlMetricsState:
     block_counts: dict[str, int] = field(default_factory=dict)
     inference_count: int = 0
     inference_error_count: int = 0
+    # Histogram state: latency_buckets tracks cumulative counts per mode
+    latency_buckets: dict[str, dict[float, int]] = field(default_factory=dict)
+    latency_sum: dict[str, float] = field(default_factory=dict)
+    latency_count: dict[str, int] = field(default_factory=dict)
 
 
 # Module-level state for ML metrics (updated per-snapshot)
@@ -104,6 +129,34 @@ def record_ml_inference_error() -> None:
     state.inference_error_count += 1
 
 
+def record_ml_inference_latency(latency_ms: float, mode: MlInferenceMode) -> None:
+    """Record ML inference latency observation (M8-02d).
+
+    Updates histogram buckets, sum, and count for the given mode.
+
+    Args:
+        latency_ms: Inference latency in milliseconds
+        mode: Inference mode (shadow or active)
+    """
+    state = get_ml_metrics_state()
+    mode_key = mode.value
+
+    # Initialize buckets for this mode if needed
+    if mode_key not in state.latency_buckets:
+        state.latency_buckets[mode_key] = dict.fromkeys(LATENCY_BUCKETS_MS, 0)
+        state.latency_sum[mode_key] = 0.0
+        state.latency_count[mode_key] = 0
+
+    # Update histogram buckets (cumulative)
+    for bucket in LATENCY_BUCKETS_MS:
+        if latency_ms <= bucket:
+            state.latency_buckets[mode_key][bucket] += 1
+
+    # Update sum and count
+    state.latency_sum[mode_key] += latency_ms
+    state.latency_count[mode_key] += 1
+
+
 def reset_ml_metrics_state() -> None:
     """Reset ML metrics state (for testing)."""
     _ml_state[0] = None
@@ -140,5 +193,33 @@ def ml_metrics_to_prometheus_lines() -> list[str]:
             f"grinder_ml_inference_errors_total {state.inference_error_count}",
         ]
     )
+
+    # Latency histogram (M8-02d)
+    lines.extend(
+        [
+            "# HELP grinder_ml_inference_latency_ms ML inference latency in milliseconds",
+            "# TYPE grinder_ml_inference_latency_ms histogram",
+        ]
+    )
+
+    for mode in MlInferenceMode:
+        mode_key = mode.value
+        buckets = state.latency_buckets.get(mode_key, {})
+        total_sum = state.latency_sum.get(mode_key, 0.0)
+        total_count = state.latency_count.get(mode_key, 0)
+
+        # Emit bucket lines (already cumulative from recording)
+        for bucket in LATENCY_BUCKETS_MS:
+            bucket_count = buckets.get(bucket, 0)
+            lines.append(
+                f'grinder_ml_inference_latency_ms_bucket{{mode="{mode_key}",le="{bucket}"}} {bucket_count}'
+            )
+        # +Inf bucket (always equals total count)
+        lines.append(
+            f'grinder_ml_inference_latency_ms_bucket{{mode="{mode_key}",le="+Inf"}} {total_count}'
+        )
+        # Sum and count
+        lines.append(f'grinder_ml_inference_latency_ms_sum{{mode="{mode_key}"}} {total_sum}')
+        lines.append(f'grinder_ml_inference_latency_ms_count{{mode="{mode_key}"}} {total_count}')
 
     return lines

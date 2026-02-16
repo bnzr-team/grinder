@@ -72,6 +72,7 @@ ml = [
     "shap>=0.44,<1.0",
     "onnx>=1.15,<2.0",  # M8-02b: ONNX model format
     "onnxruntime>=1.17,<2.0",  # M8-02b: ONNX inference
+    "skl2onnx>=1.16,<2.0",  # M8-03b: sklearn to ONNX conversion
 ]
 backtest = [
     "pandas>=2.0,<3.0",
@@ -191,12 +192,22 @@ module = [
     "shap.*",
     "redis.*",
     "requests.*",
+    "sklearn",  # M8-03b: sklearn has no py.typed
+    "sklearn.*",  # M8-03b: sklearn has no py.typed
+    "skl2onnx",  # M8-03b: skl2onnx has no py.typed
+    "skl2onnx.*",  # M8-03b: skl2onnx has no py.typed
+    "onnx",  # M8-03b: optional ML dep
+    "onnx.*",  # M8-03b: optional ML dep
 ]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
 module = "grinder.ha.leader"
 disable_error_code = ["type-arg", "union-attr"]
+
+[[tool.mypy.overrides]]
+module = "scripts.train_regime_model"
+disable_error_code = ["import-untyped"]
 
 # ============================================================================
 # Pytest Configuration
