@@ -184,7 +184,10 @@ def promote_model(  # noqa: PLR0912, PLR0915
     if actor:
         logger.info("Actor: %s", actor)
     else:
-        logger.info("Actor: null (no ML_PROMOTION_ACTOR or git user.email)")
+        logger.warning(
+            "Actor: null — set ML_PROMOTION_ACTOR env or git config user.email "
+            "for production audit trail"
+        )
 
     # Get current timestamp (UTC, Z suffix)
     ts = datetime.now(timezone.utc).isoformat(timespec="seconds")  # noqa: UP017
@@ -194,13 +197,12 @@ def promote_model(  # noqa: PLR0912, PLR0915
     with registry_path.open() as f:
         registry_data: dict[str, Any] = json.load(f)
 
-    # Get current pointer for this stage (to move to history)
-    current_pointer_data = registry_data["models"][model_name].get(stage.value)
-
     # Create history event
+    # from_stage is None: CLI sets target stage directly, no cross-stage tracking.
+    # Cross-stage lineage (e.g., shadow→active) can be inferred from history sequence.
     history_event = {
         "ts_utc": promoted_at_utc,
-        "from_stage": None if current_pointer_data is None else stage.value,
+        "from_stage": None,
         "to_stage": stage.value,
         "actor": actor,
         "source": "cli",
