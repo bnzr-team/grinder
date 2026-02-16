@@ -481,7 +481,7 @@ M8 (ML Integration) is divided into three sub-milestones.
 - [x] `verify_onnx_artifact.py` script
 - [x] 19 unit tests for artifact validation
 
-**ONNX Artifact v1 Format:**
+**ONNX Artifact v1 Format (legacy):**
 ```json
 {
   "schema_version": "v1",
@@ -494,11 +494,36 @@ M8 (ML Integration) is divided into three sub-milestones.
 }
 ```
 
+**ONNX Artifact v1.1 Format (M8-03a):**
+```json
+{
+  "schema_version": "v1.1",
+  "model_file": "model.onnx",
+  "sha256": {
+    "model.onnx": "a1b2c3d4e5f67890..."
+  },
+  "created_at": "2026-02-14T12:00:00Z",
+  "created_at_utc": "2026-02-14T12:00:00Z",
+  "git_sha": "abc123def456...",
+  "dataset_id": "train_2026Q1",
+  "feature_order": ["price_mid", "price_bid", ...],
+  "notes": "optional"
+}
+```
+
+**v1.1 Additional Fields:**
+- `created_at_utc`: UTC ISO8601 timestamp (explicit timezone)
+- `git_sha`: 40-char hex git commit SHA (null if unavailable)
+- `dataset_id`: Training dataset identifier (required for reproducibility)
+- `feature_order`: List of feature names in expected order (SSOT validation)
+
 **Validation rules:**
-- `schema_version` must be `"v1"`
+- `schema_version` must be `"v1"` or `"v1.1"`
 - `model_file` must exist in `sha256` map
 - All paths must be relative (no `..`, no absolute)
 - SHA256 must match actual file content
+- `git_sha` must be 40-char hex string (if present)
+- `feature_order` is validated against SSOT `FEATURE_ORDER` (warning on mismatch)
 
 **Safe-by-default:**
 - `ml_shadow_mode=False` (default)
@@ -603,9 +628,43 @@ FEATURE_ORDER = (
 - `src/grinder/paper/engine.py` - Log emission points
 - `tests/unit/test_ml_log_events.py` - caplog tests for log events
 
-### M8-03: Training Pipeline
+### M8-03: Training & Export Pipeline
 
 **Scope:** Reproducible training pipeline for ONNX model artifacts.
+
+#### M8-03a: Artifact Pack Spec + Build CLI
+
+**Status:** 🚧 In Progress
+
+**Scope:** Extend manifest to v1.1, add build CLI for artifact generation
+
+**Deliverables:**
+- [x] Extended `OnnxArtifactManifest` with v1.1 fields (`git_sha`, `dataset_id`, `feature_order`)
+- [x] `build_onnx_artifact.py` CLI script
+- [x] `validate_feature_order()` function with SSOT validation (warning on mismatch)
+- [x] Unit tests for v1.1 manifest and build CLI
+
+**CLI Usage:**
+```bash
+python -m scripts.build_onnx_artifact \
+    --model-path trained_model.onnx \
+    --output-dir artifacts/regime_v1 \
+    --dataset-id train_2026Q1 \
+    --notes "Optional notes"
+```
+
+**Build process:**
+1. Copy model file to output directory
+2. Compute SHA256 checksum
+3. Auto-detect git SHA (graceful fallback to null + warning)
+4. Generate v1.1 manifest with `FEATURE_ORDER` from SSOT
+5. Write manifest.json
+
+**Acceptance criteria:**
+- Build CLI creates valid v1.1 artifact
+- Artifact passes `verify_onnx_artifact.py` validation
+- `feature_order` matches SSOT (warning logged if mismatch)
+- `git_sha` null with warning if not in git repo
 
 #### M8-03b-1: Training/Export Pipeline MVP
 

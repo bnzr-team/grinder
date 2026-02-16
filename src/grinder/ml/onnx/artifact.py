@@ -1,6 +1,7 @@
 """ONNX artifact loader and validation.
 
 M8-02a: Load and validate ONNX artifacts with SHA256 integrity checks.
+M8-03a: Extended with feature_order validation against SSOT.
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ import json
 import logging
 from pathlib import Path
 
+from .features import FEATURE_ORDER
 from .types import (
     OnnxArtifact,
     OnnxArtifactManifest,
@@ -131,6 +133,53 @@ def validate_checksums(artifact_dir: Path, manifest: OnnxArtifactManifest) -> No
         logger.debug("Checksum OK: %s", relative_path)
 
 
+def validate_feature_order(manifest: OnnxArtifactManifest) -> None:
+    """Validate manifest feature_order against SSOT FEATURE_ORDER.
+
+    Logs a warning if feature_order is present and doesn't match SSOT.
+    This is a warning, not an error, to allow gradual migration.
+
+    Args:
+        manifest: Validated manifest with optional feature_order.
+    """
+    if manifest.feature_order is None:
+        # No feature_order in manifest (v1 artifact or omitted)
+        logger.debug("Manifest has no feature_order field (v1 or omitted)")
+        return
+
+    manifest_features = manifest.feature_order
+    ssot_features = FEATURE_ORDER
+
+    if manifest_features == ssot_features:
+        logger.debug("Feature order matches SSOT (%d features)", len(ssot_features))
+        return
+
+    # Mismatch - log warning with details
+    manifest_set = set(manifest_features)
+    ssot_set = set(ssot_features)
+
+    missing_in_manifest = ssot_set - manifest_set
+    extra_in_manifest = manifest_set - ssot_set
+    order_mismatch = manifest_features != ssot_features and not (
+        missing_in_manifest or extra_in_manifest
+    )
+
+    details = []
+    details.append(f"manifest_len={len(manifest_features)}, ssot_len={len(ssot_features)}")
+
+    if missing_in_manifest:
+        details.append(f"missing_in_manifest={sorted(missing_in_manifest)}")
+    if extra_in_manifest:
+        details.append(f"extra_in_manifest={sorted(extra_in_manifest)}")
+    if order_mismatch:
+        details.append("order_differs=True")
+
+    logger.warning(
+        "FEATURE_ORDER_MISMATCH: manifest.feature_order differs from SSOT. %s",
+        ", ".join(details),
+    )
+
+
 def load_artifact(artifact_dir: Path | str) -> OnnxArtifact:
     """Load and fully validate an ONNX artifact.
 
@@ -164,6 +213,9 @@ def load_artifact(artifact_dir: Path | str) -> OnnxArtifact:
         "Manifest loaded: schema=%s, model=%s", manifest.schema_version, manifest.model_file
     )
 
+    # Validate feature_order against SSOT (warning only)
+    validate_feature_order(manifest)
+
     # Validate all checksums
     validate_checksums(artifact_dir, manifest)
     logger.info("All checksums validated (%d files)", len(manifest.sha256))
@@ -182,4 +234,5 @@ __all__ = [
     "load_artifact",
     "load_manifest",
     "validate_checksums",
+    "validate_feature_order",
 ]
