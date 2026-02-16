@@ -33,14 +33,18 @@ def ml_registry_for_active(tmp_path: Path) -> Generator[tuple[str, str, str], No
             ml_stage=stage,
         )
     """
-    # Compute relative path from tmp_path to TEST_ARTIFACT_DIR
-    try:
-        relative_artifact = TEST_ARTIFACT_DIR.relative_to(tmp_path)
-    except ValueError:
-        # Not relative, use absolute path
-        relative_artifact = TEST_ARTIFACT_DIR
+    import shutil
 
-    # Create registry file
+    # Copy test artifact to tmp_path to avoid absolute path issues
+    artifact_dst = tmp_path / "test_artifact"
+    if TEST_ARTIFACT_DIR.exists():
+        shutil.copytree(TEST_ARTIFACT_DIR, artifact_dst)
+    else:
+        # Create minimal dummy artifact for tests when real artifact doesn't exist
+        artifact_dst.mkdir()
+        (artifact_dst / "manifest.json").write_text('{"model_sha256":"test"}')
+
+    # Create registry file pointing to local artifact
     registry_file = tmp_path / "models.json"
     registry_file.write_text(
         json.dumps(
@@ -49,11 +53,11 @@ def ml_registry_for_active(tmp_path: Path) -> Generator[tuple[str, str, str], No
                 "models": {
                     "test_model": {
                         "shadow": {
-                            "artifact_dir": str(relative_artifact),
+                            "artifact_dir": "test_artifact",
                             "artifact_id": "test_active_v1",
                         },
                         "active": {
-                            "artifact_dir": str(relative_artifact),
+                            "artifact_dir": "test_artifact",
                             "artifact_id": "test_active_v1",
                         },
                     }
