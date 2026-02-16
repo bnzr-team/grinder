@@ -10,12 +10,14 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from grinder.ml.onnx import ONNX_AVAILABLE
 from grinder.paper.engine import PaperEngine
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 
+@pytest.mark.skipif(not ONNX_AVAILABLE, reason="onnxruntime not installed")
 def test_registry_resolution_shadow_mode(tmp_path: Path) -> None:
     """Resolve artifact from registry in SHADOW mode."""
     # Create registry
@@ -55,6 +57,7 @@ def test_registry_resolution_shadow_mode(tmp_path: Path) -> None:
     assert engine._onnx_artifact_source == "registry"
 
 
+@pytest.mark.skipif(not ONNX_AVAILABLE, reason="onnxruntime not installed")
 def test_legacy_fallback_shadow_mode(tmp_path: Path) -> None:
     """Legacy onnx_artifact_dir fallback in SHADOW mode."""
     artifact_dir = tmp_path / "artifacts" / "legacy"
@@ -82,6 +85,7 @@ def test_no_artifact_configured() -> None:
     assert engine._onnx_artifact_source == "none"
 
 
+@pytest.mark.skipif(not ONNX_AVAILABLE, reason="onnxruntime not installed")
 def test_active_mode_requires_registry(tmp_path: Path) -> None:
     """ACTIVE mode blocks legacy fallback (fail-closed)."""
     artifact_dir = tmp_path / "artifacts" / "legacy"
@@ -100,6 +104,7 @@ def test_active_mode_requires_registry(tmp_path: Path) -> None:
         )
 
 
+@pytest.mark.skipif(not ONNX_AVAILABLE, reason="onnxruntime not installed")
 def test_registry_resolution_active_mode(tmp_path: Path) -> None:
     """Resolve artifact from registry in ACTIVE mode."""
     # Create registry
@@ -140,6 +145,7 @@ def test_registry_resolution_active_mode(tmp_path: Path) -> None:
     assert engine._onnx_artifact_source == "registry"
 
 
+@pytest.mark.skipif(not ONNX_AVAILABLE, reason="onnxruntime not installed")
 def test_registry_resolution_failure() -> None:
     """Registry resolution failure (fail-closed)."""
     # Attempt registry resolution with nonexistent file
@@ -153,6 +159,7 @@ def test_registry_resolution_failure() -> None:
         )
 
 
+@pytest.mark.skipif(not ONNX_AVAILABLE, reason="onnxruntime not installed")
 def test_registry_resolution_model_not_found(tmp_path: Path) -> None:
     """Registry resolution failure: model not found."""
     # Create registry without target model
@@ -185,6 +192,7 @@ def test_registry_resolution_model_not_found(tmp_path: Path) -> None:
         )
 
 
+@pytest.mark.skipif(not ONNX_AVAILABLE, reason="onnxruntime not installed")
 def test_registry_resolution_stage_not_configured(tmp_path: Path) -> None:
     """Registry resolution failure: stage pointer is null."""
     # Create registry with null shadow pointer
@@ -217,6 +225,7 @@ def test_registry_resolution_stage_not_configured(tmp_path: Path) -> None:
         )
 
 
+@pytest.mark.skipif(not ONNX_AVAILABLE, reason="onnxruntime not installed")
 def test_stage_default_to_shadow(tmp_path: Path) -> None:
     """Default ml_stage is 'shadow'."""
     # Create registry
