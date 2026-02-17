@@ -11,25 +11,25 @@ Each spec may describe both current reality and planned features — this index 
 
 ## Gap Index
 
-| Component | Spec | Code | Status | Notes / Tracking |
-|-----------|------|------|--------|------------------|
-| Toxicity formulas (VPIN, Kyle, Amihud, OFI, liquidation surge) | `docs/06_TOXICITY_SPEC.md` | `src/grinder/gating/toxicity_gate.py` | **PARTIAL** | v0: spread_spike + price_impact only; composite scoring planned post-launch |
-| Grid policy library (Trend, LiqCatcher, Funding, VolBreakout, MeanRev) | `docs/07_GRID_POLICY_LIBRARY.md` | `src/grinder/policies/grid/` | **PARTIAL** | 2 of ~6 policies: Static + Adaptive; others are target state |
-| Backtest engine (walk-forward, cost model, queue modeling) | `docs/11_BACKTEST_PROTOCOL.md` | `src/grinder/backtest/cli.py` | **DEFERRED** | 29-line stub delegates to replay; full engine deferred to M9 |
-| State machine orchestrator (formal FSM, state persistence) | `docs/08_STATE_MACHINE.md` | `src/grinder/controller/regime.py` | **PARTIAL** | Regime classifier implemented; no centralized FSM orchestrator |
-| Smart order routing (amend vs cancel-replace, batching) | `docs/09_EXECUTION_SPEC.md` §9.3 | `src/grinder/execution/engine.py` | **PARTIAL** | Core engine done (670 lines); SmartOrderRouter / batch ops planned |
-| Fill tracking (FillTracker, RoundTrip, PositionSyncer) | `docs/09_EXECUTION_SPEC.md` §9.6–9.7 | `src/grinder/execution/` | **PARTIAL** | Partial in paper engine; standalone modules not built |
-| Latency / retry (LatencyMonitor, OrderRetryPolicy) | `docs/09_EXECUTION_SPEC.md` §9.8–9.9 | — | **PLANNED** | Not implemented |
-| Fill probability model (`estimate_fill_probability()`) | `docs/09_EXECUTION_SPEC.md` §9.4 | — | **PLANNED** | Not implemented |
-| Portfolio risk (beta-adjusted exposure, concentration) | `docs/10_RISK_SPEC.md` §10.5 | `src/grinder/risk/` | **PARTIAL** | DrawdownGuard v1 + KillSwitch done; PortfolioRiskManager not built |
-| Consecutive loss limit | `docs/10_RISK_SPEC.md` | `src/grinder/risk/` | **PLANNED** | Not implemented; daily loss limit exists |
-| ML training pipeline (sklearn→ONNX, walk-forward datasets) | `docs/12_ML_SPEC.md` §12.9 | `scripts/train_regime_model.py` | **PARTIAL** | Script exists but training logic is stub; ONNX infra fully done (M8) |
-| ML policy integration (signal → grid param adjustment) | `docs/12_ML_SPEC.md` §12.5 | `src/grinder/ml/` | **PLANNED** | MlSignalSnapshot computed but not consumed by AdaptiveGridPolicy |
-| ML drift detection / monitoring | `docs/12_ML_SPEC.md` §12.11 | — | **PLANNED** | Not implemented |
-| Feature store (offline repo, versioning, lineage) | `docs/12_ML_SPEC.md` §12.8 | — | **PARTIAL** | Dataset artifact pipeline done (M8-04); FeatureStore module/service planned |
-| Advanced features (OFI, CVD, VAMP, multi-timeframe) | `docs/05_FEATURE_CATALOG.md` | `src/grinder/features/` | **PARTIAL** | ~10 core features done; momentum, OFI, CVD, multi-TF not built |
-| Multi-venue (Bybit, OKX, COIN-M) | `docs/02_DATA_SOURCES.md` | `src/grinder/execution/` | **DEFERRED** | Binance USDT-M only; deferred to M9 post-launch (ADR-066) |
-| Data quality (GapDetector, outlier filtering) | `docs/02_DATA_SOURCES.md` | `src/grinder/data/` | **PARTIAL** | Basic staleness checks; no GapDetector or outlier filtering |
+| Component | Spec | Code | Status | Priority | Owner | Notes / Tracking | Exit criteria |
+|-----------|------|------|--------|----------|-------|------------------|---------------|
+| Toxicity formulas (VPIN, Kyle, Amihud, OFI, liquidation surge) | `docs/06_TOXICITY_SPEC.md` | `src/grinder/gating/toxicity_gate.py` | **PARTIAL** | **P2** | Trading | v0: spread_spike + price_impact only; composite scoring planned post-launch | 5 formulas + composite score implemented; unit tests; determinism fixture; Prometheus metrics per component |
+| Grid policy library (Trend, LiqCatcher, Funding, VolBreakout, MeanRev) | `docs/07_GRID_POLICY_LIBRARY.md` | `src/grinder/policies/grid/` | **PARTIAL** | **P2** | Trading | 2 of ~6 policies: Static + Adaptive; others are target state | >=2 new policies + router/selection; tests; determinism fixture on policy switching |
+| Backtest engine (walk-forward, cost model, queue modeling) | `docs/11_BACKTEST_PROTOCOL.md` | `src/grinder/backtest/cli.py` | **DEFERRED** | **P2** | Research | 29-line stub delegates to replay; full engine deferred to M9 | CLI not delegating to replay; fee/slippage model + walk-forward + OOS report artifact; deterministic mode |
+| State machine orchestrator (formal FSM, state persistence) | `docs/08_STATE_MACHINE.md` | `src/grinder/controller/regime.py` | **PARTIAL** | **P1** | Core | Regime classifier implemented; no centralized FSM orchestrator | `StateMachine` orchestrator with INIT/READY/DEGRADED/EMERGENCY; persistence (save/load); tests; on-enter/on-exit hooks |
+| Smart order routing (amend vs cancel-replace, batching) | `docs/09_EXECUTION_SPEC.md` §9.3 | `src/grinder/execution/engine.py` | **PARTIAL** | **P1** | Execution | Core engine done (670 lines); SmartOrderRouter / batch ops planned | Separate `SmartOrderRouter`; amend vs cancel-replace rules; integration test; metrics on amends/replaces |
+| Fill tracking (FillTracker, RoundTrip, PositionSyncer) | `docs/09_EXECUTION_SPEC.md` §9.6-9.7 | `src/grinder/execution/` | **PARTIAL** | **P1** | Execution | Partial in paper engine; standalone modules not built | `FillTracker` + `PositionSyncer` minimal: reconcile fills/positions; tests; metrics: open positions, sync lag |
+| Latency / retry (LatencyMonitor, OrderRetryPolicy) | `docs/09_EXECUTION_SPEC.md` §9.8-9.9 | — | **PLANNED** | **P1** | Execution | Not implemented | Latency metrics p50/p95/p99 + alert rule; retry policy with backoff; tests on transient failures; smoke confirms |
+| Fill probability model (`estimate_fill_probability()`) | `docs/09_EXECUTION_SPEC.md` §9.4 | — | **PLANNED** | **P2** | Research | Not implemented | MVP model + offline eval; used for level filtering; tests/fixture |
+| Portfolio risk (beta-adjusted exposure, concentration) | `docs/10_RISK_SPEC.md` §10.5 | `src/grinder/risk/` | **PARTIAL** | **P2** | Risk | DrawdownGuard v1 + KillSwitch done; PortfolioRiskManager not built | PortfolioRiskManager with concentration + per-asset DD; tests; determinism fixture on risk decisions |
+| Consecutive loss limit | `docs/10_RISK_SPEC.md` | `src/grinder/risk/` | **PLANNED** | **P2** | Risk | Not implemented; daily loss limit exists | Consecutive loss limit implemented + unit tests + metric/log events |
+| ML training pipeline (sklearn→ONNX, walk-forward datasets) | `docs/12_ML_SPEC.md` §12.9 | `scripts/train_regime_model.py` | **PARTIAL** | **P2** | ML | Script exists but training logic is stub; ONNX infra fully done (M8) | Real train pipeline + dataset build; ONNX conversion; reproducible artifacts; eval report |
+| ML policy integration (signal → grid param adjustment) | `docs/12_ML_SPEC.md` §12.5 | `src/grinder/ml/` | **PLANNED** | **P2** | ML | MlSignalSnapshot computed but not consumed by AdaptiveGridPolicy | AdaptiveGridPolicy reads MlSignalSnapshot (guarded); canary in SHADOW; tests; determinism fixture |
+| ML drift detection / monitoring | `docs/12_ML_SPEC.md` §12.11 | — | **PLANNED** | **P2** | ML | Not implemented | Drift metrics + alert; baseline snapshot; runbook triage |
+| Feature store (offline repo, versioning, lineage) | `docs/12_ML_SPEC.md` §12.8 / `docs/18_FEATURE_STORE_SPEC.md` | `scripts/build_dataset.py`, `scripts/verify_dataset.py` | **PARTIAL** | **P2** | Data | Dataset artifact pipeline done (M8-04); FeatureStore module/service planned | FeatureStore module/interface (read/write/list); lineage/versioning; tests; runbook |
+| Advanced features (OFI, CVD, VAMP, multi-timeframe) | `docs/05_FEATURE_CATALOG.md` | `src/grinder/features/` | **PARTIAL** | **P2** | Features | ~10 core features done; momentum, OFI, CVD, multi-TF not built | OFI/CVD/VAMP + multi-TF aggregators added; tests; determinism fixture |
+| Multi-venue (Bybit, OKX, COIN-M) | `docs/02_DATA_SOURCES.md` | `src/grinder/execution/` | **DEFERRED** | **P2** | Execution | Binance USDT-M only; deferred to M9 post-launch (ADR-066) | New port + e2e smoke + budget/kill-switch compatibility; ADR/ROADMAP entry criteria met |
+| Data quality (GapDetector, outlier filtering) | `docs/02_DATA_SOURCES.md` | `src/grinder/data/` | **PARTIAL** | **P1** | Data | Basic staleness checks; no GapDetector or outlier filtering | GapDetector (missing ticks / stale book) + outlier filter; tests; data quality metrics + alert |
 
 ---
 
@@ -41,6 +41,30 @@ Each spec may describe both current reality and planned features — this index 
 | **PARTIAL** | Core functionality implemented; spec describes additional planned features |
 | **PLANNED** | Spec exists; no implementation yet |
 | **DEFERRED** | Explicitly deferred to a future milestone (with ADR or roadmap reference) |
+
+### Priority Legend
+
+| Priority | Meaning |
+|----------|---------|
+| **P0** | Launch blocker — must fix before first ACTIVE window |
+| **P1** | Launch hardening — do ASAP post-launch / before widening scope |
+| **P2** | Post-launch / target state |
+
+### Launch-Blockers Checklist (P0)
+
+All P0 items must be true before the first ACTIVE window on mainnet:
+
+- [x] Operator procedure for enabling ACTIVE (Runbook 22) + ceremony artifacts
+- [x] E2e smoke validating `/healthz`, `/metrics` SSOT contract, `/readyz`, graceful stop (Launch-01)
+- [x] Rollback in <5 min with verifiable metric signals (RB22 §8)
+- [x] Kill-switch drill + documented reset path (restart only) (RB22 §7)
+- [x] Hard mainnet write gate (`ALLOW_MAINNET_TRADE`) blocks execute without flag (4 code locations)
+- [x] Budget/limits per day and per run enforced in code (5 env vars, `run_live_reconcile.py:207-232`)
+- [x] Observability: key metrics visible during ACTIVE hold period (RB22 §6 watchlist)
+
+**Result: all P0 items closed by Launch-01 (PR #173) and Launch-02 (PR #174).**
+
+No remaining P0 gaps in the index — all gaps are P1 (hardening) or P2 (target state).
 
 ---
 
