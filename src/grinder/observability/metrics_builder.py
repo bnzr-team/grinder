@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 
 from grinder.connectors.metrics import get_connector_metrics
+from grinder.data.quality_metrics import get_data_quality_metrics
 from grinder.gating import get_gating_metrics
 from grinder.ha.role import HARole, get_ha_state
 from grinder.ml.metrics import ml_metrics_to_prometheus_lines
@@ -95,6 +96,9 @@ class MetricsBuilder:
 
         # ML metrics (M8-02c-2)
         lines.extend(self._build_ml_metrics())
+
+        # Data quality metrics (Launch-03)
+        lines.extend(self._build_data_quality_metrics())
 
         return "\n".join(lines)
 
@@ -206,6 +210,11 @@ class MetricsBuilder:
     def _build_ml_metrics(self) -> list[str]:
         """Build ML metrics (M8-02c-2 ADR-065)."""
         return ml_metrics_to_prometheus_lines()
+
+    def _build_data_quality_metrics(self) -> list[str]:
+        """Build data quality metrics (Launch-03)."""
+        dq_metrics = get_data_quality_metrics()
+        return dq_metrics.to_prometheus_lines()
 
 
 class _BuilderHolder:

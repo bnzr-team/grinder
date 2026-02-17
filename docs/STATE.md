@@ -1283,6 +1283,8 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
 ## Planned next
 - [DONE] Single-venue launch readiness (Launch-01: runbook 21, smoke_launch_readiness.sh, CI job).
 - [DONE] ACTIVE enablement ceremony (Launch-02: runbook 22, code-verified env vars with Source: annotations).
+- [DONE] Gap triage: GAPS.md updated with Priority/Owner/Exit criteria columns (PR #175).
+- [PARTIAL] Data quality v0 (Launch-03 PR1): GapDetector + OutlierFilter + 3 Prometheus counters (detect-only); wiring in PR2.
 - Expand tests to >50% coverage.
 - Adaptive Controller v1 (EMA-based adaptive step, trend detection, DRAWDOWN mode).
 - ~~Live Connector v1~~ [DONE] Done (LC-21: stream_ticks wired to BinanceWsConnector).
