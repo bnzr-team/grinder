@@ -135,6 +135,8 @@ curl -sf http://localhost:9090/metrics | grep action_blocked
 
 **Goal:** Enable real order execution with conservative limits.
 
+For the detailed step-by-step ACTIVE enablement ceremony with code-verified env vars, see [Runbook 22](22_ACTIVE_ENABLEMENT_CEREMONY.md).
+
 ### 3.1 Pre-Flight
 
 - [ ] Completed Stage 1 + Stage 2 successfully
@@ -276,6 +278,8 @@ The smoke test validates:
 - `/readyz` responds (200 or 503) with required JSON keys (SSOT: `REQUIRED_READYZ_KEYS`)
 - Graceful stop succeeds
 
+> **Note:** Docker builder warnings (buildx/legacy builder deprecation) may appear in output. Ignore unless the exit code is non-zero.
+
 Contract SSOT: [metrics_contract.py](../../src/grinder/observability/metrics_contract.py)
 
 ---
@@ -289,3 +293,4 @@ Contract SSOT: [metrics_contract.py](../../src/grinder/observability/metrics_con
 | [08 Testnet Smoke](08_SMOKE_TEST_TESTNET.md) | Testnet validation before launch |
 | [13 Operator Ceremony](13_OPERATOR_CEREMONY.md) | Operator ceremony for safe enablement |
 | [15 Enablement Ceremony](15_ENABLEMENT_CEREMONY.md) | Staged enablement for ReconcileLoop |
+| [22 ACTIVE Enablement Ceremony](22_ACTIVE_ENABLEMENT_CEREMONY.md) | Code-verified ACTIVE ceremony (Launch-02) |
