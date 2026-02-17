@@ -1267,11 +1267,10 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
 - Documentation in `docs/*` -- SSOT for architecture/specs (must match implementation).
 
 ## Known gaps / mismatches
-- No real trading logic -- only skeleton/stubs.
+- **End-to-end strategy loop** (signal -> plan -> execute continuously) not yet formalized as a production rollout procedure. Execution pipeline verified (Stage D/E mainnet cancel_all/flatten), but continuous autonomous loop is not yet opped.
 - **Backtest in Docker fails:** Running `scripts/run_backtest.py` inside a Docker container fails with `ModuleNotFoundError: No module named 'scripts'`. Fixture determinism checks pass; CI passes because it runs in a properly configured Python environment.
 - Adaptive Grid Controller v1+ (EMA-based adaptive step, trend detection, DRAWDOWN mode, auto-reset) -- **not implemented**; see `docs/16_ADAPTIVE_GRID_CONTROLLER_SPEC.md` (Planned). Controller v0 implemented with rule-based modes (see ADR-011).
-- No Binance API integration (interfaces only).
-- ML pipeline (`src/grinder/ml/`) -- empty placeholder.
+- **Binance API integration:** Execution HTTP endpoints verified (Stage D/E mainnet). Market data WS connector wired (LC-21). Full autonomous market data loop -- TBD.
 
 ## Process / governance
 - PR template with mandatory `## Proof` section.
@@ -1279,9 +1278,11 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
 - CLAUDE.md + DECISIONS.md + STATE.md -- governance docs.
 
 ## Planned next
+- **Single-venue launch readiness:** rollout procedure (shadow -> staging -> active), e2e smoke, ops runbooks.
 - Expand tests to >50% coverage.
 - Adaptive Controller v1 (EMA-based adaptive step, trend detection, DRAWDOWN mode).
 - ~~Live Connector v1~~ [DONE] Done (LC-21: stream_ticks wired to BinanceWsConnector).
+- (Deferred) Multi-venue M9 -- post-launch (see ADR-066).
 
 ## Smart Grid Spec Version
 
@@ -1380,8 +1381,8 @@ Comprehensive adaptive grid system design:
 
 ### ML Integration (`docs/12_ML_SPEC.md`)
 - **Spec:** `docs/12_ML_SPEC.md` -- SSOT for ML contracts
-- **Code:** `src/grinder/ml/` -- MlSignalSnapshot contract
-- **Status:** M8 in progress
+- **Code:** `src/grinder/ml/` -- MlSignalSnapshot, ONNX inference, training pipeline, registry, feature store
+- **Status:** M8 complete (PR #134-#170)
 - **Progress:**
   - [DONE] **M8-00 (docs-only):** ML Specification with I/O contracts
     - Input: `FeatureSnapshot` (L1+volatility) + `L2FeatureSnapshot` (order book)
@@ -1425,4 +1426,4 @@ Comprehensive adaptive grid system design:
 ### Multi-venue
 - **Current:** Binance Futures USDT-M only
 - **Planned:** COIN-M, other CEXs (see ROADMAP M9)
-- **Status:** [PLANNED] Planned, out of scope until M7/M8 complete
+- **Status:** [DEFERRED] Post-launch (see ADR-066). Focus on single-venue launch readiness first.
