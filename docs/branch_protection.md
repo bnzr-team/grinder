@@ -1,6 +1,6 @@
 # Branch Protection: `main`
 
-> **Last updated:** 2026-02-16
+> **Last updated:** 2026-02-17
 >
 > **Applied via:** GitHub API (`gh api repos/bnzr-hub/grinder/branches/main/protection`)
 
@@ -10,9 +10,9 @@
 
 | Setting | Value | Notes |
 |---------|-------|-------|
-| Require PR reviews | **1 minimum** | No direct pushes to main |
+| Require PR reviews | **0** | Single-contributor repo; self-approve not possible on GitHub |
 | Dismiss stale approvals | **ON** | New push invalidates old approval |
-| Require conversation resolution | **ON** | All threads must be resolved |
+| Require conversation resolution | **OFF** | Disabled (single-contributor) |
 | Require status checks to pass | **ON** | See list below |
 | Require branches up to date | **ON** (strict) | Must rebase/merge before merge |
 | Include administrators | **ON** | Admins follow same rules |
