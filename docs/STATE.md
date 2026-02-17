@@ -1281,7 +1281,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
 - CLAUDE.md + DECISIONS.md + STATE.md -- governance docs.
 
 ## Planned next
-- **Single-venue launch readiness:** rollout procedure (shadow -> staging -> active), e2e smoke, ops runbooks.
+- [DONE] Single-venue launch readiness (Launch-01: runbook 21, smoke_launch_readiness.sh, CI job).
 - Expand tests to >50% coverage.
 - Adaptive Controller v1 (EMA-based adaptive step, trend detection, DRAWDOWN mode).
 - ~~Live Connector v1~~ [DONE] Done (LC-21: stream_ticks wired to BinanceWsConnector).
