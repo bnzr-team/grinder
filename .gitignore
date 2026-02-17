@@ -69,6 +69,8 @@ artifacts/
 
 # Data files (may be large)
 data/
+# But track the grinder.data Python package
+!src/grinder/data/
 *.parquet
 # Allow test fixture parquet files
 !tests/testdata/**/*.parquet

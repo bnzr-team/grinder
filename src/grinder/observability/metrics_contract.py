@@ -120,6 +120,16 @@ REQUIRED_METRICS_PATTERNS = [
     "# HELP grinder_reconcile_budget_configured",
     "# TYPE grinder_reconcile_budget_configured",
     "grinder_reconcile_budget_configured",
+    # Launch-03: Data quality metrics
+    "# HELP grinder_data_stale_total",
+    "# TYPE grinder_data_stale_total",
+    "grinder_data_stale_total{stream=",
+    "# HELP grinder_data_gap_total",
+    "# TYPE grinder_data_gap_total",
+    "grinder_data_gap_total{stream=",
+    "# HELP grinder_data_outlier_total",
+    "# TYPE grinder_data_outlier_total",
+    "grinder_data_outlier_total{stream=",
 ]
 
 # Forbidden high-cardinality labels (H5-02 contract tightening)

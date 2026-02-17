@@ -29,7 +29,7 @@ Each spec may describe both current reality and planned features — this index 
 | Feature store (offline repo, versioning, lineage) | `docs/12_ML_SPEC.md` §12.8 / `docs/18_FEATURE_STORE_SPEC.md` | `scripts/build_dataset.py`, `scripts/verify_dataset.py` | **PARTIAL** | **P2** | Data | Dataset artifact pipeline done (M8-04); FeatureStore module/service planned | FeatureStore module/interface (read/write/list); lineage/versioning; tests; runbook |
 | Advanced features (OFI, CVD, VAMP, multi-timeframe) | `docs/05_FEATURE_CATALOG.md` | `src/grinder/features/` | **PARTIAL** | **P2** | Features | ~10 core features done; momentum, OFI, CVD, multi-TF not built | OFI/CVD/VAMP + multi-TF aggregators added; tests; determinism fixture |
 | Multi-venue (Bybit, OKX, COIN-M) | `docs/02_DATA_SOURCES.md` | `src/grinder/execution/` | **DEFERRED** | **P2** | Execution | Binance USDT-M only; deferred to M9 post-launch (ADR-066) | New port + e2e smoke + budget/kill-switch compatibility; ADR/ROADMAP entry criteria met |
-| Data quality (GapDetector, outlier filtering) | `docs/02_DATA_SOURCES.md` | `src/grinder/data/` | **PARTIAL** | **P1** | Data | Basic staleness checks; no GapDetector or outlier filtering | GapDetector (missing ticks / stale book) + outlier filter; tests; data quality metrics + alert |
+| Data quality (GapDetector, outlier filtering) | `docs/02_DATA_SOURCES.md` | `src/grinder/data/quality.py`, `src/grinder/data/quality_metrics.py` | **PARTIAL** | **P1** | Data | Detect-only shipped (PR1): GapDetector, OutlierFilter, is_stale + 3 Prometheus counters + metrics contract; gating/wiring in PR2 | GapDetector + OutlierFilter wired into live loop; block reasons in remediation; alerts |
 
 ---
 
