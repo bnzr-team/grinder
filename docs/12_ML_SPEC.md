@@ -1126,6 +1126,29 @@ Unit tests ([tests/unit/test_paper_engine_ml_registry.py](../../tests/unit/test_
 
 ---
 
+### M8-04: Feature Store
+
+**Status:** Spec complete (docs-only)
+**Spec:** [docs/18_FEATURE_STORE_SPEC.md](18_FEATURE_STORE_SPEC.md)
+
+**Goal:** Training data governance — reproducibility, audit trail, integrity.
+
+**Scope:**
+- Dataset manifest schema v1 (dataset_id, feature_order_hash, SHA256, provenance)
+- Storage layout under `ml/datasets/<dataset_id>/`
+- Validation rules (path safety, feature order alignment, integrity checks)
+- Lifecycle: build → commit → reference → archive
+- CLI specs: `build_dataset.py`, `verify_dataset.py`, `list_datasets.py`
+
+**Sub-milestones (planned, not yet implemented):**
+- M8-04a: `build_dataset.py` + `verify_dataset.py` CLIs
+- M8-04b: Golden dataset from synthetic generator, committed to repo
+- M8-04c: `train_regime_model.py` accepts `--dataset-path`
+- M8-04d: `promote_ml_model.py` validates dataset existence for ACTIVE
+- M8-04e: `verify_ml_registry.py` checks dataset links
+
+---
+
 ## 12.7 ML Use Cases
 
 ### Use Case 1: Parameter Calibration
