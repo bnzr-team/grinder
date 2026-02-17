@@ -2,14 +2,15 @@
 """Train and export regime classifier to ONNX artifact.
 
 M8-03b: Reproducible training pipeline for regime classification model.
+M8-04c: Accepts dataset manifest (--dataset-manifest) for artifact-based training.
 
 Usage:
-    python -m scripts.train_regime_model --out-dir /tmp/artifact --dataset-id toy1
+    python -m scripts.train_regime_model --out-dir /tmp/artifact --dataset-manifest ml/datasets/ds1/manifest.json
     python -m scripts.train_regime_model --help
 
 Output:
     <out-dir>/model.onnx         - ONNX model file
-    <out-dir>/manifest.json      - Artifact manifest with SHA256
+    <out-dir>/manifest.json      - Artifact manifest with SHA256 + dataset_id
     <out-dir>/train_report.json  - Training metrics and metadata
 
 Requirements:
@@ -157,6 +158,85 @@ def generate_synthetic_data(
     return X, y_regime, y_spacing
 
 
+def load_dataset_artifact(
+    manifest_path: Path,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, str, int]:
+    """Load and verify a dataset artifact for training.
+
+    Runs verify_dataset fail-closed, then reads data.parquet and extracts
+    features (FEATURE_ORDER columns) and labels (regime, spacing_multiplier).
+
+    Args:
+        manifest_path: Path to dataset manifest.json.
+
+    Returns:
+        Tuple of (X, y_regime, y_spacing, dataset_id, row_count).
+
+    Raises:
+        RuntimeError: If verify_dataset fails or data is invalid.
+    """
+    import pyarrow.parquet as pq  # noqa: PLC0415
+
+    from scripts.verify_dataset import verify_dataset  # noqa: PLC0415
+
+    # 1. Verify dataset integrity (fail-closed)
+    base_dir = manifest_path.resolve().parent.parent
+    errors = verify_dataset(manifest_path, base_dir=base_dir, verbose=False)
+    if errors:
+        msg = f"Dataset verification failed ({len(errors)} errors):\n"
+        for err in errors:
+            msg += f"  - {err}\n"
+        raise RuntimeError(msg)
+
+    # 2. Read manifest for dataset_id and row_count
+    with manifest_path.open() as f:
+        manifest = json.load(f)
+
+    dataset_id = manifest["dataset_id"]
+    expected_rows = manifest["row_count"]
+
+    # 3. Read parquet
+    dataset_dir = manifest_path.parent
+    data_path = dataset_dir / "data.parquet"
+    table = pq.read_table(data_path)
+
+    # 4. Validate row count matches manifest
+    if table.num_rows != expected_rows:
+        raise RuntimeError(
+            f"Row count mismatch: manifest says {expected_rows}, parquet has {table.num_rows}"
+        )
+
+    # 5. Validate all FEATURE_ORDER columns present
+    col_names = set(table.column_names)
+    missing = [f for f in FEATURE_ORDER if f not in col_names]
+    if missing:
+        raise RuntimeError(f"Missing feature columns in dataset: {missing}")
+
+    # 6. Validate label columns present
+    for label_col in ("regime", "spacing_multiplier"):
+        if label_col not in col_names:
+            raise RuntimeError(f"Missing label column in dataset: {label_col}")
+
+    # 7. Extract arrays in FEATURE_ORDER
+    n_features = len(FEATURE_ORDER)
+    X = np.zeros((table.num_rows, n_features), dtype=np.float32)
+    for i, feat in enumerate(FEATURE_ORDER):
+        X[:, i] = table.column(feat).to_numpy().astype(np.float32)
+
+    y_regime = table.column("regime").to_numpy().astype(np.int64)
+    y_spacing = table.column("spacing_multiplier").to_numpy().astype(np.float32)
+
+    logger.info(
+        "Dataset loaded: id=%s, rows=%d, features=%d, path=%s",
+        dataset_id,
+        table.num_rows,
+        n_features,
+        data_path,
+    )
+
+    return X, y_regime, y_spacing, dataset_id, table.num_rows
+
+
 def train_model(
     X: np.ndarray,
     y_regime: np.ndarray,
@@ -301,6 +381,7 @@ def create_manifest(
     out_dir: Path,
     model_sha256: str,
     notes: str | None = None,
+    dataset_id: str | None = None,
 ) -> dict[str, Any]:
     """Create artifact manifest.json.
 
@@ -308,17 +389,23 @@ def create_manifest(
         out_dir: Output directory.
         model_sha256: SHA256 of model.onnx.
         notes: Optional notes.
+        dataset_id: Training dataset identifier (v1.1 traceability).
 
     Returns:
         Manifest dict.
     """
-    manifest = {
+    manifest: dict[str, Any] = {
         "schema_version": ARTIFACT_SCHEMA_VERSION,
         "model_file": "model.onnx",
         "sha256": {"model.onnx": model_sha256},
         "created_at": datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "notes": notes,
     }
+
+    if dataset_id is not None:
+        manifest["dataset_id"] = dataset_id
+
+    if notes is not None:
+        manifest["notes"] = notes
 
     manifest_path = out_dir / "manifest.json"
     with manifest_path.open("w") as f:
@@ -334,21 +421,37 @@ def train_and_export(
     seed: int = DEFAULT_SEED,
     n_samples: int = DEFAULT_N_SAMPLES,
     notes: str | None = None,
+    *,
+    dataset_manifest: Path | None = None,
 ) -> TrainReport:
-    """Full training pipeline: generate data, train, export to ONNX.
+    """Full training pipeline: load data, train, export to ONNX.
+
+    When dataset_manifest is provided, loads data from a verified dataset
+    artifact (M8-04c). Otherwise falls back to synthetic data generation.
 
     Args:
         out_dir: Output directory for artifact.
-        dataset_id: Dataset identifier.
-        seed: Random seed.
-        n_samples: Number of training samples.
+        dataset_id: Dataset identifier (ignored when dataset_manifest is set).
+        seed: Random seed for training.
+        n_samples: Number of training samples (ignored when dataset_manifest is set).
         notes: Optional notes.
+        dataset_manifest: Path to dataset manifest.json (M8-04c).
 
     Returns:
         TrainReport with all metadata.
     """
     import skl2onnx  # noqa: PLC0415
     import sklearn  # noqa: PLC0415
+
+    # Load data: from dataset artifact or synthetic
+    if dataset_manifest is not None:
+        X, y_regime, y_spacing, dataset_id, n_samples = load_dataset_artifact(
+            dataset_manifest,
+        )
+    else:
+        X, y_regime, y_spacing = generate_synthetic_data(n_samples, seed, dataset_id)
+
+    n_features = X.shape[1]
 
     logger.info(
         "Training regime model: dataset_id=%s, seed=%d, n_samples=%d",
@@ -359,10 +462,6 @@ def train_and_export(
 
     # Create output directory
     out_dir.mkdir(parents=True, exist_ok=True)
-
-    # Generate data
-    X, y_regime, y_spacing = generate_synthetic_data(n_samples, seed, dataset_id)
-    n_features = X.shape[1]
 
     regime_counts = {
         "LOW": int(np.sum(y_regime == 0)),
@@ -384,8 +483,8 @@ def train_and_export(
     model_sha256 = compute_sha256(model_path)
     logger.info("Model SHA256: %s", model_sha256)
 
-    # Create manifest
-    create_manifest(out_dir, model_sha256, notes)
+    # Create manifest (with dataset_id for traceability)
+    create_manifest(out_dir, model_sha256, notes, dataset_id=dataset_id)
     logger.info("Manifest created: %s/manifest.json", out_dir)
 
     # Create training report
@@ -414,21 +513,26 @@ def train_and_export(
 
 
 def main() -> int:
-    """CLI entry point."""
+    """CLI entry point.
+
+    Returns:
+        0 if success, 1 if training error, 2 if usage error.
+    """
     parser = argparse.ArgumentParser(
         description="Train and export regime classifier to ONNX artifact",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
-    # Basic training with defaults
-    python -m scripts.train_regime_model --out-dir /tmp/regime_v1 --dataset-id toy1
+    # Train from dataset artifact (M8-04c)
+    python -m scripts.train_regime_model \\
+        --out-dir /tmp/regime_v1 \\
+        --dataset-manifest ml/datasets/synthetic_v1/manifest.json
 
-    # Custom parameters
+    # Custom seed and notes
     python -m scripts.train_regime_model \\
         --out-dir /tmp/regime_v2 \\
-        --dataset-id production_v1 \\
+        --dataset-manifest ml/datasets/ds1/manifest.json \\
         --seed 12345 \\
-        --n-samples 1000 \\
         --notes "Initial production model"
 """,
     )
@@ -439,22 +543,16 @@ Examples:
         help="Output directory for artifact (created if not exists)",
     )
     parser.add_argument(
-        "--dataset-id",
-        type=str,
+        "--dataset-manifest",
+        type=Path,
         required=True,
-        help="Dataset identifier (affects data generation)",
+        help="Path to dataset manifest.json (verified before training)",
     )
     parser.add_argument(
         "--seed",
         type=int,
         default=DEFAULT_SEED,
-        help=f"Random seed for reproducibility (default: {DEFAULT_SEED})",
-    )
-    parser.add_argument(
-        "--n-samples",
-        type=int,
-        default=DEFAULT_N_SAMPLES,
-        help=f"Number of training samples (default: {DEFAULT_N_SAMPLES})",
+        help=f"Random seed for training (default: {DEFAULT_SEED})",
     )
     parser.add_argument(
         "--notes",
@@ -480,12 +578,13 @@ Examples:
     try:
         report = train_and_export(
             out_dir=args.out_dir,
-            dataset_id=args.dataset_id,
+            dataset_id="",  # overridden by dataset_manifest
             seed=args.seed,
-            n_samples=args.n_samples,
             notes=args.notes,
+            dataset_manifest=args.dataset_manifest,
         )
-        print(f"\n✓ Artifact created: {args.out_dir}")
+        print(f"\nArtifact created: {args.out_dir}")
+        print(f"  dataset_id: {report.dataset_id}")
         print(f"  Model SHA256: {report.model_sha256}")
         print(f"  Train accuracy: {report.train_accuracy:.3f}")
         print(f"  Regime distribution: {report.regime_distribution}")
