@@ -37,6 +37,15 @@
 ## Proof (required)
 Paste command output under each item.
 
+- [ ] `python -m scripts.env_fingerprint` (auto-included in `make gates`)
+<details><summary>env fingerprint output</summary>
+
+```text
+
+```
+
+</details>
+
 - [ ] `PYTHONPATH=src python -m pytest -q`
 <details><summary>pytest output</summary>
 

@@ -5,7 +5,7 @@
 VENV_PY := .venv/bin/python
 VENV_EXISTS := $(shell [ -x "$(VENV_PY)" ] && echo 1)
 
-.PHONY: help test lint format check determinism replay gates all venv-check
+.PHONY: help test lint format check determinism replay gates all venv-check fingerprint
 
 # Fail fast if venv doesn't exist
 venv-check:
@@ -17,11 +17,12 @@ help:
 	@echo "GRINDER Development Shortcuts"
 	@echo ""
 	@echo "Quality Gates:"
-	@echo "  make lint       - Run ruff check"
-	@echo "  make format     - Run ruff format --check"
-	@echo "  make check      - Run mypy"
-	@echo "  make test       - Run pytest"
-	@echo "  make gates      - Run all quality gates (lint + format + check + test)"
+	@echo "  make fingerprint - Print env fingerprint (python, venv, packages)"
+	@echo "  make lint        - Run ruff check"
+	@echo "  make format      - Run ruff format --check"
+	@echo "  make check       - Run mypy"
+	@echo "  make test        - Run pytest"
+	@echo "  make gates       - Run all quality gates (fingerprint + lint + format + check + test)"
 	@echo ""
 	@echo "Determinism:"
 	@echo "  make determinism - Run verify_determinism_suite (11 fixtures)"
@@ -29,6 +30,10 @@ help:
 	@echo ""
 	@echo "All:"
 	@echo "  make all        - Run gates + determinism"
+
+# Env fingerprint (always first in gates)
+fingerprint: venv-check
+	$(VENV_PY) -m scripts.env_fingerprint
 
 # Quality gates
 lint: venv-check
@@ -43,7 +48,7 @@ check: venv-check
 test: venv-check
 	$(VENV_PY) -m pytest -q
 
-gates: lint format check test
+gates: fingerprint lint format check test
 
 # Determinism
 determinism: venv-check
