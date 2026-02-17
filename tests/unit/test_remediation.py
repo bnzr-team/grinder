@@ -772,6 +772,10 @@ class TestRemediationBlockReasonValues:
             "symbol_not_in_remediation_allowlist",
             # LC-20: HA reasons
             "not_leader",
+            # Launch-03: Data quality gating
+            "data_quality_stale",
+            "data_quality_gap",
+            "data_quality_outlier",
         }
 
         actual = {r.value for r in RemediationBlockReason}

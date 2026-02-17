@@ -1286,6 +1286,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
 - [DONE] Gap triage: GAPS.md updated with Priority/Owner/Exit criteria columns (PR #175).
 - [DONE] Data quality v0 (Launch-03 PR1): GapDetector + OutlierFilter + 3 Prometheus counters (detect-only).
 - [DONE] Data quality wiring (Launch-03 PR2): DataQualityEngine wired into LiveFeed._process_snapshot (dq_enabled gated, metrics-only).
+- [DONE] Data quality gating (Launch-03 PR3): dq_blocking flag + 3 block reasons (stale/gap/outlier) in remediation gate; DataQualityVerdict; safe-by-default.
 - Expand tests to >50% coverage.
 - Adaptive Controller v1 (EMA-based adaptive step, trend detection, DRAWDOWN mode).
 - ~~Live Connector v1~~ [DONE] Done (LC-21: stream_ticks wired to BinanceWsConnector).
