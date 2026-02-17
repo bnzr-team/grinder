@@ -2,6 +2,31 @@
 
 > Order management, fill tracking, and smart routing
 
+> **Status:** PARTIAL (core engine done, smart routing planned)
+>
+> **Reality (implemented now):**
+> - `ExecutionEngine` (`src/grinder/execution/engine.py`, 670 lines) — GridPlan → order actions
+> - `ExchangePort` protocol + `BinancePort` / `BinanceFuturesPort` (live order placement)
+> - `IdempotentPort` — idempotent order wrapper (420 lines)
+> - `ConstraintProvider` — symbol-specific qty rounding, step_size/min_qty (M7-05, ADR-059)
+> - `FuturesEvents` — exchange event processing (388 lines)
+> - Paper execution engine for testing
+> - Order reconciliation (PLACE, CANCEL actions)
+> - Prometheus metrics (`grinder_execution_*`)
+>
+> **Not implemented yet:**
+> - `SmartOrderRouter` — amend vs cancel-replace decision logic
+> - Batch operations (`_batch_cancel`, `_batch_place`)
+> - `estimate_fill_probability()` with volatility/OFI adjustment
+> - Fill-probability-based level filtering
+> - `FillTracker` / `RoundTrip` as standalone modules
+> - `PositionSyncer` — periodic exchange reconciliation
+> - `LatencyMonitor` — order latency tracking (p50/p95/p99)
+> - `OrderRetryPolicy` — retry with exponential backoff
+>
+> **Tracking:** Core execution works end-to-end. Advanced routing and tracking are post-launch.
+> This spec describes target state beyond current implementation.
+
 ---
 
 ## 9.1 Order Types

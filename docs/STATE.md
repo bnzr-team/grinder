@@ -1267,6 +1267,9 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
 - Documentation in `docs/*` -- SSOT for architecture/specs (must match implementation).
 
 ## Known gaps / mismatches
+
+> **See also:** [`docs/GAPS.md`](GAPS.md) — SSOT index of spec-vs-code gaps with status and tracking.
+
 - **End-to-end strategy loop** (signal -> plan -> execute continuously) not yet formalized as a production rollout procedure. Execution pipeline verified (Stage D/E mainnet cancel_all/flatten), but continuous autonomous loop is not yet opped.
 - **Backtest in Docker fails:** Running `scripts/run_backtest.py` inside a Docker container fails with `ModuleNotFoundError: No module named 'scripts'`. Fixture determinism checks pass; CI passes because it runs in a properly configured Python environment.
 - Adaptive Grid Controller v1+ (EMA-based adaptive step, trend detection, DRAWDOWN mode, auto-reset) -- **not implemented**; see `docs/16_ADAPTIVE_GRID_CONTROLLER_SPEC.md` (Planned). Controller v0 implemented with rule-based modes (see ADR-011).
