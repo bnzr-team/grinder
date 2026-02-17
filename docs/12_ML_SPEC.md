@@ -2,7 +2,30 @@
 
 > Machine learning for parameter calibration and policy discovery
 
-**Status:** M8 milestone — implementation planned
+> **Status:** PARTIAL (M8 infrastructure done, model training content planned)
+>
+> **Reality (implemented now):**
+> - ONNX inference engine (`src/grinder/ml/onnx/model.py`) — `OnnxMlModel.predict()` → `MlSignalSnapshot`
+> - Model registry with stage pointers: SHADOW / STAGING / ACTIVE (`ml/registry/models.json`)
+> - Artifact loading with SHA256 integrity, path safety validation (`onnx/artifact.py`)
+> - Feature vectorization SSOT: 15 features in `FEATURE_ORDER` (`onnx/features.py`)
+> - Promotion pipeline with audit trail (`scripts/promote_ml_model.py`)
+> - Build / verify scripts (`scripts/build_onnx_artifact.py`, `scripts/verify_onnx_artifact.py`)
+> - ML metrics: inference latency, block reasons, active gauge (`ml/metrics.py`)
+> - Soft-fail: predict() returns None on error, bot continues on rules
+> - `regime_classifier` model in SHADOW stage (golden test artifacts)
+>
+> **Not implemented yet:**
+> - Production training pipeline (train_regime_model.py is stub)
+> - Real training datasets (only golden test fixtures exist)
+> - ML signal injection into AdaptiveGridPolicy evaluation
+> - Model drift detection / monitoring
+> - Walk-forward dataset generation
+> - Fill probability model (Use Case 3)
+> - Parameter calibration via walk-forward (Use Case 1)
+>
+> **Tracking:** M8 infra complete. Model training content and policy integration are next.
+
 **SSOT:** This document defines ML integration contracts
 **See also:** ADR-064 (ML Integration), docs/05_FEATURE_CATALOG.md
 

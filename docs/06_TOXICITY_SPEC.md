@@ -2,6 +2,27 @@
 
 > Adverse selection detection and trading response
 
+> **Status:** PARTIAL (v0 rule-based)
+>
+> **Reality (implemented now):**
+> - `ToxicityGate` class in `src/grinder/gating/toxicity_gate.py` (133 lines)
+> - Spread spike detection: blocks when `spread_bps > max_spread_bps` (default 50)
+> - Price impact detection: blocks when price moves > `max_price_impact_bps` (default 500) within 5s window
+> - Per-symbol price history tracking, deterministic
+> - Prometheus metrics (`grinder_gating_blocked_total{reason=SPREAD_SPIKE|PRICE_IMPACT_HIGH}`)
+>
+> **Not implemented yet:**
+> - `compute_vpin()` — Volume-Synchronized Probability of Informed Trading
+> - `compute_kyle_proxy()` — Kyle's Lambda price impact metric
+> - `compute_amihud()` — Amihud illiquidity measure
+> - `compute_ofi_shock()` — OFI shock component
+> - `detect_liq_surge()` — Liquidation surge detection
+> - Composite weighted `compute_toxicity()` score
+> - `ToxicityCooldown` / `SymbolToxicity` per-symbol tracking
+> - `apply_toxicity_action()` grid plan modification
+>
+> **Tracking:** Post-launch. This spec describes target state beyond current implementation.
+
 ---
 
 ## 6.1 Toxicity Framework

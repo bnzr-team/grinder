@@ -2,6 +2,26 @@
 
 > System states, transitions, and operational modes
 
+> **Status:** PARTIAL (regime classifier only, no centralized FSM)
+>
+> **Reality (implemented now):**
+> - `classify_regime()` in `src/grinder/controller/regime.py` — precedence-based regime classification
+> - Regime enum: RANGE, TREND_UP, TREND_DOWN, VOL_SHOCK, THIN_BOOK, TOXIC, PAUSED, EMERGENCY
+> - RegimeConfig with configurable thresholds (no magic numbers)
+> - Regime drives AdaptiveGridPolicy behavior (spacing, width, levels, mode)
+> - KillSwitch (`src/grinder/risk/kill_switch.py`) triggers EMERGENCY regime
+>
+> **Not implemented yet:**
+> - Centralized `StateMachine` orchestrator class
+> - Explicit INIT / READY / DEGRADED state handlers
+> - State persistence (save/load across restarts)
+> - State guards (`can_enter`, `can_exit` validation)
+> - Multi-symbol state coordination
+> - On-enter / on-exit actions as formal hooks
+>
+> **Tracking:** Regime classification covers core needs. Formal FSM orchestrator is post-launch.
+> This spec describes target state beyond current implementation.
+
 ---
 
 ## 8.1 System States

@@ -2,6 +2,24 @@
 
 > Historical testing, validation, and walk-forward optimization
 
+> **Status:** DEFERRED (stub, delegates to replay)
+>
+> **Reality (implemented now):**
+> - CLI entrypoint `grinder-backtest` in `src/grinder/backtest/cli.py` (29 lines)
+> - Delegates to `scripts/run_replay.py` (deterministic fixture replay)
+> - Replay engine validates determinism (bit-exact reproducibility)
+>
+> **Not implemented yet:**
+> - Independent backtest engine with cost/fee model
+> - Slippage simulation based on order size
+> - Walk-forward optimization framework
+> - Queue position modeling
+> - Monte Carlo simulation
+> - Out-of-sample validation
+> - Performance reporting (Sharpe, max DD, etc.)
+>
+> **Tracking:** Deferred to post-launch (M9). This spec describes target state beyond current implementation.
+
 ---
 
 ## 11.1 Backtest Philosophy
