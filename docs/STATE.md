@@ -1419,7 +1419,8 @@ Comprehensive adaptive grid system design:
     - [DONE] **M8-04a:** Dataset manifest verification CLI (`scripts/verify_dataset.py`) + tests + fixture (PR #166)
     - [DONE] **M8-04b:** Dataset builder CLI (`scripts/build_dataset.py`) + tests (PR #167)
     - [DONE] **M8-04c:** Train integration with dataset manifest (`--dataset-manifest`, dataset_id traceability) (PR #168)
-    - Remaining: M8-04d (promote validation), M8-04e (registry links)
+    - [DONE] **M8-04d:** ACTIVE promotion requires verified dataset artifact (`verify_dataset_for_promotion`, fail-closed guard in `promote_ml_model.py`)
+    - Remaining: M8-04e (registry links)
 
 ### Multi-venue
 - **Current:** Binance Futures USDT-M only

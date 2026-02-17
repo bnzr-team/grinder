@@ -2,6 +2,7 @@
 """Promote ML model between stages with audit trail.
 
 M8-03c-3: Safe model promotion with history[] tracking and fail-closed guards.
+M8-04d: ACTIVE promotion requires verified dataset artifact (verify_dataset).
 
 Usage:
     # Promote to SHADOW (validation/testing)
@@ -84,6 +85,70 @@ def get_actor() -> str | None:
     return None
 
 
+def verify_dataset_for_promotion(
+    dataset_id: str,
+    datasets_dir: Path,
+) -> None:
+    """Verify dataset artifact exists and passes integrity checks.
+
+    M8-04d: ACTIVE promotion requires the training dataset to be present
+    and pass verify_dataset. Fail-closed on any error.
+
+    Args:
+        dataset_id: Dataset identifier from model manifest.
+        datasets_dir: Directory containing dataset artifacts (<datasets_dir>/<id>/).
+
+    Raises:
+        RegistryError: If dataset not found or verification fails.
+    """
+    from scripts.verify_dataset import verify_dataset  # noqa: PLC0415
+
+    # Path safety: dataset_id must not escape datasets_dir
+    if Path(dataset_id).is_absolute():
+        raise RegistryError(f"Absolute dataset_id not allowed: {dataset_id!r}")
+
+    if ".." in Path(dataset_id).parts:
+        raise RegistryError(f"Path traversal in dataset_id not allowed: {dataset_id!r}")
+
+    dataset_dir = datasets_dir / dataset_id
+
+    # Containment check: resolved path must stay under datasets_dir
+    try:
+        dataset_dir.resolve().relative_to(datasets_dir.resolve())
+    except ValueError:
+        raise RegistryError(
+            f"dataset_id escapes datasets_dir: {dataset_id!r} -> {dataset_dir.resolve()}"
+        ) from None
+
+    # Symlink check: reject if dataset_dir is a symlink
+    if dataset_dir.is_symlink():
+        raise RegistryError(f"Dataset path is a symlink (not allowed): {dataset_dir}")
+
+    manifest_path = dataset_dir / "manifest.json"
+
+    if not dataset_dir.exists():
+        raise RegistryError(
+            f"Dataset artifact not found: {dataset_dir} "
+            f"(dataset_id={dataset_id!r}). "
+            f"Build it with: python -m scripts.build_dataset "
+            f"--out-dir {datasets_dir} --dataset-id {dataset_id} ..."
+        )
+
+    if not manifest_path.exists():
+        raise RegistryError(
+            f"Dataset manifest not found: {manifest_path} (dataset_id={dataset_id!r})"
+        )
+
+    errors = verify_dataset(manifest_path, base_dir=datasets_dir, verbose=False)
+    if errors:
+        msg = f"Dataset verification failed for {dataset_id!r} ({len(errors)} errors):\n"
+        for err in errors:
+            msg += f"  - {err}\n"
+        raise RegistryError(msg)
+
+    logger.info("Dataset verified: %s (%s)", dataset_id, manifest_path)
+
+
 def promote_model(  # noqa: PLR0912, PLR0915
     registry_path: Path,
     model_name: str,
@@ -95,6 +160,7 @@ def promote_model(  # noqa: PLR0912, PLR0915
     notes: str | None,
     reason: str | None,
     dry_run: bool,
+    datasets_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Promote model to target stage with audit trail.
 
@@ -109,6 +175,7 @@ def promote_model(  # noqa: PLR0912, PLR0915
         notes: Optional human-readable notes
         reason: Optional promotion reason
         dry_run: If True, preview changes without writing
+        datasets_dir: Directory containing dataset artifacts (M8-04d)
 
     Returns:
         Updated registry data dict
@@ -179,13 +246,31 @@ def promote_model(  # noqa: PLR0912, PLR0915
     except Exception as e:
         raise RegistryError(f"Artifact validation failed: {e}") from e
 
+    # M8-04d: ACTIVE requires verified dataset artifact
+    if stage == Stage.ACTIVE:
+        # Get dataset_id from model manifest if not explicitly provided
+        manifest_dataset_id = artifact.manifest.dataset_id
+        if manifest_dataset_id and dataset_id and manifest_dataset_id != dataset_id:
+            raise RegistryError(
+                f"dataset_id mismatch: --dataset-id={dataset_id!r} vs "
+                f"model manifest dataset_id={manifest_dataset_id!r}"
+            )
+        effective_dataset_id = dataset_id or manifest_dataset_id
+        if not effective_dataset_id:
+            raise RegistryError(
+                "ACTIVE promotion requires dataset_id (via --dataset-id or model manifest)"
+            )
+        # Use provided datasets_dir or default relative to registry
+        effective_datasets_dir = datasets_dir or (registry_path.parent / "datasets")
+        verify_dataset_for_promotion(effective_dataset_id, effective_datasets_dir)
+
     # Get actor for audit trail
     actor = get_actor()
     if actor:
         logger.info("Actor: %s", actor)
     else:
         logger.warning(
-            "Actor: null — set ML_PROMOTION_ACTOR env or git config user.email "
+            "Actor: null -- set ML_PROMOTION_ACTOR env or git config user.email "
             "for production audit trail"
         )
 
@@ -199,7 +284,7 @@ def promote_model(  # noqa: PLR0912, PLR0915
 
     # Create history event
     # from_stage is None: CLI sets target stage directly, no cross-stage tracking.
-    # Cross-stage lineage (e.g., shadow→active) can be inferred from history sequence.
+    # Cross-stage lineage (e.g., shadow->active) can be inferred from history sequence.
     history_event = {
         "ts_utc": promoted_at_utc,
         "from_stage": None,
@@ -266,7 +351,7 @@ def promote_model(  # noqa: PLR0912, PLR0915
             json.dump(registry_data, f, indent=2, ensure_ascii=False)
             f.write("\n")  # Trailing newline
 
-        logger.info("✓ Promotion complete")
+        logger.info("OK: Promotion complete")
         logger.info("  Model: %s", model_name)
         logger.info("  Stage: %s", stage.value)
         logger.info("  Artifact: %s", artifact_id)
@@ -330,6 +415,12 @@ def main() -> int:
         help="Optional promotion reason for audit trail",
     )
     parser.add_argument(
+        "--datasets-dir",
+        type=Path,
+        default=None,
+        help="Directory containing dataset artifacts (default: ml/datasets relative to registry)",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Preview changes without writing to registry",
@@ -359,6 +450,7 @@ def main() -> int:
             notes=args.notes,
             reason=args.reason,
             dry_run=args.dry_run,
+            datasets_dir=args.datasets_dir,
         )
         return 0
     except (RegistryError, FileNotFoundError) as e:
