@@ -1,10 +1,10 @@
-"""Data quality engine — thin wrapper for DQ pipeline (Launch-03 PR2).
+"""Data quality engine — thin wrapper for DQ pipeline (Launch-03 PR2/PR3).
 
 Combines GapDetector, OutlierFilter, is_stale, and DataQualityMetrics
 into a single ``observe_tick()`` call that the live ingestion path can
 invoke on every snapshot.
 
-Side-effects: **metrics increments only** (no gating, no blocking).
+Side-effects: metrics increments + verdict for optional gating (PR3).
 
 This module has NO imports from reconcile/ or execution/.
 """
@@ -12,6 +12,7 @@ This module has NO imports from reconcile/ or execution/.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 
 from grinder.data.quality import (
     DataQualityConfig,
@@ -22,6 +23,25 @@ from grinder.data.quality import (
 from grinder.data.quality_metrics import get_data_quality_metrics
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class DataQualityVerdict:
+    """Result of a single DQ observation.
+
+    Consumers (e.g. remediation gate) check fields to decide
+    whether to block execution.  All fields are False/None when
+    data quality is acceptable.
+    """
+
+    stale: bool = False
+    gap_bucket: str | None = None
+    outlier_kind: str | None = None
+
+    @property
+    def is_ok(self) -> bool:
+        """True when no issues detected."""
+        return not self.stale and self.gap_bucket is None and self.outlier_kind is None
 
 
 class DataQualityEngine:
@@ -55,7 +75,7 @@ class DataQualityEngine:
         ts_ms: int,
         price: float,
         now_ms: int | None = None,
-    ) -> None:
+    ) -> DataQualityVerdict:
         """Process one tick through all DQ detectors and record metrics.
 
         Args:
@@ -65,7 +85,14 @@ class DataQualityEngine:
             price: Current mid/last price (float).
             now_ms: Current wall-clock time in epoch ms (for staleness).
                     If None, staleness check is skipped.
+
+        Returns:
+            DataQualityVerdict summarising detected issues (if any).
         """
+        found_stale = False
+        found_gap_bucket: str | None = None
+        found_outlier_kind: str | None = None
+
         # --- staleness ---
         if now_ms is not None:
             prev_ts = self._last_ts.get(stream)
@@ -73,6 +100,7 @@ class DataQualityEngine:
                 threshold = self._staleness_threshold(stream)
                 if is_stale(now_ms, prev_ts, threshold):
                     self._metrics.inc_stale(stream)
+                    found_stale = True
 
         self._last_ts[stream] = ts_ms
 
@@ -80,11 +108,19 @@ class DataQualityEngine:
         gap_event = self._gap.observe(stream, ts_ms)
         if gap_event is not None:
             self._metrics.inc_gap(gap_event.stream, gap_event.bucket)
+            found_gap_bucket = gap_event.bucket
 
         # --- outlier (price-only v0) ---
         outlier_event = self._outlier.observe_price(stream, price)
         if outlier_event is not None:
             self._metrics.inc_outlier(outlier_event.stream, outlier_event.kind)
+            found_outlier_kind = outlier_event.kind
+
+        return DataQualityVerdict(
+            stale=found_stale,
+            gap_bucket=found_gap_bucket,
+            outlier_kind=found_outlier_kind,
+        )
 
     def _staleness_threshold(self, stream: str) -> int:
         """Return staleness threshold for a stream (ms)."""

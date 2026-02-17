@@ -38,6 +38,9 @@ from grinder.reconcile.metrics import get_reconcile_metrics
 from grinder.reconcile.types import MismatchType, ObservedOrder, ObservedPosition
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from grinder.data.quality_engine import DataQualityVerdict
     from grinder.execution.binance_futures_port import BinanceFuturesPort
 
 logger = logging.getLogger(__name__)
@@ -88,6 +91,11 @@ class RemediationBlockReason(Enum):
 
     # LC-20: HA reasons
     NOT_LEADER = "not_leader"
+
+    # Launch-03: Data quality gating reasons
+    DATA_QUALITY_STALE = "data_quality_stale"
+    DATA_QUALITY_GAP = "data_quality_gap"
+    DATA_QUALITY_OUTLIER = "data_quality_outlier"
 
 
 class RemediationStatus(Enum):
@@ -159,6 +167,10 @@ class RemediationExecutor:
 
     # LC-18: Budget tracker (initialized in __post_init__)
     budget_tracker: BudgetTracker | None = field(default=None, repr=False)
+
+    # Launch-03: DQ gating (optional, safe-by-default)
+    dq_blocking: bool = False
+    dq_verdict_fn: Callable[[], DataQualityVerdict | None] | None = field(default=None, repr=False)
 
     # Internal state
     _last_action_ts: int = field(default=0, repr=False)
@@ -331,6 +343,19 @@ class RemediationExecutor:
 
         return symbol in self.config.remediation_symbol_allowlist
 
+    @staticmethod
+    def _dq_verdict_to_reason(verdict: DataQualityVerdict) -> RemediationBlockReason:
+        """Map a failed DQ verdict to the most specific block reason.
+
+        Priority: stale > gap > outlier (stale is the strongest signal
+        that data is unreliable).
+        """
+        if verdict.stale:
+            return RemediationBlockReason.DATA_QUALITY_STALE
+        if verdict.gap_bucket is not None:
+            return RemediationBlockReason.DATA_QUALITY_GAP
+        return RemediationBlockReason.DATA_QUALITY_OUTLIER
+
     def can_execute(  # noqa: PLR0911, PLR0912 - many gates require many returns/branches
         self,
         symbol: str,
@@ -355,6 +380,7 @@ class RemediationExecutor:
             0b. Budget limits (per-run and per-day)
             0c. Strategy in allowlist (if configured)
             0d. Symbol in remediation allowlist (if configured)
+            0e. Data quality (Launch-03, only when dq_blocking=True)
 
             1. action != NONE (legacy)
             2. dry_run == False (legacy)
@@ -406,6 +432,12 @@ class RemediationExecutor:
         # LC-18 Gate 0d: Symbol remediation allowlist check
         if not self._check_remediation_symbol_allowlist(symbol):
             return (False, RemediationBlockReason.SYMBOL_NOT_IN_REMEDIATION_ALLOWLIST)
+
+        # Launch-03 Gate 0e: Data quality check (only when dq_blocking=True)
+        if self.dq_blocking and self.dq_verdict_fn is not None:
+            verdict = self.dq_verdict_fn()
+            if verdict is not None and not verdict.is_ok:
+                return (False, self._dq_verdict_to_reason(verdict))
 
         # Gate 1: action != NONE (legacy - for backward compat)
         if self.config.action == RemediationAction.NONE:

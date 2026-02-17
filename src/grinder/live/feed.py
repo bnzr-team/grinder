@@ -33,7 +33,7 @@ if TYPE_CHECKING:
 
     from grinder.connectors.data_connector import DataConnector
     from grinder.contracts import Snapshot
-    from grinder.data.quality_engine import DataQualityEngine
+    from grinder.data.quality_engine import DataQualityEngine, DataQualityVerdict
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +49,7 @@ class LiveFeedConfig:
         warmup_bars: Bars needed before is_warmed_up=True
         dq_enabled: Enable data quality detection (Launch-03).
         dq_stream: Stream label for DQ metrics (no symbol names).
+        dq_blocking: Enable DQ blocking gate for remediation (Launch-03 PR3).
     """
 
     symbols: list[str] = field(default_factory=list)
@@ -57,6 +58,7 @@ class LiveFeedConfig:
     warmup_bars: int = 15  # ATR(14) + 1
     dq_enabled: bool = False
     dq_stream: str = "live_feed"
+    dq_blocking: bool = False
 
     def is_symbol_allowed(self, symbol: str) -> bool:
         """Check if symbol should be processed."""
@@ -100,8 +102,9 @@ class LiveFeed:
         self._stats = LiveFeedStats()
         self._running = False
 
-        # Launch-03: data quality detection (metrics-only, no gating)
+        # Launch-03: data quality detection + optional blocking gate
         self._dq: DataQualityEngine | None = None
+        self._dq_last_verdict: DataQualityVerdict | None = None
         if config.dq_enabled:
             from grinder.data.quality_engine import DataQualityEngine  # noqa: PLC0415
 
@@ -121,6 +124,10 @@ class LiveFeed:
     def feature_engine(self) -> FeatureEngine:
         """Get feature engine instance."""
         return self._feature_engine
+
+    def latest_data_quality_verdict(self) -> DataQualityVerdict | None:
+        """Return the most recent DQ verdict, or None if DQ is disabled."""
+        return self._dq_last_verdict
 
     async def run(self, connector: DataConnector) -> AsyncIterator[LiveFeaturesUpdate]:
         """Run the feed pipeline.
@@ -170,9 +177,9 @@ class LiveFeed:
         """
         start_ts = int(self._clock() * 1000)
 
-        # Launch-03: data quality observation (metrics-only)
+        # Launch-03: data quality observation + verdict capture
         if self._dq is not None:
-            self._dq.observe_tick(
+            self._dq_last_verdict = self._dq.observe_tick(
                 stream=self._config.dq_stream,
                 ts_ms=snapshot.ts,
                 price=float(snapshot.mid_price),
