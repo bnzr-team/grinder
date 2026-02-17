@@ -1,6 +1,6 @@
-# STATE — Current Implementation Status
+# STATE -- Current Implementation Status
 
-Цель: фиксировать **что реально работает сейчас** (а не что хотелось бы). Обновлять в каждом PR, если изменилось.
+Goal: document **what actually works now** (not what we wish worked). Update in every PR if something changed.
 
 Next steps and progress tracker: `docs/ROADMAP.md`.
 
@@ -14,11 +14,11 @@ Next steps and progress tracker: `docs/ROADMAP.md`.
 These are **not** a formal checklist. For canonical status, see the ADRs in `docs/DECISIONS.md`.
 
 ## Works now
-- `grinder --help` / `grinder-paper --help` / `grinder-backtest --help` — CLI entrypoints работают.
-- `python -m scripts.run_live` поднимает `/healthz` и `/metrics`:
+- `grinder --help` / `grinder-paper --help` / `grinder-backtest --help` -- CLI entrypoints work.
+- `python -m scripts.run_live` starts `/healthz` and `/metrics`:
   - `/healthz`: JSON health check (status, uptime)
   - `/metrics`: Prometheus format including system metrics + gating metrics
-- `python -m scripts.run_soak` генерирует synthetic soak metrics JSON.
+- `python -m scripts.run_soak` generates synthetic soak metrics JSON.
 - **Test fixtures** (`tests/fixtures/`):
   - `sample_day/`: BTC/ETH prices, orders blocked by gating (notional too high)
     - Replay digest: `453ebd0f655e4920`
@@ -50,16 +50,16 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - Script: `python -m scripts.run_replay --fixture <path> [-v] [--out <path>]`
   - Determinism check: `python -m scripts.verify_replay_determinism --fixture <path>`
   - Output format: `Replay completed. Events processed: N\nOutput digest: <16-char-hex>`
-- `python -m scripts.secret_guard` проверяет repo на утечки секретов.
-- `python -m scripts.check_unicode` сканирует docs на опасный Unicode (bidi, zero-width). См. ADR-005.
-- Docker build + healthcheck работают (Dockerfile использует `urllib.request` вместо `curl`).
-- Grafana provisioning: `monitoring/grafana/provisioning/` содержит datasource + dashboard.
-- Branch protection на `main`: все PR требуют 5 зелёных checks.
-- **Domain contracts** (`src/grinder/contracts.py`): Snapshot, Position, PolicyContext, OrderIntent, Decision — typed, frozen, JSON-serializable. См. ADR-003.
+- `python -m scripts.secret_guard` checks repo for secret leaks.
+- `python -m scripts.check_unicode` scans docs for dangerous Unicode (bidi, zero-width). See ADR-005.
+- Docker build + healthcheck work (Dockerfile uses `urllib.request` instead of `curl`).
+- Grafana provisioning: `monitoring/grafana/provisioning/` contains datasource + dashboard.
+- Branch protection on `main`: all PRs require 5 green checks.
+- **Domain contracts** (`src/grinder/contracts.py`): Snapshot, Position, PolicyContext, OrderIntent, Decision -- typed, frozen, JSON-serializable. See ADR-003.
 - **Prefilter v0** (`src/grinder/prefilter/`):
   - **Hard gates:** rule-based gates returning ALLOW/BLOCK + reason
   - **Top-K selector v0** (`TopKSelector`): selects top K symbols from multisymbol stream
-    - Scoring: volatility proxy — sum of absolute mid-price returns in basis points
+    - Scoring: volatility proxy -- sum of absolute mid-price returns in basis points
     - Tie-breakers: higher score first, then lexicographic symbol ascending (deterministic)
     - Default K=3, window_size=10 events per symbol
     - See ADR-010 for design decisions
@@ -69,7 +69,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - `GridPlan.size_schedule` is ALWAYS **base asset quantity** (e.g., BTC, ETH), NOT notional (USD)
   - `notional_to_qty(notional, price, precision)` utility in `src/grinder/policies/base.py` for explicit conversion
   - Formula: `qty = notional / price`, rounded down to precision
-  - Example: `notional_to_qty(Decimal("500"), Decimal("50000"))` → `Decimal("0.01")` (0.01 BTC)
+  - Example: `notional_to_qty(Decimal("500"), Decimal("50000"))` -> `Decimal("0.01")` (0.01 BTC)
   - All code interpreting `size_schedule` MUST treat values as base asset quantity
 - **Execution stub v0** (`src/grinder/execution/`): ExchangePort protocol + NoOpExchangePort stub, ExecutionEngine with reconcile logic (PAUSE/EMERGENCY -> cancel all, HARD reset -> rebuild grid, SOFT reset -> replace non-conforming, NONE -> reconcile). Deterministic order ID generation. ExecutionMetrics for observability. Limitations: no live exchange writes, no rate limiting, no error recovery.
 - **Replay engine v0** (`src/grinder/replay/`):
@@ -98,24 +98,24 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
 - **Paper trading v1** (`src/grinder/paper/`):
   - CLI: `grinder paper --fixture <path> [-v] [--out <path>]`
   - **Pipeline:** `Snapshot` -> `Top-K filter` -> `hard_filter()` -> `gating check (toxicity -> rate limit -> risk)` -> `StaticGridPolicy.evaluate()` -> `ExecutionEngine.evaluate()` -> `simulate_fills()` -> `Ledger.apply_fills()` -> `PaperOutput`
-  - **Top-K prefilter:** Two-pass processing — first scan for volatility scores, then filter to top K symbols
+  - **Top-K prefilter:** Two-pass processing -- first scan for volatility scores, then filter to top K symbols
   - **Gating gates:** toxicity (spread spike, price impact) + rate limit (orders/minute, cooldown) + risk limits (notional, daily loss)
   - **Fill simulation v1.1 (crossing/touch model):** BUY fills if `mid_price <= limit_price`, SELL fills if `mid_price >= limit_price` (deterministic, see ADR-016)
   - **Tick-delay fills v0.1 (LC-03):**
     - Orders stay OPEN for N ticks before fill-eligible (configurable via `fill_after_ticks`)
     - `fill_after_ticks=0` (default): instant/crossing behavior (backward compatible)
     - `fill_after_ticks=1+`: fill on tick N after placement (if price crosses)
-    - Order lifecycle: `PLACE → OPEN → (N ticks) → FILLED`
+    - Order lifecycle: `PLACE -> OPEN -> (N ticks) -> FILLED`
     - Cancel before fill prevents filling
-    - Deterministic: same inputs → same fills (no randomness)
+    - Deterministic: same inputs -> same fills (no randomness)
     - Added `placed_tick` to `OrderRecord` for tracking
     - Uses per-symbol `tick_counter` in `ExecutionState`
     - 18 unit tests in `tests/unit/test_paper_realism.py`
     - See ADR-034
   - **CycleEngine v1** (`src/grinder/paper/cycle_engine.py`):
-    - Converts fills to TP + replenishment intents (§17.12.2)
-    - BUY fill → SELL TP at `p_fill * (1 + step_pct)` for same qty
-    - SELL fill → BUY TP at `p_fill * (1 - step_pct)` for same qty
+    - Converts fills to TP + replenishment intents (Sec 17.12.2)
+    - BUY fill -> SELL TP at `p_fill * (1 + step_pct)` for same qty
+    - SELL fill -> BUY TP at `p_fill * (1 - step_pct)` for same qty
     - Replenishment: same-side order further out (only if `adds_allowed=True`)
     - Deterministic intent IDs: `cycle_{type}_{fill_id}_{side}_{price}`
     - Opt-in: `cycle_enabled=False` default (backward compat)
@@ -124,15 +124,15 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - **Feature Engine v1** (`src/grinder/features/`):
     - Deterministic mid-bar OHLC construction from snapshot stream
     - **Bar building:** floor-aligned boundaries, no synthesized bars for gaps
-    - **ATR/NATR (§17.5.2):** True Range + period-based averaging (default 14)
-    - **L1 features (§17.5.3):** imbalance_l1_bps, thin_l1, spread_bps
-    - **Range/trend (§17.5.5):** sum_abs_returns_bps, net_return_bps, range_score
+    - **ATR/NATR (Sec 17.5.2):** True Range + period-based averaging (default 14)
+    - **L1 features (Sec 17.5.3):** imbalance_l1_bps, thin_l1, spread_bps
+    - **Range/trend (Sec 17.5.5):** sum_abs_returns_bps, net_return_bps, range_score
     - **Warmup handling:** features return 0/None until period+1 bars complete
     - **Determinism:** all calcs use Decimal, outputs as integer bps or Decimal
     - **Unit tests:** 83 tests (test_bar_builder.py, test_indicators.py, test_feature_engine.py)
     - **PaperEngine integration (ASM-P1-02):**
       - `feature_engine_enabled=False` default (backward compat)
-      - `PaperOutput.features: dict | None` — computed features per snapshot
+      - `PaperOutput.features: dict | None` -- computed features per snapshot
       - Features NOT in digest (backward compat, Variant A)
       - Canonical digests unchanged when features enabled
       - 9 integration tests in `test_paper.py::TestFeatureEngineIntegration`
@@ -148,10 +148,10 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
 - **Adaptive Controller v0** (`src/grinder/controller/`):
   - Rule-based controller that adjusts policy parameters based on recent market conditions
   - **Controller modes:**
-    - `BASE` — Normal operation, no adjustment (spacing_multiplier = 1.0)
-    - `WIDEN` — High volatility (> 300 bps), widen grid (spacing_multiplier = 1.5)
-    - `TIGHTEN` — Low volatility (< 50 bps), tighten grid (spacing_multiplier = 0.8)
-    - `PAUSE` — Wide spread (> 50 bps), no new orders
+    - `BASE` -- Normal operation, no adjustment (spacing_multiplier = 1.0)
+    - `WIDEN` -- High volatility (> 300 bps), widen grid (spacing_multiplier = 1.5)
+    - `TIGHTEN` -- Low volatility (< 50 bps), tighten grid (spacing_multiplier = 0.8)
+    - `PAUSE` -- Wide spread (> 50 bps), no new orders
   - **Priority order:** PAUSE > WIDEN > TIGHTEN > BASE
   - **Window-based metrics:** vol_bps (sum of abs mid returns), spread_bps_max (max spread in window)
   - **Determinism:** All metrics use integer basis points (no floats)
@@ -228,7 +228,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - `grinder_idempotency_misses_total{op}` (counter): idempotency cache misses
     - `grinder_circuit_state{op, state}` (gauge): circuit breaker state (1 for current, 0 for others)
     - `grinder_circuit_rejected_total{op}` (counter): calls rejected by OPEN circuit
-    - `grinder_circuit_trips_total{op, reason}` (counter): circuit trips (CLOSED → OPEN)
+    - `grinder_circuit_trips_total{op, reason}` (counter): circuit trips (CLOSED -> OPEN)
     - Labels: `op` = operation name, `reason` = transient/timeout/other/threshold, `state` = closed/open/half_open
     - See ADR-028 for design decisions
   - **Contract tests:** `tests/unit/test_live_contracts.py`, `tests/unit/test_observability.py`, `tests/unit/test_connector_metrics.py`
@@ -256,7 +256,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - **Included in CI:** runs as part of standard `pytest` invocation
 - **DataConnector v1** (`src/grinder/connectors/data_connector.py`):
   - Abstract base class (ABC) defining narrow contract: `connect()`, `close()`, `iter_snapshots()`, `reconnect()`
-  - **ConnectorState:** DISCONNECTED → CONNECTING → CONNECTED → RECONNECTING → CLOSED
+  - **ConnectorState:** DISCONNECTED -> CONNECTING -> CONNECTED -> RECONNECTING -> CLOSED
   - **RetryConfig:** Exponential backoff with cap (`base_delay_ms`, `backoff_multiplier`, `max_delay_ms`)
   - **TimeoutConfig (extended):**
     - `connect_timeout_ms` (5000ms default): timeout for initial connection
@@ -264,47 +264,47 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - `write_timeout_ms` (5000ms default): timeout for write operations
     - `close_timeout_ms` (5000ms default): timeout for graceful shutdown
   - **Error hierarchy** (`src/grinder/connectors/errors.py`):
-    - `ConnectorError` — base exception for all connector errors
-    - `ConnectorTimeoutError(op, timeout_ms)` — timeout during connect/read/write/close
-    - `ConnectorClosedError(op)` — operation attempted on closed connector
-    - `ConnectorIOError` — base for I/O errors
-    - `ConnectorTransientError` — retryable errors (network, 5xx, 429)
-    - `ConnectorNonRetryableError` — non-retryable errors (4xx, auth, validation)
+    - `ConnectorError` -- base exception for all connector errors
+    - `ConnectorTimeoutError(op, timeout_ms)` -- timeout during connect/read/write/close
+    - `ConnectorClosedError(op)` -- operation attempted on closed connector
+    - `ConnectorIOError` -- base for I/O errors
+    - `ConnectorTransientError` -- retryable errors (network, 5xx, 429)
+    - `ConnectorNonRetryableError` -- non-retryable errors (4xx, auth, validation)
   - **Retry utilities (H2)** (`src/grinder/connectors/retries.py`):
-    - `RetryPolicy` — frozen dataclass: `max_attempts`, `base_delay_ms`, `max_delay_ms`, `backoff_multiplier`, `retry_on_timeout`
-    - `RetryStats` — tracks `attempts`, `retries`, `total_delay_ms`, `last_error`, `errors`
-    - `is_retryable(error, policy)` — classifies errors as retryable/non-retryable
-    - `retry_with_policy(op_name, operation, policy, sleep_func, on_retry)` — async retry wrapper with exponential backoff
+    - `RetryPolicy` -- frozen dataclass: `max_attempts`, `base_delay_ms`, `max_delay_ms`, `backoff_multiplier`, `retry_on_timeout`
+    - `RetryStats` -- tracks `attempts`, `retries`, `total_delay_ms`, `last_error`, `errors`
+    - `is_retryable(error, policy)` -- classifies errors as retryable/non-retryable
+    - `retry_with_policy(op_name, operation, policy, sleep_func, on_retry)` -- async retry wrapper with exponential backoff
     - `sleep_func` parameter enables bounded-time testing (no real sleeps)
   - **Idempotency utilities (H3)** (`src/grinder/connectors/idempotency.py`):
-    - `IdempotencyStatus` — enum: `INFLIGHT`, `DONE`, `FAILED`
-    - `IdempotencyEntry` — dataclass: key, status, op_name, fingerprint, timestamps, result
-    - `IdempotencyStore` — protocol for pluggable storage
-    - `InMemoryIdempotencyStore` — thread-safe in-memory implementation with injectable clock
-    - `compute_idempotency_key(scope, op, **params)` — deterministic key from canonical payload (ts excluded from key)
-    - `IdempotencyConflictError` — fast-fail on INFLIGHT duplicates
+    - `IdempotencyStatus` -- enum: `INFLIGHT`, `DONE`, `FAILED`
+    - `IdempotencyEntry` -- dataclass: key, status, op_name, fingerprint, timestamps, result
+    - `IdempotencyStore` -- protocol for pluggable storage
+    - `InMemoryIdempotencyStore` -- thread-safe in-memory implementation with injectable clock
+    - `compute_idempotency_key(scope, op, **params)` -- deterministic key from canonical payload (ts excluded from key)
+    - `IdempotencyConflictError` -- fast-fail on INFLIGHT duplicates
   - **IdempotentExchangePort (H3)** (`src/grinder/execution/idempotent_port.py`):
     - Wraps `ExchangePort` with idempotency guarantees for place/cancel/replace
     - Same request with same key returns cached result (DONE)
     - Concurrent duplicates fail fast with `IdempotencyConflictError` (INFLIGHT)
     - FAILED entries allow retry (overwritable)
-    - Integrates with H2 retries: key created once, all retries use same key → 1 side-effect
+    - Integrates with H2 retries: key created once, all retries use same key -> 1 side-effect
     - Stats tracking: `place_calls`, `place_cached`, `place_executed`, `place_conflicts`
   - **Circuit Breaker (H4)** (`src/grinder/connectors/circuit_breaker.py`):
-    - `CircuitState` — enum: `CLOSED`, `OPEN`, `HALF_OPEN`
-    - `CircuitBreakerConfig` — failure_threshold, open_interval_s, half_open_probe_count, success_threshold, trip_on
-    - `CircuitBreaker` — per-operation circuit breaker with injectable clock
-    - `before_call(op)` / `allow(op)` — fast-fail when OPEN, limited probes in HALF_OPEN
-    - `record_success(op)` / `record_failure(op, reason)` — state transitions
-    - `CircuitOpenError` — non-retryable error raised when circuit is OPEN
-    - `default_trip_on` — trips on `ConnectorTransientError`, `ConnectorTimeoutError`
+    - `CircuitState` -- enum: `CLOSED`, `OPEN`, `HALF_OPEN`
+    - `CircuitBreakerConfig` -- failure_threshold, open_interval_s, half_open_probe_count, success_threshold, trip_on
+    - `CircuitBreaker` -- per-operation circuit breaker with injectable clock
+    - `before_call(op)` / `allow(op)` -- fast-fail when OPEN, limited probes in HALF_OPEN
+    - `record_success(op)` / `record_failure(op, reason)` -- state transitions
+    - `CircuitOpenError` -- non-retryable error raised when circuit is OPEN
+    - `default_trip_on` -- trips on `ConnectorTransientError`, `ConnectorTimeoutError`
     - Per-op isolation: place can be OPEN while cancel stays CLOSED
     - **Status: Wired into IdempotentExchangePort** (H4-02)
-    - Integration order: breaker.before_call → idempotency → execute → record_success/failure
+    - Integration order: breaker.before_call -> idempotency -> execute -> record_success/failure
   - **Timeout utilities** (`src/grinder/connectors/timeouts.py`):
-    - `wait_for_with_op(coro, timeout_ms, op)` — wraps `asyncio.wait_for` with `ConnectorTimeoutError`
-    - `cancel_tasks_with_timeout(tasks, timeout_ms)` — clean task cancellation
-    - `create_named_task(coro, name, tasks_set)` — tracked task creation
+    - `wait_for_with_op(coro, timeout_ms, op)` -- wraps `asyncio.wait_for` with `ConnectorTimeoutError`
+    - `cancel_tasks_with_timeout(tasks, timeout_ms)` -- clean task cancellation
+    - `create_named_task(coro, name, tasks_set)` -- tracked task creation
   - **Idempotency:** `last_seen_ts` property for duplicate detection
   - See ADR-012 (design), ADR-024 (H1 hardening), ADR-025 (H2 retries), ADR-026 (H3 idempotency), ADR-027 (H4 circuit breaker)
 - **BinanceWsMockConnector v1** (`src/grinder/connectors/binance_ws_mock.py`):
@@ -317,8 +317,8 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - Reconnect with position preservation (`last_seen_ts`)
     - Statistics tracking (`MockConnectorStats`)
   - **Timeout enforcement (H1):**
-    - Connect timeout via `wait_for_with_op()` — raises `ConnectorTimeoutError` on timeout
-    - Read timeout during iteration — raises `ConnectorTimeoutError` if read_delay exceeds timeout
+    - Connect timeout via `wait_for_with_op()` -- raises `ConnectorTimeoutError` on timeout
+    - Read timeout during iteration -- raises `ConnectorTimeoutError` if read_delay exceeds timeout
     - Stats track `timeouts` count and `errors` list
   - **Clean shutdown (H1):**
     - Task tracking via `self._tasks` set with named prefix
@@ -349,7 +349,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - **Features:**
     - `SafeMode` enum: `READ_ONLY` (default), `PAPER`, `LIVE_TRADE`
     - Default URL: Binance testnet (safe by design)
-    - `assert_mode(required_mode)` — raises `ConnectorNonRetryableError` if insufficient (non-retryable by design)
+    - `assert_mode(required_mode)` -- raises `ConnectorNonRetryableError` if insufficient (non-retryable by design)
     - Extends `DataConnector` ABC: `connect()`, `close()`, `stream_ticks()`, `subscribe()`, `reconnect()`
     - H2/H4/H5 hardening: retries, circuit breaker, metrics integration
   - **Configuration** (`LiveConnectorConfig`):
@@ -368,21 +368,21 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - **Metrics:** `grinder_ws_connected`, `grinder_ws_reconnect_total`, `grinder_ticks_received_total`, `grinder_last_tick_ts`
     - **Testing:** `FakeWsTransport` injectable for bounded-time tests (delay_ms=2 for unique timestamps)
   - **Paper write-path (PAPER mode only):**
-    - `place_order(symbol, side, price, quantity)` → `OrderResult` (instant fill v0)
-    - `cancel_order(order_id)` → `OrderResult` (error if filled)
-    - `replace_order(order_id, new_price, new_quantity)` → `OrderResult` (cancel+new)
+    - `place_order(symbol, side, price, quantity)` -> `OrderResult` (instant fill v0)
+    - `cancel_order(order_id)` -> `OrderResult` (error if filled)
+    - `replace_order(order_id, new_price, new_quantity)` -> `OrderResult` (cancel+new)
     - Deterministic order IDs: `PAPER_{seq:08d}`
-    - No network calls — pure in-memory simulation via `PaperExecutionAdapter`
+    - No network calls -- pure in-memory simulation via `PaperExecutionAdapter`
   - **LIVE_TRADE write-path (LC-22):**
-    - `place_order(symbol, side, price, quantity)` → delegates to `BinanceFuturesPort`
-    - `cancel_order(order_id)` → delegates to `BinanceFuturesPort`
-    - `replace_order(order_id, new_price, new_quantity)` → delegates to `BinanceFuturesPort`
+    - `place_order(symbol, side, price, quantity)` -> delegates to `BinanceFuturesPort`
+    - `cancel_order(order_id)` -> delegates to `BinanceFuturesPort`
+    - `replace_order(order_id, new_price, new_quantity)` -> delegates to `BinanceFuturesPort`
     - **3 safety gates + required futures_port:** ALL must pass for real trades:
       1. `armed=True` (explicit arming in config)
       2. `mode=LIVE_TRADE` (explicit mode)
       3. `ALLOW_MAINNET_TRADE=1` env var (external safeguard)
       - Plus: `futures_port` must be configured (required dependency, not a safety gate)
-    - Any check failure → `ConnectorNonRetryableError` with actionable message
+    - Any check failure -> `ConnectorNonRetryableError` with actionable message
     - See ADR-056 for design decisions, runbook 17 for enablement procedure
   - **Unit tests:** `tests/unit/test_live_connector.py` (43 tests)
   - **Integration tests:** `tests/integration/test_live_connector_integration.py` (6 tests)
@@ -410,7 +410,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
 - **BinanceExchangePort v0.2** (`src/grinder/execution/binance_port.py`):
   - Live exchange port implementing ExchangePort protocol for Binance Spot (LC-04, LC-08b)
   - **Safety by design:**
-    - `SafeMode.READ_ONLY` (default): blocks ALL write operations → 0 risk
+    - `SafeMode.READ_ONLY` (default): blocks ALL write operations -> 0 risk
     - `SafeMode.LIVE_TRADE` required for real API calls (explicit opt-in)
     - Default URL: `https://testnet.binance.vision` (testnet)
   - **Mainnet guards (ADR-039, LC-08b):**
@@ -429,10 +429,10 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - `symbol_whitelist` config parameter
     - Blocks trades for unlisted symbols (empty = all allowed for testnet, REQUIRED for mainnet)
   - **Error mapping:**
-    - 5xx → `ConnectorTransientError` (retryable)
-    - 429 → `ConnectorTransientError` (rate limit)
-    - 418 → `ConnectorNonRetryableError` (IP ban)
-    - 4xx → `ConnectorNonRetryableError` (client error)
+    - 5xx -> `ConnectorTransientError` (retryable)
+    - 429 -> `ConnectorTransientError` (rate limit)
+    - 418 -> `ConnectorNonRetryableError` (IP ban)
+    - 4xx -> `ConnectorNonRetryableError` (client error)
   - **H2/H3/H4 integration:**
     - Wrap with `IdempotentExchangePort` for idempotency + circuit breaker
     - Replace = cancel + place with shared idempotency key (safe under retries)
@@ -460,7 +460,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - Live exchange port implementing ExchangePort protocol for Binance Futures USDT-M (LC-08b-F)
   - **Target execution venue:** `fapi.binance.com` (Futures USDT-M mainnet)
   - **Safety by design:**
-    - `SafeMode.READ_ONLY` (default): blocks ALL write operations → 0 risk
+    - `SafeMode.READ_ONLY` (default): blocks ALL write operations -> 0 risk
     - `SafeMode.LIVE_TRADE` required for real API calls (explicit opt-in)
     - Default URL: `https://testnet.binancefuture.com` (testnet)
   - **Mainnet guards (ADR-040, LC-08b-F):**
@@ -500,8 +500,8 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - `mode=SafeMode.LIVE_TRADE` required at port level
     - Both required for actual writes: `armed=True AND mode=LIVE_TRADE`
   - **Intent classification:**
-    - PLACE/REPLACE → INCREASE_RISK (blocked in DRAWDOWN)
-    - CANCEL → CANCEL (always allowed)
+    - PLACE/REPLACE -> INCREASE_RISK (blocked in DRAWDOWN)
+    - CANCEL -> CANCEL (always allowed)
   - **Safety gate ordering:**
     1. Arming check
     2. Mode check
@@ -520,25 +520,25 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - **Unit tests:** `tests/unit/test_live_engine.py` (16 tests)
     - Safety/arming tests prove armed=False blocks writes
     - Drawdown tests prove INCREASE_RISK blocked in DRAWDOWN
-    - Idempotency tests prove duplicate→cached
-    - Circuit breaker tests prove OPEN→reject
+    - Idempotency tests prove duplicate->cached
+    - Circuit breaker tests prove OPEN->reject
   - See ADR-036 for design decisions
 - **LiveFeed v0** (`src/grinder/live/feed.py`):
-  - Live read-path pipeline: WS → Snapshot → FeatureEngine → features (LC-06)
-  - **Architecture:** DataConnector → Snapshot → FeatureEngine → LiveFeaturesUpdate
+  - Live read-path pipeline: WS -> Snapshot -> FeatureEngine -> features (LC-06)
+  - **Architecture:** DataConnector -> Snapshot -> FeatureEngine -> LiveFeaturesUpdate
   - **Hard read-only constraint:**
     - `feed.py` MUST NOT import from `grinder.execution.*`
     - Enforced by `test_feed_py_has_no_execution_imports` (AST parsing)
     - Violation = CI failure
   - **BinanceWsConnector** (`src/grinder/connectors/binance_ws.py`):
     - Implements `DataConnector` ABC with `iter_snapshots()` async iterator
-    - Parses bookTicker JSON → Snapshot objects
+    - Parses bookTicker JSON -> Snapshot objects
     - Idempotency via `last_seen_ts` tracking
     - Auto-reconnect with exponential backoff
     - Testable via `WsTransport` ABC injection (FakeWsTransport for tests)
   - **LiveFeed pipeline:**
     - Symbol filtering (optional)
-    - FeatureEngine integration (BarBuilder → indicators)
+    - FeatureEngine integration (BarBuilder -> indicators)
     - Yields `LiveFeaturesUpdate` with computed features
     - Warmup detection (`is_warmed_up` when bars >= warmup_bars)
   - **Key types:**
@@ -564,17 +564,17 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - ListenKey lifecycle: create (POST), keepalive (PUT), close (DELETE)
     - Auto-keepalive every 30 seconds (configurable)
     - Auto-reconnect with exponential backoff
-    - Event normalization: ORDER_TRADE_UPDATE → FuturesOrderEvent, ACCOUNT_UPDATE → FuturesPositionEvent
+    - Event normalization: ORDER_TRADE_UPDATE -> FuturesOrderEvent, ACCOUNT_UPDATE -> FuturesPositionEvent
     - Unknown events yield as UNKNOWN with raw_data (don't crash)
   - **Event types** (`src/grinder/execution/futures_events.py`):
     - `FuturesOrderEvent`: Normalized order update (ts, symbol, order_id, client_order_id, side, status, price, qty, executed_qty, avg_price)
     - `FuturesPositionEvent`: Normalized position update (ts, symbol, position_amt, entry_price, unrealized_pnl)
     - `UserDataEvent`: Tagged union wrapper with event_type discriminator
-    - `BINANCE_STATUS_MAP`: Binance status → OrderState mapping (NEW→OPEN, CANCELED→CANCELLED)
+    - `BINANCE_STATUS_MAP`: Binance status -> OrderState mapping (NEW->OPEN, CANCELED->CANCELLED)
   - **ListenKeyManager** (`ListenKeyManager`):
     - HTTP operations via injectable `HttpClient`
-    - 401 → `ConnectorNonRetryableError` (invalid API key)
-    - 5xx → `ConnectorTransientError` (retryable)
+    - 401 -> `ConnectorNonRetryableError` (invalid API key)
+    - 5xx -> `ConnectorTransientError` (retryable)
   - **Testing:**
     - `FakeListenKeyManager`: Mock for listenKey operations
     - `FakeWsTransport`: Reused from binance_ws.py for WS testing
@@ -588,8 +588,8 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - `tests/unit/test_listen_key_manager.py` (17 tests): HTTP operations, error handling
     - `tests/unit/test_user_data_ws.py` (21 tests): connection, events, stats
   - **Fixtures:**
-    - `tests/fixtures/user_data/order_lifecycle.jsonl`: NEW → PARTIALLY_FILLED → FILLED
-    - `tests/fixtures/user_data/position_lifecycle.jsonl`: 0 → position → 0
+    - `tests/fixtures/user_data/order_lifecycle.jsonl`: NEW -> PARTIALLY_FILLED -> FILLED
+    - `tests/fixtures/user_data/position_lifecycle.jsonl`: 0 -> position -> 0
   - **Limitations (v0.1):**
     - No reconciliation logic (LC-09b scope)
     - No REST snapshot fallback
@@ -598,7 +598,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - See ADR-041 for design decisions
 - **Reconciliation v0.1 (Passive)** (`src/grinder/reconcile/`):
   - Detects mismatches between expected state (what we sent) and observed state (stream + REST) for Binance Futures USDT-M (LC-09b)
-  - **Passive only:** logs + metrics + action_plan text — no actual remediation actions
+  - **Passive only:** logs + metrics + action_plan text -- no actual remediation actions
   - **Mismatch types** (`MismatchType` enum):
     - `ORDER_MISSING_ON_EXCHANGE`: Expected OPEN order not found after grace period
     - `ORDER_EXISTS_UNEXPECTED`: Order on exchange (grinder_ prefix) not in expected state
@@ -646,13 +646,13 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - `cancel_all`: Cancel unexpected grinder_ prefixed orders via `port.cancel_order()`
     - `flatten`: Close unexpected positions via `port.place_market_order(reduce_only=True)`
   - **Staged Rollout Modes (LC-18):**
-    - `DETECT_ONLY`: Detect mismatches, no planning (0 port calls) — **default**
+    - `DETECT_ONLY`: Detect mismatches, no planning (0 port calls) -- **default**
     - `PLAN_ONLY`: Plan remediation, increment planned metrics (0 port calls)
     - `BLOCKED`: Plan + block by gates, increment blocked metrics (0 port calls)
     - `EXECUTE_CANCEL_ALL`: Execute only cancel_all actions
     - `EXECUTE_FLATTEN`: Execute only flatten actions (includes cancel budget check)
   - **Safety Gates (LC-10 + LC-18):**
-    1. Mode check (DETECT_ONLY/PLAN_ONLY/BLOCKED → early exit)
+    1. Mode check (DETECT_ONLY/PLAN_ONLY/BLOCKED -> early exit)
     2. Strategy allowlist (uses LC-12 `parse_client_order_id()`)
     3. Symbol remediation allowlist (optional)
     4. Budget: `max_calls_per_run`, `max_notional_per_run`
@@ -674,7 +674,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - **Default behavior:** DETECT_ONLY mode (no planning, no execution)
   - **New types:**
     - `RemediationMode`: Enum (5 modes for staged rollout)
-    - `RemediationBlockReason`: Enum (27 values for why blocked — includes NOT_LEADER for LC-20)
+    - `RemediationBlockReason`: Enum (27 values for why blocked -- includes NOT_LEADER for LC-20)
     - `RemediationStatus`: Enum (PLANNED, EXECUTED, BLOCKED, FAILED)
     - `RemediationResult`: Frozen dataclass for remediation outcome
     - `RemediationExecutor`: Class with `can_execute()`, `remediate_cancel()`, `remediate_flatten()`
@@ -712,15 +712,15 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - No automatic strategy recovery
   - See ADR-043 (LC-10), ADR-052 (LC-18), ADR-054 (LC-20) for design decisions
 - **Remediation Wiring v0.1** (`src/grinder/reconcile/runner.py`):
-  - Orchestrates: ReconcileEngine → ReconcileRunner → RemediationExecutor (LC-11)
+  - Orchestrates: ReconcileEngine -> ReconcileRunner -> RemediationExecutor (LC-11)
   - **ReconcileRunner:**
-    - `run()` → `ReconcileRunReport` with full audit trail
+    - `run()` -> `ReconcileRunReport` with full audit trail
     - Routes mismatches via ROUTING_POLICY (SSOT constants)
   - **Routing Policy (frozenset constants):**
-    - `ORDER_EXISTS_UNEXPECTED` → CANCEL
-    - `ORDER_STATUS_DIVERGENCE` → CANCEL (if not terminal)
-    - `POSITION_NONZERO_UNEXPECTED` → FLATTEN
-    - `ORDER_MISSING_ON_EXCHANGE` → NO ACTION (v0.1)
+    - `ORDER_EXISTS_UNEXPECTED` -> CANCEL
+    - `ORDER_STATUS_DIVERGENCE` -> CANCEL (if not terminal)
+    - `POSITION_NONZERO_UNEXPECTED` -> FLATTEN
+    - `ORDER_MISSING_ON_EXCHANGE` -> NO ACTION (v0.1)
   - **Terminal statuses (skip cancel):** FILLED, CANCELLED, REJECTED, EXPIRED
   - **Actionable statuses (allow cancel):** OPEN, PARTIALLY_FILLED
   - **Bounded execution:**
@@ -742,7 +742,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - **Unit tests:** `tests/unit/test_reconcile_runner.py` (34 tests)
   - **Limitations (v0.1):**
     - One action type per run (no mixed cancel/flatten)
-    - ORDER_MISSING_ON_EXCHANGE → alert only, no retry
+    - ORDER_MISSING_ON_EXCHANGE -> alert only, no retry
     - Not integrated with LiveEngineV0 event loop
   - **Runbook:** `docs/runbooks/13_OPERATOR_CEREMONY.md`
   - See ADR-044 for design decisions
@@ -802,11 +802,11 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - **Unit tests:** `tests/unit/test_audit.py` (33 tests)
   - See ADR-046 for design decisions
 - **E2E Reconcile Smoke Harness** (`scripts/smoke_reconcile_e2e.py`):
-  - End-to-end smoke test for reconcile→remediate flow (LC-13)
+  - End-to-end smoke test for reconcile->remediate flow (LC-13)
   - **3 P0 scenarios:**
-    - `order`: Unexpected order → CANCEL → validates cancel routing
-    - `position`: Unexpected position → FLATTEN → validates flatten routing
-    - `mixed`: Both mismatches → priority routing (order wins)
+    - `order`: Unexpected order -> CANCEL -> validates cancel routing
+    - `position`: Unexpected position -> FLATTEN -> validates flatten routing
+    - `mixed`: Both mismatches -> priority routing (order wins)
   - **Default: DRY-RUN mode**
     - Zero port calls in dry-run
     - Safe to run without credentials or env vars
@@ -840,7 +840,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - `BUDGET_STATE_PATH`: Path to persist daily budget (optional)
   - **CLI flags:** `--duration`, `--interval-ms`, `--metrics-port`, `--audit-out`, `--symbols`
   - **Exit codes:** 0=success, 2=config error, 3=runtime error
-  - **Safety:** Execute mode without `ALLOW_MAINNET_TRADE=1` → exit 2 (config error)
+  - **Safety:** Execute mode without `ALLOW_MAINNET_TRADE=1` -> exit 2 (config error)
   - **How to run:**
     ```bash
     # Stage A: Detect-only (default, safest)
@@ -860,12 +860,12 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     PYTHONPATH=src python3 -m scripts.run_live_reconcile --duration 60
     ```
   - **E2E Validation (Mainnet):**
-    - **Stage D E2E:** Verified on Binance Futures mainnet — grinder_ orders cancelled (PR #102)
-    - **Stage E E2E:** Verified on Binance Futures mainnet — position flattened (PR #103)
+    - **Stage D E2E:** Verified on Binance Futures mainnet -- grinder_ orders cancelled (PR #102)
+    - **Stage E E2E:** Verified on Binance Futures mainnet -- position flattened (PR #103)
     - **BTCUSDT Limitation:** Binance Futures min notional is high; `scripts/place_test_position.py` has
       P0 safety guard that fails if min notional exceeds $20 cap (prevents accidental large positions)
     - **Non-BTC Micro-Test (M4.3):** For lower-notional testing, see Runbook 13 "Stage E: Non-BTC Symbol
-      Micro-Test" — includes exchangeInfo procedure to verify min-notional before testing
+      Micro-Test" -- includes exchangeInfo procedure to verify min-notional before testing
   - **Unit tests:** `tests/unit/test_run_live_reconcile.py` (27 tests)
   - See ADR-052 for LC-18 design decisions
   - **Artifact Run-Directory (M4.1):**
@@ -920,8 +920,8 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - HA-aware (skips when not ACTIVE)
     - **detect_only enforcer (LC-14b):** Refuses to start if runner can execute actions
   - **Smoke scripts:**
-    - `scripts/smoke_live_reconcile_loop.py` — FakePort pattern (zero HTTP calls)
-    - `scripts/smoke_live_reconcile_loop_real_sources.py` — Real Binance REST (LC-14b)
+    - `scripts/smoke_live_reconcile_loop.py` -- FakePort pattern (zero HTTP calls)
+    - `scripts/smoke_live_reconcile_loop_real_sources.py` -- Real Binance REST (LC-14b)
   - **Unit tests:** `tests/unit/test_reconcile_loop.py` (23 tests)
   - **How to run:**
     ```bash
@@ -940,7 +940,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - See ADR-049 for design decisions
 - **Enablement Ceremony v0.1** (LC-15a):
   - 5-stage procedure for safe ReconcileLoop enablement in production
-  - **Stages:** Baseline → Detect-only → Plan-only → Blocked → Live
+  - **Stages:** Baseline -> Detect-only -> Plan-only -> Blocked -> Live
   - Each stage has explicit pass criteria and rollback steps
   - **Runbook:** `docs/runbooks/15_ENABLEMENT_CEREMONY.md`
   - **Smoke script:** `scripts/smoke_enablement_ceremony.py`
@@ -954,13 +954,13 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - Contract tests in `tests/unit/test_live_contracts.py::TestReconcileMetricsContract`
     - **Scope:** LC-15b added **26 reconcile-specific patterns** (subset of 71 total patterns in contract)
   - **Prometheus alert rules (`monitoring/alert_rules.yml`):**
-    - `ReconcileLoopDown`: warning — Loop not running when expected
-    - `ReconcileSnapshotStale`: warning — Snapshot age > 120s
-    - `ReconcileMismatchSpike`: warning — High mismatch rate
-    - `ReconcileRemediationExecuted`: critical — REAL action executed
-    - `ReconcileRemediationPlanned`: info — Dry-run action planned
-    - `ReconcileRemediationBlocked`: info — Action blocked by gates
-    - `ReconcileMismatchNoBlocks`: warning — Mismatches but no remediation
+    - `ReconcileLoopDown`: warning -- Loop not running when expected
+    - `ReconcileSnapshotStale`: warning -- Snapshot age > 120s
+    - `ReconcileMismatchSpike`: warning -- High mismatch rate
+    - `ReconcileRemediationExecuted`: critical -- REAL action executed
+    - `ReconcileRemediationPlanned`: info -- Dry-run action planned
+    - `ReconcileRemediationBlocked`: info -- Action blocked by gates
+    - `ReconcileMismatchNoBlocks`: warning -- Mismatches but no remediation
     - **Scope:** LC-15b added **7 reconcile alerts** in `grinder_reconcile` group (subset of 16 total alerts)
   - **Service Level Objectives:**
     - Loop Availability: 99.9% (runs_total > 0 per 5-min window)
@@ -997,8 +997,8 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
 - **Observability Hardening v0.1** (LC-16):
   - Production-grade observability with automated validation
   - **Grafana Dashboards:**
-    - `monitoring/grafana/dashboards/grinder_overview.json` — System health, HA, gating, risk
-    - `monitoring/grafana/dashboards/grinder_reconcile.json` — Reconcile loop, mismatches, remediation
+    - `monitoring/grafana/dashboards/grinder_overview.json` -- System health, HA, gating, risk
+    - `monitoring/grafana/dashboards/grinder_reconcile.json` -- Reconcile loop, mismatches, remediation
   - **Promtool CI:** Alert rules validated in `.github/workflows/promtool.yml`
   - **Metrics Contract Smoke:** `scripts/smoke_metrics_contract.py`
     - Validates /metrics against `REQUIRED_METRICS_PATTERNS` (60+ patterns)
@@ -1014,7 +1014,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     ```
 
 - **Live Smoke Harness** (`scripts/smoke_live_testnet.py`):
-  - Smoke test harness for Binance (testnet or mainnet): place micro order → cancel (LC-07, LC-08b)
+  - Smoke test harness for Binance (testnet or mainnet): place micro order -> cancel (LC-07, LC-08b)
   - **Safe-by-construction guards:**
     - `--dry-run` by default (no real HTTP calls)
     - Requires `--confirm TESTNET` for testnet orders
@@ -1032,16 +1032,16 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - Harness is READY and tested in dry-run + kill-switch modes
     - Real E2E run is OPERATOR-DEPENDENT (requires API credentials)
   - **Failure paths:**
-    - Missing keys → clear exit 1 + message
-    - Missing env var → clear error message
-    - Notional exceeds limit → clear error message
-    - Kill-switch active → PLACE blocked (expected), CANCEL allowed
+    - Missing keys -> clear exit 1 + message
+    - Missing env var -> clear error message
+    - Notional exceeds limit -> clear error message
+    - Kill-switch active -> PLACE blocked (expected), CANCEL allowed
   - **How to verify:**
     ```bash
-    # Dry-run (default) — no credentials needed
+    # Dry-run (default) -- no credentials needed
     PYTHONPATH=src python -m scripts.smoke_live_testnet
 
-    # Kill-switch test — no credentials needed
+    # Kill-switch test -- no credentials needed
     PYTHONPATH=src python -m scripts.smoke_live_testnet --kill-switch
 
     # Real testnet order
@@ -1053,8 +1053,8 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
         PYTHONPATH=src python -m scripts.smoke_live_testnet --confirm MAINNET_TRADE
     ```
   - **Runbooks:**
-    - `docs/runbooks/08_SMOKE_TEST_TESTNET.md` — testnet procedure
-    - `docs/runbooks/09_MAINNET_TRADE_SMOKE.md` — mainnet procedure (LC-08b)
+    - `docs/runbooks/08_SMOKE_TEST_TESTNET.md` -- testnet procedure
+    - `docs/runbooks/09_MAINNET_TRADE_SMOKE.md` -- mainnet procedure (LC-08b)
   - See ADR-038, ADR-039 for design decisions
 - **Futures Smoke Harness** (`scripts/smoke_futures_mainnet.py`):
   - Smoke test harness for Binance Futures USDT-M mainnet (LC-08b-F)
@@ -1079,7 +1079,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     7. Final position verification (should be 0)
   - **How to verify:**
     ```bash
-    # Dry-run (default) — no credentials needed
+    # Dry-run (default) -- no credentials needed
     PYTHONPATH=src python -m scripts.smoke_futures_mainnet
 
     # Real futures mainnet order (budgeted)
@@ -1121,11 +1121,11 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - **Invariants (all tested):**
     1. Non-negativity: all budgets >= 0
     2. Conservation: sum(budgets) + residual == portfolio_budget
-    3. Determinism: same inputs → same outputs
-    4. Monotonicity: larger budget → no decrease
+    3. Determinism: same inputs -> same outputs
+    4. Monotonicity: larger budget -> no decrease
     5. Tier ordering: HIGH <= MED <= LOW (at equal weights)
   - **Residual policy:** ROUND_DOWN residual stays in cash reserve
-  - **Integration:** Output feeds into AdaptiveGridConfig.dd_budget → AutoSizer
+  - **Integration:** Output feeds into AdaptiveGridConfig.dd_budget -> AutoSizer
   - **How to verify:**
     ```bash
     PYTHONPATH=src pytest tests/unit/test_dd_allocator.py tests/unit/test_adaptive_policy.py::TestDdAllocatorIntegration -v
@@ -1153,12 +1153,12 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - Wiring point: after gating check, before execution
     - Blocks INCREASE_RISK orders when in DRAWDOWN state
   - **Reduce-only path (P2-04b):**
-    - `PaperEngine.flatten_position(symbol, price, ts)` — closes entire position
+    - `PaperEngine.flatten_position(symbol, price, ts)` -- closes entire position
     - Checks `guard.allow(REDUCE_RISK, symbol)` before executing
-    - Deterministic: same inputs → same fill output
+    - Deterministic: same inputs -> same fill output
     - Allows emergency exit when DRAWDOWN is triggered
   - **Reset hook (P2-04c):**
-    - `PaperEngine.reset_dd_guard_v1()` — returns guard to NORMAL state
+    - `PaperEngine.reset_dd_guard_v1()` -- returns guard to NORMAL state
     - Use case: new session/day start
     - Also called by `PaperEngine.reset()` (general reset)
   - **How to verify:**
@@ -1194,9 +1194,9 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - `soak_gate.yml`: runs on PRs touching src/scripts/tests/monitoring
     - `nightly_soak.yml`: runs daily with synthetic soak (existing)
   - **Commands:**
-    - `python -m scripts.run_soak_fixtures --output report.json` — run soak test
-    - `python -m scripts.check_soak_gate --report report.json --thresholds monitoring/soak_thresholds.yml --mode baseline` — PR gate (deterministic only)
-    - `python -m scripts.check_soak_thresholds --baseline report.json --overload report.json --thresholds monitoring/soak_thresholds.yml` — nightly gate (full)
+    - `python -m scripts.run_soak_fixtures --output report.json` -- run soak test
+    - `python -m scripts.check_soak_gate --report report.json --thresholds monitoring/soak_thresholds.yml --mode baseline` -- PR gate (deterministic only)
+    - `python -m scripts.check_soak_thresholds --baseline report.json --overload report.json --thresholds monitoring/soak_thresholds.yml` -- nightly gate (full)
   - **Unit tests:** `tests/unit/test_soak_thresholds.py`
   - **Test fixtures:** Uses registered fixtures including `sample_day_drawdown` for kill-switch
 - **Operations v0** (`docs/runbooks/`, `docs/HOW_TO_OPERATE.md`):
@@ -1226,10 +1226,10 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - Renewal interval: 3 seconds (configurable via `GRINDER_HA_RENEW_INTERVAL_MS`)
     - Lock key: `grinder:leader:lock`
   - **Fail-safe semantics (critical for single-active safety):**
-    - Lock renewal failure → immediately become STANDBY
-    - Redis unavailable → all instances become STANDBY
-    - STANDBY/UNKNOWN → `/readyz` returns 503 (not ready for traffic)
-    - Only ACTIVE → `/readyz` returns 200 (ready)
+    - Lock renewal failure -> immediately become STANDBY
+    - Redis unavailable -> all instances become STANDBY
+    - STANDBY/UNKNOWN -> `/readyz` returns 503 (not ready for traffic)
+    - Only ACTIVE -> `/readyz` returns 200 (ready)
     - **Unit tests:** `tests/unit/test_ha.py::TestFailSafeSemantics` validates these guarantees
   - **Observability:**
     - `/readyz` endpoint: 200 for ACTIVE, 503 for STANDBY/UNKNOWN
@@ -1243,7 +1243,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - `GRINDER_HA_RENEW_INTERVAL_MS`: Lock renewal interval in milliseconds (default: 3000)
   - **Commands:**
     - Start HA stack: `docker compose -f docker-compose.ha.yml up --build -d`
-    - Failover test: `docker stop grinder_live_1` → grinder_live_2 becomes ACTIVE within ~10s
+    - Failover test: `docker stop grinder_live_1` -> grinder_live_2 becomes ACTIVE within ~10s
   - **Contract tests:**
     - `tests/unit/test_live_contracts.py`: /readyz response structure
     - `tests/unit/test_ha.py`: HA role, state management, fail-safe semantics (17 tests)
@@ -1263,36 +1263,36 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - **Navigation updated:** `docs/DOCS_INDEX.md`, `docs/runbooks/README.md`
 
 ## Partially implemented
-- Структура пакета `src/grinder/*` (core, protocols/interfaces) — каркас.
-- Документация в `docs/*` — SSOT по архитектуре/спекам (но должна совпадать с реализацией).
+- Package structure `src/grinder/*` (core, protocols/interfaces) -- scaffolding.
+- Documentation in `docs/*` -- SSOT for architecture/specs (must match implementation).
 
 ## Known gaps / mismatches
-- Нет реальной торговой логики — только skeleton/stubs.
+- No real trading logic -- only skeleton/stubs.
 - **Backtest in Docker fails:** Running `scripts/run_backtest.py` inside a Docker container fails with `ModuleNotFoundError: No module named 'scripts'`. Fixture determinism checks pass; CI passes because it runs in a properly configured Python environment.
-- Adaptive Grid Controller v1+ (EMA-based adaptive step, trend detection, DRAWDOWN mode, auto-reset) — **not implemented**; see `docs/16_ADAPTIVE_GRID_CONTROLLER_SPEC.md` (Planned). Controller v0 implemented with rule-based modes (see ADR-011).
-- Нет интеграции с Binance API (только интерфейсы).
-- ML pipeline (`src/grinder/ml/`) — пустой placeholder.
+- Adaptive Grid Controller v1+ (EMA-based adaptive step, trend detection, DRAWDOWN mode, auto-reset) -- **not implemented**; see `docs/16_ADAPTIVE_GRID_CONTROLLER_SPEC.md` (Planned). Controller v0 implemented with rule-based modes (see ADR-011).
+- No Binance API integration (interfaces only).
+- ML pipeline (`src/grinder/ml/`) -- empty placeholder.
 
 ## Process / governance
-- PR template с обязательной секцией `## Proof`.
-- CI guard (`pr_body_guard.yml`) блокирует PR без Proof Bundle.
-- CLAUDE.md + DECISIONS.md + STATE.md — governance docs.
+- PR template with mandatory `## Proof` section.
+- CI guard (`pr_body_guard.yml`) blocks PRs without Proof Bundle.
+- CLAUDE.md + DECISIONS.md + STATE.md -- governance docs.
 
 ## Planned next
-- Расширить тесты до >50% coverage.
+- Expand tests to >50% coverage.
 - Adaptive Controller v1 (EMA-based adaptive step, trend detection, DRAWDOWN mode).
-- ~~Live Connector v1~~ ✅ Done (LC-21: stream_ticks wired to BinanceWsConnector).
+- ~~Live Connector v1~~ [DONE] Done (LC-21: stream_ticks wired to BinanceWsConnector).
 
 ## Smart Grid Spec Version
 
 | Spec | Location | Status | Proof Anchor |
 |------|----------|--------|--------------|
-| v1.0 | `docs/smart_grid/SPEC_V1_0.md` | ✅ Implemented | `sample_day`, `sample_day_allowed` fixtures; ADR-019..021 |
-| v1.1 | `docs/smart_grid/SPEC_V1_1.md` | ✅ Implemented | FeatureEngine in `sample_day_adaptive`; ADR-019 |
-| v1.2 | `docs/smart_grid/SPEC_V1_2.md` | ✅ Implemented | `sample_day_adaptive` digest `1b8af993a8435ee6`; ADR-022 |
-| v1.3 | `docs/smart_grid/SPEC_V1_3.md` | ✅ Implemented | `sample_day_topk_v1` digest `63d981b60a8e9b3a`; ADR-023 |
-| v2.0 | `docs/smart_grid/SPEC_V2_0.md` | ✅ Implemented | M7-03..M7-09 code+ADRs+fixtures (PR #137) |
-| v3.0 | `docs/smart_grid/SPEC_V3_0.md` | 🔜 Planned | — |
+| v1.0 | `docs/smart_grid/SPEC_V1_0.md` | [DONE] Implemented | `sample_day`, `sample_day_allowed` fixtures; ADR-019..021 |
+| v1.1 | `docs/smart_grid/SPEC_V1_1.md` | [DONE] Implemented | FeatureEngine in `sample_day_adaptive`; ADR-019 |
+| v1.2 | `docs/smart_grid/SPEC_V1_2.md` | [DONE] Implemented | `sample_day_adaptive` digest `1b8af993a8435ee6`; ADR-022 |
+| v1.3 | `docs/smart_grid/SPEC_V1_3.md` | [DONE] Implemented | `sample_day_topk_v1` digest `63d981b60a8e9b3a`; ADR-023 |
+| v2.0 | `docs/smart_grid/SPEC_V2_0.md` | [DONE] Implemented | M7-03..M7-09 code+ADRs+fixtures (PR #137) |
+| v3.0 | `docs/smart_grid/SPEC_V3_0.md` | [PLANNED] Planned | -- |
 
 **Verification:** `python -m scripts.verify_determinism_suite` (11/11 fixtures PASS)
 **Current target:** `docs/smart_grid/SPEC_V1_3.md`
@@ -1308,21 +1308,21 @@ Comprehensive adaptive grid system design:
 - **Auto-sizing:** dynamic step, width, levels, and size schedule from market features
 - **L1/L2-aware:** microstructure features from L1 (spread, imbalance) and optional L2 (depth, impact)
 - **Risk budgeting:** DD budgets, inventory caps, leverage caps, auto-allocation
-- **Top-K 3–5:** symbol selection for tradable chop + safe liquidity
+- **Top-K 3-5:** symbol selection for tradable chop + safe liquidity
 - **Deterministic:** fixture-based testing with stable digests
 - **Cross-reference:** See `docs/16_ADAPTIVE_GRID_CONTROLLER_SPEC.md` for meta-controller contracts (regime, step, reset)
 - **Partial implementation status:**
-  - ✅ **Feature Engine v1 (ASM-P1-01):** Mid-bar OHLC + ATR/NATR + L1 microstructure (see ADR-019)
-  - ✅ **PaperEngine integration (ASM-P1-02):** Integrated, features NOT in digest (backward compat)
-  - ✅ **Policy receives features (ASM-P1-03):** Plumbing complete — features passed to policy when enabled, StaticGridPolicy ignores (backward compat), digests unchanged (see ADR-020)
-  - ✅ **Regime classifier (ASM-P1-04):** Deterministic precedence-based classifier — EMERGENCY > TOXIC > THIN_BOOK > VOL_SHOCK > TREND > RANGE (see ADR-021)
-  - ✅ **AdaptiveGridPolicy v1 (ASM-P1-05):** Dynamic grid sizing from NATR + regime (see ADR-022)
+  - [DONE] **Feature Engine v1 (ASM-P1-01):** Mid-bar OHLC + ATR/NATR + L1 microstructure (see ADR-019)
+  - [DONE] **PaperEngine integration (ASM-P1-02):** Integrated, features NOT in digest (backward compat)
+  - [DONE] **Policy receives features (ASM-P1-03):** Plumbing complete -- features passed to policy when enabled, StaticGridPolicy ignores (backward compat), digests unchanged (see ADR-020)
+  - [DONE] **Regime classifier (ASM-P1-04):** Deterministic precedence-based classifier -- EMERGENCY > TOXIC > THIN_BOOK > VOL_SHOCK > TREND > RANGE (see ADR-021)
+  - [DONE] **AdaptiveGridPolicy v1 (ASM-P1-05):** Dynamic grid sizing from NATR + regime (see ADR-022)
     - **Opt-in:** `adaptive_policy_enabled=False` default (backward compat with existing digests)
     - **L1-only:** Uses natr_bps, spread_bps, thin_l1, range_score from FeatureEngine
     - **Adapts:** step_bps (volatility-scaled), width_bps (X_stress model), levels (ceil(width/step))
     - **Formulas:** step=max(5, 0.3*NATR*regime_mult), width=clamp(2.0*NATR*sqrt(H/TF), 20, 500), levels=clamp(ceil(width/step), 2, 20)
-    - **Regime multipliers:** RANGE=1.0, VOL_SHOCK=1.5, THIN_BOOK=2.0, TREND asymmetric (1.3× on against-trend side)
-    - **Units:** All thresholds/multipliers as integer bps (×100 scale) for determinism
+    - **Regime multipliers:** RANGE=1.0, VOL_SHOCK=1.5, THIN_BOOK=2.0, TREND asymmetric (1.3x on against-trend side)
+    - **Units:** All thresholds/multipliers as integer bps (x100 scale) for determinism
     - **Auto-sizing:** Available via ASM-P2-01 (opt-in `auto_sizing_enabled=True`)
     - **L2 gating (M7-03):** Optional L2-based entry blocking (opt-in `l2_gating_enabled=False` default)
       - Insufficient depth: blocks entries when order book depth exhausted
@@ -1348,26 +1348,26 @@ Comprehensive adaptive grid system design:
       - Cache location: `var/cache/exchange_info_futures.json`
       - See ADR-060
     - **ExecutionEngineConfig (M7-07):** Wiring ConstraintProvider with explicit enablement
-      - `ExecutionEngineConfig(constraints_enabled=False)` — default OFF for safety
+      - `ExecutionEngineConfig(constraints_enabled=False)` -- default OFF for safety
       - `constraint_provider` parameter for lazy loading
       - Symbol constraints only applied when `constraints_enabled=True`
       - Backward compatible: existing code unchanged
       - See ADR-061
     - **Execution L2 Guard (M7-09):** Last-mile L2 safety checks at execution layer
-      - `ExecutionEngineConfig.l2_execution_guard_enabled=False` — default OFF for safety
+      - `ExecutionEngineConfig.l2_execution_guard_enabled=False` -- default OFF for safety
       - `l2_features: dict[str, L2FeatureSnapshot]` input for L2 data
       - Guards: staleness (`EXEC_L2_STALE`), insufficient depth (`EXEC_L2_INSUFFICIENT_DEPTH_*`), high impact (`EXEC_L2_IMPACT_*_HIGH`)
       - Runs BEFORE qty constraints, only on PLACE actions
       - Pass-through when features missing (safe rollout)
       - See ADR-062
     - **ConstraintProvider TTL/Refresh (M7-08):** TTL and controlled refresh for exchangeInfo cache
-      - `ConstraintProviderConfig.cache_ttl_seconds=86400` — 24h default TTL
-      - `allow_fetch=True/False` — gate for API fetch (False in offline/replay)
-      - Fallback chain: fresh cache → API → stale cache → empty dict
+      - `ConstraintProviderConfig.cache_ttl_seconds=86400` -- 24h default TTL
+      - `allow_fetch=True/False` -- gate for API fetch (False in offline/replay)
+      - Fallback chain: fresh cache -> API -> stale cache -> empty dict
       - No I/O at init (lazy loading preserves determinism)
       - See ADR-063
-    - **Fixture:** `sample_day_adaptive` — paper digest `1b8af993a8435ee6`
-  - ✅ **Top-K v1 (ASM-P1-06):** Feature-based symbol selection (see ADR-023)
+    - **Fixture:** `sample_day_adaptive` -- paper digest `1b8af993a8435ee6`
+  - [DONE] **Top-K v1 (ASM-P1-06):** Feature-based symbol selection (see ADR-023)
     - **Opt-in:** `topk_v1_enabled=False` default (backward compat with existing digests)
     - **Requires:** `feature_engine_enabled=True` (needs FeatureEngine for range_score, spread_bps, thin_l1, net_return_bps)
     - **Scoring:** `score = range + liquidity - toxicity_penalty - trend_penalty`
@@ -1375,52 +1375,53 @@ Comprehensive adaptive grid system design:
     - **Tie-breaking:** Deterministic by `(-score, symbol)` for stable ordering
     - **Config:** `TopKConfigV1(k=3, spread_max_bps=100, thin_l1_min=1.0, warmup_min=10)`
     - **Output:** `topk_v1_selected_symbols`, `topk_v1_scores`, `topk_v1_gate_excluded`
-    - **Fixture:** `sample_day_topk_v1` — 6 symbols, paper digest `63d981b60a8e9b3a`
+    - **Fixture:** `sample_day_topk_v1` -- 6 symbols, paper digest `63d981b60a8e9b3a`
     - **NOT included:** real-time re-selection (selects once after warmup), adaptive scoring weights
 
 ### ML Integration (`docs/12_ML_SPEC.md`)
-- **Spec:** `docs/12_ML_SPEC.md` — SSOT for ML contracts
-- **Code:** `src/grinder/ml/` — MlSignalSnapshot contract
+- **Spec:** `docs/12_ML_SPEC.md` -- SSOT for ML contracts
+- **Code:** `src/grinder/ml/` -- MlSignalSnapshot contract
 - **Status:** M8 in progress
 - **Progress:**
-  - ✅ **M8-00 (docs-only):** ML Specification with I/O contracts
+  - [DONE] **M8-00 (docs-only):** ML Specification with I/O contracts
     - Input: `FeatureSnapshot` (L1+volatility) + `L2FeatureSnapshot` (order book)
     - Output: `MlSignalSnapshot` (regime probabilities, spacing multiplier)
     - Determinism: 8 MUST / 7 MUST NOT invariants
     - Artifacts: `manifest.json` + SHA256 checksums
     - Enablement: `ml_enabled=False` default (safe rollout)
     - See ADR-064
-  - ✅ **M8-01 (stub):** MlSignalSnapshot contract + time-indexed signal selection
+  - [DONE] **M8-01 (stub):** MlSignalSnapshot contract + time-indexed signal selection
     - `MlSignalSnapshot` dataclass in `src/grinder/ml/__init__.py` (PR #140)
     - Time-indexed lookup: `_get_ml_signal(symbol, ts_ms)` with bisect O(log n) (PR #141)
     - Safe-by-default: `ml_enabled=True` + no signal.json = baseline digest
     - SSOT rule: max(signal.ts_ms) where signal.ts_ms <= snapshot.ts_ms
     - Digest-locked fixtures: `sample_day_ml_multisignal_basic`, `sample_day_ml_multisignal_no_prior` (PR #142)
     - 26 unit tests (14 contract + 12 selection)
-  - ✅ **M8-02 (ONNX):** Complete
-    - ✅ **M8-02a:** Artifact plumbing (types, loader, config fields, 19 tests)
-    - ✅ **M8-02b:** Shadow mode (OnnxMlModel, vectorize, soft-fail, 19 tests)
-    - ✅ **M8-02c:** Active inference mode (ADR-065)
-      - ✅ M8-02c-1: Config guards + 15 ADR-065 tests (PR #147)
-      - ✅ M8-02c-2: Observability: gauge, reason codes, metrics (PR #148)
-      - ✅ M8-02c-3: Structured logs + SSOT docs (PR #149)
-    - ✅ **M8-02d:** Latency histogram + SLO alerts (PR #151)
-    - ✅ **M8-02e:** Grafana dashboards (PR #154)
-  - ✅ **M8-03 (Training & Registry):** Complete
-    - ✅ **M8-03a:** Artifact pack v1.1 + build CLI (PR #150)
-    - ✅ **M8-03b-1:** Training pipeline MVP (PR #152)
-    - ✅ **M8-03b-2:** Runtime integration + determinism tests (PR #153)
-    - ✅ **M8-03c-1a:** Registry spec + runbook (PR #155)
-    - ✅ **M8-03c-1b:** Registry implementation (PR #157)
-    - ✅ **M8-03c-2:** PaperEngine config wiring (PR #158)
-    - ✅ **M8-03c-3:** Promotion CLI + history[] audit trail (PR #159)
+  - [DONE] **M8-02 (ONNX):** Complete
+    - [DONE] **M8-02a:** Artifact plumbing (types, loader, config fields, 19 tests)
+    - [DONE] **M8-02b:** Shadow mode (OnnxMlModel, vectorize, soft-fail, 19 tests)
+    - [DONE] **M8-02c:** Active inference mode (ADR-065)
+      - [DONE] M8-02c-1: Config guards + 15 ADR-065 tests (PR #147)
+      - [DONE] M8-02c-2: Observability: gauge, reason codes, metrics (PR #148)
+      - [DONE] M8-02c-3: Structured logs + SSOT docs (PR #149)
+    - [DONE] **M8-02d:** Latency histogram + SLO alerts (PR #151)
+    - [DONE] **M8-02e:** Grafana dashboards (PR #154)
+  - [DONE] **M8-03 (Training & Registry):** Complete
+    - [DONE] **M8-03a:** Artifact pack v1.1 + build CLI (PR #150)
+    - [DONE] **M8-03b-1:** Training pipeline MVP (PR #152)
+    - [DONE] **M8-03b-2:** Runtime integration + determinism tests (PR #153)
+    - [DONE] **M8-03c-1a:** Registry spec + runbook (PR #155)
+    - [DONE] **M8-03c-1b:** Registry implementation (PR #157)
+    - [DONE] **M8-03c-2:** PaperEngine config wiring (PR #158)
+    - [DONE] **M8-03c-3:** Promotion CLI + history[] audit trail (PR #159)
   - **M8-04 (Feature Store):** In progress
-    - ✅ **M8-04 spec:** Feature store specification (`docs/18_FEATURE_STORE_SPEC.md`) (PR #165)
-    - ✅ **M8-04a:** Dataset manifest verification CLI (`scripts/verify_dataset.py`) + tests + fixture (PR #166)
-    - ✅ **M8-04b:** Dataset builder CLI (`scripts/build_dataset.py`) + tests (PR #167)
-    - Remaining: M8-04c (train integration), M8-04d (promote validation), M8-04e (registry links)
+    - [DONE] **M8-04 spec:** Feature store specification (`docs/18_FEATURE_STORE_SPEC.md`) (PR #165)
+    - [DONE] **M8-04a:** Dataset manifest verification CLI (`scripts/verify_dataset.py`) + tests + fixture (PR #166)
+    - [DONE] **M8-04b:** Dataset builder CLI (`scripts/build_dataset.py`) + tests (PR #167)
+    - [DONE] **M8-04c:** Train integration with dataset manifest (`--dataset-manifest`, dataset_id traceability) (PR #168)
+    - Remaining: M8-04d (promote validation), M8-04e (registry links)
 
 ### Multi-venue
 - **Current:** Binance Futures USDT-M only
 - **Planned:** COIN-M, other CEXs (see ROADMAP M9)
-- **Status:** 🔜 Planned, out of scope until M7/M8 complete
+- **Status:** [PLANNED] Planned, out of scope until M7/M8 complete
