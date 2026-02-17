@@ -2,7 +2,7 @@
 """Verify dataset manifest integrity.
 
 M8-04a: Validates dataset manifest schema, path safety, feature_order_hash,
-and SHA256 checksums. Fail-closed: any validation error → exit 1.
+and SHA256 checksums. Fail-closed: any validation error -> exit 1.
 
 Usage:
     python -m scripts.verify_dataset --path ml/datasets/<id>/manifest.json
@@ -30,7 +30,7 @@ from pathlib import Path
 
 SCHEMA_VERSION = "v1"
 
-# Pattern: starts with [a-z0-9], then [a-z0-9._-]{2,64}  → total 3..65 chars
+# Pattern: starts with [a-z0-9], then [a-z0-9._-]{2,64}  -> total 3..65 chars
 DATASET_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{2,64}$")
 
 VALID_SOURCES = frozenset({"synthetic", "backtest", "export", "manual"})
@@ -40,7 +40,7 @@ MIN_ROW_COUNT = 10
 MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024  # 100 MB
 MAX_DIR_SIZE_BYTES = 200 * 1024 * 1024  # 200 MB total
 
-# Files that MUST exist in every dataset directory (per spec §3)
+# Files that MUST exist in every dataset directory (per spec S3)
 REQUIRED_FILES = frozenset({"data.parquet"})
 
 # ISO 8601 UTC timestamp pattern: YYYY-MM-DDTHH:MM:SSZ (with optional fractional seconds)
@@ -129,10 +129,10 @@ def _check_no_symlink(path: Path) -> None:
     try:
         if path.exists() and path.resolve() != path.absolute():
             raise DatasetValidationError(
-                f"Path resolves differently (possible symlink in chain): {path} → {path.resolve()}"
+                f"Path resolves differently (possible symlink in chain): {path} -> {path.resolve()}"
             )
     except OSError:
-        pass  # Path doesn't exist yet — caller handles existence check
+        pass  # Path doesn't exist yet -- caller handles existence check
 
 
 def _check_containment(child: Path, parent: Path) -> None:
@@ -301,7 +301,7 @@ def verify_dataset(  # noqa: PLR0912, PLR0915
     if not isinstance(lc, list) or not all(isinstance(c, str) for c in lc):
         _fail("label_columns must be a list of strings")
 
-    # --- 10. Required files (spec §3: data.parquet MUST exist) ---
+    # --- 10. Required files (spec S3: data.parquet MUST exist) ---
     for req_file in sorted(REQUIRED_FILES):
         req_path = dataset_dir / req_file
         if not req_path.exists():

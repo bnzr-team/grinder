@@ -403,7 +403,7 @@ class TestFeatureOrderListEquality:
 
 
 class TestRequiredFiles:
-    """data.parquet MUST exist in dataset directory (spec §3)."""
+    """data.parquet MUST exist in dataset directory (spec S3)."""
 
     def test_data_parquet_present_passes(self, tmp_path: Path) -> None:
         m = _valid_manifest()

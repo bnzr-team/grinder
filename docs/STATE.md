@@ -1414,7 +1414,10 @@ Comprehensive adaptive grid system design:
     - ✅ **M8-03c-1b:** Registry implementation (PR #157)
     - ✅ **M8-03c-2:** PaperEngine config wiring (PR #158)
     - ✅ **M8-03c-3:** Promotion CLI + history[] audit trail (PR #159)
-  - Remaining: Feature store for training data (not yet scoped)
+  - **M8-04 (Feature Store):** In progress
+    - ✅ **M8-04 spec:** Feature store specification (`docs/18_FEATURE_STORE_SPEC.md`) (PR #165)
+    - ✅ **M8-04a:** Dataset manifest verification CLI (`scripts/verify_dataset.py`) + tests + fixture (PR #166)
+    - Remaining: M8-04b (build_dataset), M8-04c (train integration), M8-04d (promote validation), M8-04e (registry links)
 
 ### Multi-venue
 - **Current:** Binance Futures USDT-M only
