@@ -17,7 +17,9 @@ from scripts.verify_dataset import (
     VALID_SOURCES,
     DatasetValidationError,
     _check_containment,
+    _check_no_symlink,
     _compute_feature_order_hash,
+    _get_ssot_feature_order,
     _validate_path_safety,
     verify_dataset,
 )
@@ -340,3 +342,198 @@ class TestEdgeCases:
 
     def test_schema_version_constant(self) -> None:
         assert SCHEMA_VERSION == "v1"
+
+
+# ---------------------------------------------------------------------------
+# feature_order list equality (not just hash)
+# ---------------------------------------------------------------------------
+
+
+class TestFeatureOrderListEquality:
+    """feature_order list must exactly match SSOT FEATURE_ORDER."""
+
+    def test_correct_list_passes(self, tmp_path: Path) -> None:
+        m = _valid_manifest()
+        mp = _write_manifest(tmp_path, m)
+        errors = verify_dataset(mp, base_dir=tmp_path)
+        assert not any("feature_order mismatch" in e for e in errors)
+
+    def test_wrong_order_fails(self, tmp_path: Path) -> None:
+        """Swapped features: hash will differ AND list won't match."""
+        m = _valid_manifest()
+        fo = list(FEATURE_ORDER)
+        fo[0], fo[1] = fo[1], fo[0]  # swap first two
+        m["feature_order"] = fo
+        # Recompute hash for the wrong list to isolate list check from hash check
+        wrong_hash = hashlib.sha256(json.dumps(fo).encode()).hexdigest()[:16]
+        m["feature_order_hash"] = wrong_hash
+        mp = _write_manifest(tmp_path, m)
+        errors = verify_dataset(mp, base_dir=tmp_path)
+        assert any("feature_order mismatch" in e for e in errors)
+
+    def test_extra_feature_fails(self, tmp_path: Path) -> None:
+        m = _valid_manifest()
+        fo = [*list(FEATURE_ORDER), "extra_feature"]
+        m["feature_order"] = fo
+        wrong_hash = hashlib.sha256(json.dumps(fo).encode()).hexdigest()[:16]
+        m["feature_order_hash"] = wrong_hash
+        mp = _write_manifest(tmp_path, m)
+        errors = verify_dataset(mp, base_dir=tmp_path)
+        assert any("feature_order mismatch" in e for e in errors)
+
+    def test_missing_feature_fails(self, tmp_path: Path) -> None:
+        m = _valid_manifest()
+        fo = list(FEATURE_ORDER)[:-1]  # drop last
+        m["feature_order"] = fo
+        wrong_hash = hashlib.sha256(json.dumps(fo).encode()).hexdigest()[:16]
+        m["feature_order_hash"] = wrong_hash
+        mp = _write_manifest(tmp_path, m)
+        errors = verify_dataset(mp, base_dir=tmp_path)
+        assert any("feature_order mismatch" in e for e in errors)
+
+    def test_ssot_helper_returns_list(self) -> None:
+        ssot = _get_ssot_feature_order()
+        assert isinstance(ssot, list)
+        assert ssot == list(FEATURE_ORDER)
+
+
+# ---------------------------------------------------------------------------
+# Required files (data.parquet)
+# ---------------------------------------------------------------------------
+
+
+class TestRequiredFiles:
+    """data.parquet MUST exist in dataset directory (spec §3)."""
+
+    def test_data_parquet_present_passes(self, tmp_path: Path) -> None:
+        m = _valid_manifest()
+        mp = _write_manifest(tmp_path, m)
+        errors = verify_dataset(mp, base_dir=tmp_path)
+        assert not any("Required file missing" in e for e in errors)
+
+    def test_data_parquet_missing_fails(self, tmp_path: Path) -> None:
+        m = _valid_manifest()
+        mp = _write_manifest(tmp_path, m)
+        # Remove data.parquet after writing manifest
+        (mp.parent / "data.parquet").unlink()
+        errors = verify_dataset(mp, base_dir=tmp_path)
+        assert any("Required file missing: data.parquet" in e for e in errors)
+
+
+# ---------------------------------------------------------------------------
+# Symlink protection
+# ---------------------------------------------------------------------------
+
+
+class TestSymlinkProtection:
+    """Symlinks must be rejected."""
+
+    def test_symlink_helper_rejects(self, tmp_path: Path) -> None:
+        real = tmp_path / "real.txt"
+        real.write_bytes(b"data")
+        link = tmp_path / "link.txt"
+        link.symlink_to(real)
+        with pytest.raises(DatasetValidationError, match=r"[Ss]ymlink"):
+            _check_no_symlink(link)
+
+    def test_non_symlink_passes(self, tmp_path: Path) -> None:
+        real = tmp_path / "real.txt"
+        real.write_bytes(b"data")
+        _check_no_symlink(real)  # should not raise
+
+    def test_sha256_symlink_file_rejected(self, tmp_path: Path) -> None:
+        """Symlink in sha256 map should fail verification."""
+        m = _valid_manifest()
+        ds_dir = tmp_path / str(m["dataset_id"])
+        ds_dir.mkdir(parents=True)
+
+        # Create real data.parquet
+        data = b"real data"
+        (ds_dir / "data.parquet").write_bytes(data)
+        data_sha = hashlib.sha256(data).hexdigest()
+
+        # Create a symlink posing as splits.json
+        target = tmp_path / "evil_target.txt"
+        target.write_bytes(b"evil")
+        target_sha = hashlib.sha256(b"evil").hexdigest()
+        (ds_dir / "splits.json").symlink_to(target)
+
+        m["sha256"] = {
+            "data.parquet": data_sha,
+            "splits.json": target_sha,
+        }
+        (ds_dir / "manifest.json").write_text(json.dumps(m))
+        errors = verify_dataset(ds_dir / "manifest.json", base_dir=tmp_path)
+        assert any("ymlink" in e for e in errors)
+
+    def test_required_file_symlink_rejected(self, tmp_path: Path) -> None:
+        """data.parquet as symlink must be rejected."""
+        m = _valid_manifest()
+        ds_dir = tmp_path / str(m["dataset_id"])
+        ds_dir.mkdir(parents=True)
+
+        # Create real file elsewhere and symlink as data.parquet
+        real = tmp_path / "real_data.bin"
+        real.write_bytes(b"data")
+        (ds_dir / "data.parquet").symlink_to(real)
+
+        m["sha256"] = {"data.parquet": hashlib.sha256(b"data").hexdigest()}
+        (ds_dir / "manifest.json").write_text(json.dumps(m))
+        errors = verify_dataset(ds_dir / "manifest.json", base_dir=tmp_path)
+        assert any("symlink" in e.lower() for e in errors)
+
+
+# ---------------------------------------------------------------------------
+# created_at_utc (strict ISO 8601)
+# ---------------------------------------------------------------------------
+
+
+class TestCreatedAtUtc:
+    """created_at_utc must be strict ISO 8601 UTC."""
+
+    @pytest.mark.parametrize(
+        "ts",
+        [
+            "2026-02-17T10:00:00Z",
+            "2026-02-17T10:00:00.000Z",
+            "2026-02-17T10:00:00.123456Z",
+        ],
+    )
+    def test_valid_timestamps(self, ts: str, tmp_path: Path) -> None:
+        m = _valid_manifest()
+        m["created_at_utc"] = ts
+        mp = _write_manifest(tmp_path, m)
+        errors = verify_dataset(mp, base_dir=tmp_path)
+        assert not any("created_at_utc" in e for e in errors)
+
+    @pytest.mark.parametrize(
+        "ts",
+        [
+            "2026-02-17T10:00:00+05:00",  # offset, not Z
+            "2026-02-17",  # date only
+            "not-a-timestamp",  # garbage
+            "2026-02-17 10:00:00Z",  # space instead of T
+            "2026/02/17T10:00:00Z",  # slashes
+        ],
+    )
+    def test_invalid_timestamps(self, ts: str, tmp_path: Path) -> None:
+        m = _valid_manifest()
+        m["created_at_utc"] = ts
+        mp = _write_manifest(tmp_path, m)
+        errors = verify_dataset(mp, base_dir=tmp_path)
+        assert any("created_at_utc" in e for e in errors)
+
+
+# ---------------------------------------------------------------------------
+# Total directory size limit
+# ---------------------------------------------------------------------------
+
+
+class TestDirSizeLimit:
+    """Total dataset directory size must not exceed 200 MB."""
+
+    def test_small_dir_passes(self, tmp_path: Path) -> None:
+        m = _valid_manifest()
+        mp = _write_manifest(tmp_path, m)
+        errors = verify_dataset(mp, base_dir=tmp_path)
+        assert not any("directory size" in e.lower() for e in errors)

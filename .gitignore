@@ -70,6 +70,8 @@ artifacts/
 # Data files (may be large)
 data/
 *.parquet
+# Allow test fixture parquet files
+!tests/testdata/**/*.parquet
 *.csv.gz
 
 # Docker

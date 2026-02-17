@@ -38,6 +38,13 @@ VALID_SOURCES = frozenset({"synthetic", "backtest", "export", "manual"})
 MAX_ROW_COUNT = 10_000_000
 MIN_ROW_COUNT = 10
 MAX_FILE_SIZE_BYTES = 100 * 1024 * 1024  # 100 MB
+MAX_DIR_SIZE_BYTES = 200 * 1024 * 1024  # 200 MB total
+
+# Files that MUST exist in every dataset directory (per spec §3)
+REQUIRED_FILES = frozenset({"data.parquet"})
+
+# ISO 8601 UTC timestamp pattern: YYYY-MM-DDTHH:MM:SSZ (with optional fractional seconds)
+_ISO8601_UTC_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?Z$")
 
 # Required top-level keys in manifest
 REQUIRED_KEYS = frozenset(
@@ -69,15 +76,24 @@ class DatasetValidationError(Exception):
 # ---------------------------------------------------------------------------
 
 
+def _get_ssot_feature_order() -> list[str]:
+    """Return SSOT FEATURE_ORDER as a list.
+
+    Returns:
+        List of feature names from grinder.ml.onnx.features.FEATURE_ORDER.
+    """
+    from grinder.ml.onnx.features import FEATURE_ORDER  # noqa: PLC0415
+
+    return list(FEATURE_ORDER)
+
+
 def _compute_feature_order_hash() -> str:
     """Compute feature_order_hash from SSOT FEATURE_ORDER.
 
     Returns:
         16-char hex string: SHA256(json.dumps(list(FEATURE_ORDER)))[:16]
     """
-    from grinder.ml.onnx.features import FEATURE_ORDER  # noqa: PLC0415
-
-    return hashlib.sha256(json.dumps(list(FEATURE_ORDER)).encode()).hexdigest()[:16]
+    return hashlib.sha256(json.dumps(_get_ssot_feature_order()).encode()).hexdigest()[:16]
 
 
 def _validate_path_safety(path_str: str) -> None:
@@ -96,6 +112,27 @@ def _validate_path_safety(path_str: str) -> None:
 
     if ".." in p.parts:
         raise DatasetValidationError(f"Path traversal (..) not allowed: {path_str!r}")
+
+
+def _check_no_symlink(path: Path) -> None:
+    """Reject symlinks (resolved path must equal unresolved path).
+
+    Args:
+        path: File path to check.
+
+    Raises:
+        DatasetValidationError: If path is or contains a symlink.
+    """
+    if path.is_symlink():
+        raise DatasetValidationError(f"Symlink not allowed: {path}")
+    # Also check that resolve() doesn't change the path (catches symlinks in parents)
+    try:
+        if path.exists() and path.resolve() != path.absolute():
+            raise DatasetValidationError(
+                f"Path resolves differently (possible symlink in chain): {path} → {path.resolve()}"
+            )
+    except OSError:
+        pass  # Path doesn't exist yet — caller handles existence check
 
 
 def _check_containment(child: Path, parent: Path) -> None:
@@ -230,10 +267,20 @@ def verify_dataset(  # noqa: PLR0912, PLR0915
     else:
         _info(f"  Row count: {row_count}")
 
-    # --- 7. feature_order ---
+    # --- 7. feature_order (list equality vs SSOT) ---
     fo = manifest["feature_order"]
     if not isinstance(fo, list) or not all(isinstance(f, str) for f in fo):
         _fail("feature_order must be a list of strings")
+    else:
+        ssot_fo = _get_ssot_feature_order()
+        if fo != ssot_fo:
+            _fail(
+                f"feature_order mismatch vs SSOT FEATURE_ORDER: "
+                f"manifest has {len(fo)} features {fo}, "
+                f"SSOT has {len(ssot_fo)} features {ssot_fo}"
+            )
+        else:
+            _info(f"  Feature order: {len(fo)} features (matches FEATURE_ORDER)")
 
     # --- 8. feature_order_hash ---
     foh = manifest["feature_order_hash"]
@@ -254,7 +301,15 @@ def verify_dataset(  # noqa: PLR0912, PLR0915
     if not isinstance(lc, list) or not all(isinstance(c, str) for c in lc):
         _fail("label_columns must be a list of strings")
 
-    # --- 10. Path safety for sha256 entries ---
+    # --- 10. Required files (spec §3: data.parquet MUST exist) ---
+    for req_file in sorted(REQUIRED_FILES):
+        req_path = dataset_dir / req_file
+        if not req_path.exists():
+            _fail(f"Required file missing: {req_file}")
+        elif req_path.is_symlink():
+            _fail(f"Required file is a symlink (not allowed): {req_file}")
+
+    # --- 11. Path safety + SHA256 integrity for sha256 entries ---
     sha_map = manifest["sha256"]
     if not isinstance(sha_map, dict):
         _fail(f"sha256 must be object, got {type(sha_map).__name__}")
@@ -290,6 +345,13 @@ def verify_dataset(  # noqa: PLR0912, PLR0915
                 _fail(f"Not a file: {filename}")
                 continue
 
+            # Symlink check
+            try:
+                _check_no_symlink(dataset_dir / filename)
+            except DatasetValidationError as e:
+                _fail(str(e))
+                continue
+
             # Size check
             file_size = file_path.stat().st_size
             if file_size > MAX_FILE_SIZE_BYTES:
@@ -307,10 +369,23 @@ def verify_dataset(  # noqa: PLR0912, PLR0915
             else:
                 _info(f"    {filename}: {actual_sha[:16]}... OK")
 
-    # --- 11. created_at_utc format ---
+    # --- 12. created_at_utc format (ISO 8601 UTC: YYYY-MM-DDTHH:MM:SS[.f]Z) ---
     cat = manifest["created_at_utc"]
-    if not isinstance(cat, str) or not cat.endswith("Z"):
-        _fail("created_at_utc must be string ending with 'Z' (UTC)")
+    if not isinstance(cat, str) or not _ISO8601_UTC_RE.match(cat):
+        _fail(f"created_at_utc must be ISO 8601 UTC (YYYY-MM-DDTHH:MM:SS[.f]Z), got {cat!r}")
+
+    # --- 13. Total directory size limit ---
+    total_size = 0
+    for item in dataset_dir.rglob("*"):
+        if item.is_file():
+            total_size += item.stat().st_size
+    if total_size > MAX_DIR_SIZE_BYTES:
+        _fail(
+            f"Dataset directory size {total_size} bytes "
+            f"exceeds limit {MAX_DIR_SIZE_BYTES} ({MAX_DIR_SIZE_BYTES // (1024 * 1024)} MB)"
+        )
+    else:
+        _info(f"  Directory size: {total_size} bytes OK")
 
     # --- Summary ---
     if not errors:

@@ -19,7 +19,7 @@ class TestFixtureRoundtrip:
     def test_fixture_exists(self) -> None:
         assert FIXTURE_DIR.exists(), f"Fixture dir missing: {FIXTURE_DIR}"
         assert FIXTURE_MANIFEST.exists(), f"Manifest missing: {FIXTURE_MANIFEST}"
-        assert (FIXTURE_DIR / "data.bin").exists(), "data.bin missing"
+        assert (FIXTURE_DIR / "data.parquet").exists(), "data.parquet missing"
 
     def test_verify_passes(self) -> None:
         errors = verify_dataset(FIXTURE_MANIFEST, base_dir=FIXTURE_DIR.parent)

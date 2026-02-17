@@ -28,7 +28,7 @@
   ],
   "row_count": 50,
   "sha256": {
-    "data.bin": "831b5bb0cff29f12df79611a2c7608c469d19b8237d7b17b0acd530f5fc7edd3"
+    "data.parquet": "831b5bb0cff29f12df79611a2c7608c469d19b8237d7b17b0acd530f5fc7edd3"
   },
   "determinism": {
     "seed": 42,
