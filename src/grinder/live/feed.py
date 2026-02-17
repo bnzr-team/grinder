@@ -33,6 +33,7 @@ if TYPE_CHECKING:
 
     from grinder.connectors.data_connector import DataConnector
     from grinder.contracts import Snapshot
+    from grinder.data.quality_engine import DataQualityEngine
 
 logger = logging.getLogger(__name__)
 
@@ -46,12 +47,16 @@ class LiveFeedConfig:
         feature_config: FeatureEngine configuration
         max_queue_size: Maximum snapshot queue size
         warmup_bars: Bars needed before is_warmed_up=True
+        dq_enabled: Enable data quality detection (Launch-03).
+        dq_stream: Stream label for DQ metrics (no symbol names).
     """
 
     symbols: list[str] = field(default_factory=list)
     feature_config: FeatureEngineConfig = field(default_factory=FeatureEngineConfig)
     max_queue_size: int = 1000
     warmup_bars: int = 15  # ATR(14) + 1
+    dq_enabled: bool = False
+    dq_stream: str = "live_feed"
 
     def is_symbol_allowed(self, symbol: str) -> bool:
         """Check if symbol should be processed."""
@@ -94,6 +99,13 @@ class LiveFeed:
         self._feature_engine = FeatureEngine(config.feature_config)
         self._stats = LiveFeedStats()
         self._running = False
+
+        # Launch-03: data quality detection (metrics-only, no gating)
+        self._dq: DataQualityEngine | None = None
+        if config.dq_enabled:
+            from grinder.data.quality_engine import DataQualityEngine  # noqa: PLC0415
+
+            self._dq = DataQualityEngine()
 
     @property
     def config(self) -> LiveFeedConfig:
@@ -157,6 +169,15 @@ class LiveFeed:
             LiveFeaturesUpdate with computed features
         """
         start_ts = int(self._clock() * 1000)
+
+        # Launch-03: data quality observation (metrics-only)
+        if self._dq is not None:
+            self._dq.observe_tick(
+                stream=self._config.dq_stream,
+                ts_ms=snapshot.ts,
+                price=float(snapshot.mid_price),
+                now_ms=start_ts,
+            )
 
         try:
             # Get bar count before processing
