@@ -6,7 +6,7 @@ This file tracks **plan + progress**.
 - **Why key choices were made:** `docs/DECISIONS.md`
 - Specs in `docs/*` describe **target behavior** unless `STATE.md` says implemented.
 
-Last updated: 2026-02-12
+Last updated: 2026-02-17
 
 ---
 
@@ -25,8 +25,8 @@ This section reflects **what is verified and merged on main** as of PR #117.
 | M5 — Observability Polish | ✅ Done | 2026-02-07 |
 | M6 — HA Leader Election | ✅ Done | 2026-02-08 |
 | M7 — Smart Grid v2.0 | ✅ Done | — |
-| M8 — ML Integration | 🚧 In Progress | — |
-| M9 — Multi-venue | 🔜 Planned | — |
+| M8 — ML Integration | ✅ Done | 2026-02-17 |
+| M9 — Multi-venue | 🚧 Deferred / Post-launch | — |
 
 ### Stage D/E E2E Mainnet Verification
 
@@ -276,7 +276,7 @@ See ADR-053 for rationale.
 | M6 — HA / Leader Election | Multi-instance safety | STATE.md | Integration tests, failover test | HA runbook |
 | M7 — Smart Grid v2.0 | L2-aware + DD Allocator | smart_grid/SPEC_V2_0.md | L2 fixtures, allocator tests | L2 digest |
 | M8 — ML Integration | Inference pipeline | 12_ML_SPEC.md | Pinned artifacts, determinism | Calibration artifacts |
-| M9 — Multi-venue | COIN-M + other exchanges | — | Per-venue smoke tests | Venue adapters |
+| M9 — Multi-venue | COIN-M + other exchanges (deferred, see ADR-066) | — | Per-venue smoke tests | Venue adapters |
 
 ---
 
@@ -315,39 +315,28 @@ All 11 determinism fixtures pass (`verify_determinism_suite.py`).
 
 ---
 
-### M8 — ML Integration — 🚧 In Progress
+### M8 — ML Integration — ✅ Done 2026-02-17
 
 **Goal:** ML-assisted regime classification and parameter tuning
 
 **Governing docs:**
-- `docs/12_ML_SPEC.md` — target spec
+- `docs/12_ML_SPEC.md` -- target spec
 
 **Key deliverables:**
 - Offline calibration pipeline with pinned artifacts by hash
 - Inference integration with determinism tests
 - Feature store for training data
 
-**Current state (2026-02-16):**
-- M8-00: Spec — ✅ Done (PR #134)
-- M8-01: Stubs — ✅ Done (PR #140, #141, #142, #143)
-- M8-02a: Artifact plumbing — ✅ Done (PR #144)
-- M8-02b: Shadow mode — ✅ Done (PR #145)
-- M8-02c: Active inference (ADR-065) — ✅ Done (PR #146, #147, #148, #149)
-- M8-02d: Latency histogram — ✅ Done (PR #151)
-- M8-02e: Grafana dashboards — ✅ Done (PR #154)
-- M8-03a: Artifact pack + build CLI — ✅ Done (PR #150)
-- M8-03b-1: Training pipeline MVP — ✅ Done (PR #152)
-- M8-03b-2: Runtime integration + determinism — ✅ Done (PR #153)
-- M8-03c-1a: Registry spec + runbook — ✅ Done (PR #155)
-- M8-03c-1b: Registry implementation — ✅ Done (PR #157)
-- M8-03c-2: PaperEngine config wiring — ✅ Done (PR #158)
-- M8-03c-3: Promotion CLI + history — ✅ Done (PR #159)
-- M8-04: Feature store spec — ✅ Done (docs/18_FEATURE_STORE_SPEC.md)
-- Remaining: Feature store implementation (M8-04a–M8-04e, see spec for sub-milestones)
+**Completion summary:**
+- M8-00: Spec (PR #134)
+- M8-01: Stubs (PR #140, #141, #142, #143)
+- M8-02: ONNX -- artifact plumbing, shadow, active inference, observability, dashboards (PR #144, #145, #146-#149, #151, #154)
+- M8-03: Training & Registry -- pipeline, runtime, registry, promotion CLI (PR #150, #152, #153, #155, #157-#159)
+- M8-04: Feature Store -- spec, verify CLI, build CLI, train integration, promotion guard, runbook + golden dataset (PR #165-#170)
 
 ---
 
-### M9 — Multi-venue — 🔜 Planned
+### M9 — Multi-venue — Deferred / Post-launch
 
 **Goal:** Extend beyond Binance USDT-M Futures
 
@@ -361,7 +350,24 @@ All 11 determinism fixtures pass (`verify_determinism_suite.py`).
 - Per-venue adapters (port implementations)
 - Cross-venue reconciliation
 
-**Current state:** Out of scope until M7/M8 complete.
+**Rationale for deferral:**
+Multi-venue increases surface area across connectors, execution semantics, risk controls,
+and observability. We defer it until single-venue production rollout is stable.
+
+**Entry criteria (must be true before starting M9):**
+- Single-venue rollout completed (shadow -> staging -> active) with documented runbook.
+- SLOs met for N days (availability/latency) with no unresolved P0 incidents.
+- Execution + risk controls validated in live ops (kill-switch, budgets, reconciliation).
+
+See ADR-066.
+
+---
+
+### Post-M8 Focus -- Single-venue Launch Readiness (Next)
+
+- Define and run rollout procedure: shadow -> staging -> active (paper/sim first, then controlled live).
+- End-to-end smoke: start -> /healthz + /metrics -> stop; kill-switch verified.
+- Operator runbooks: start/stop/triage + incident checklist.
 
 ---
 

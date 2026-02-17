@@ -3666,3 +3666,18 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
 
 - ADR-064 (M8-00: ML Integration Specification)
 - docs/12_ML_SPEC.md (SSOT for ML contracts)
+
+## ADR-066 -- Defer Multi-venue until Post-launch
+
+- **Date:** 2026-02-17
+- **Status:** accepted
+- **Context:** M8 (ML Integration + Feature Store) is complete (PR #134-#170). The next visible roadmap item is M9 (Multi-venue). Multi-venue introduces significant complexity across data connectors, execution semantics, risk controls, and observability. Single-venue production rollout is the higher-priority path.
+- **Decision:** We defer M9 (Multi-venue) until after stable single-venue production rollout. Post-M8 focus shifts to single-venue launch readiness: rollout procedure (shadow -> staging -> active), e2e smoke, and operator runbooks.
+- **Entry criteria to start M9:**
+  - Single-venue rollout completed (shadow -> staging -> active) with a documented runbook.
+  - SLOs met for N days with no unresolved P0 incidents.
+  - Execution + risk controls validated in live ops (kill-switch, budgets, reconciliation).
+- **Consequences:**
+  - Short-term focus shifts to single-venue launch readiness (ops, rollout, e2e smoke).
+  - Multi-venue work is out of scope for pre-launch milestones unless explicitly re-prioritized.
+- **Alternatives:** "Start M9 immediately after M8" -- rejected because multi-venue surface area is too broad without validated single-venue ops.
