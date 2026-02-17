@@ -38,6 +38,7 @@ Where to find information:
 - `docs/10_RISK_SPEC.md`
 - `docs/11_BACKTEST_PROTOCOL.md`
 - `docs/12_ML_SPEC.md`
+- `docs/18_FEATURE_STORE_SPEC.md` — ML training data governance (M8-04)
 - `docs/16_ADAPTIVE_GRID_CONTROLLER_SPEC.md` — meta-controller (regime, step, reset)
 - `docs/13_OBSERVABILITY.md`
 - `docs/14_GITHUB_WORKFLOW.md`

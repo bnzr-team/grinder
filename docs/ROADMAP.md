@@ -342,7 +342,8 @@ All 11 determinism fixtures pass (`verify_determinism_suite.py`).
 - M8-03c-1b: Registry implementation — ✅ Done (PR #157)
 - M8-03c-2: PaperEngine config wiring — ✅ Done (PR #158)
 - M8-03c-3: Promotion CLI + history — ✅ Done (PR #159)
-- Remaining: Feature store for training data (not yet scoped)
+- M8-04: Feature store spec — ✅ Done (docs/18_FEATURE_STORE_SPEC.md)
+- Remaining: Feature store implementation (M8-04a–M8-04e, see spec for sub-milestones)
 
 ---
 
