@@ -560,3 +560,140 @@ def test_promote_shadow_skips_dataset_verification(tmp_path: Path) -> None:
         )
         # verify_dataset_for_promotion should NOT be called for SHADOW
         mock_verify.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# M8-04d: Path safety tests for dataset_id in verify_dataset_for_promotion
+# ---------------------------------------------------------------------------
+
+
+def test_verify_dataset_for_promotion_traversal_blocked(tmp_path: Path) -> None:
+    """M8-04d: Path traversal in dataset_id is blocked (fail-closed)."""
+    datasets_dir = tmp_path / "datasets"
+    datasets_dir.mkdir()
+
+    with pytest.raises(RegistryError, match="Path traversal in dataset_id not allowed"):
+        verify_dataset_for_promotion("../../etc/passwd", datasets_dir)
+
+
+def test_verify_dataset_for_promotion_absolute_path_blocked(tmp_path: Path) -> None:
+    """M8-04d: Absolute dataset_id is blocked (fail-closed)."""
+    datasets_dir = tmp_path / "datasets"
+    datasets_dir.mkdir()
+
+    with pytest.raises(RegistryError, match="Absolute dataset_id not allowed"):
+        verify_dataset_for_promotion("/etc/passwd", datasets_dir)
+
+
+def test_verify_dataset_for_promotion_symlink_blocked(tmp_path: Path) -> None:
+    """M8-04d: Symlink dataset directory escaping datasets_dir is blocked (fail-closed).
+
+    Symlink to outside dir is caught by containment check (resolve escapes datasets_dir).
+    """
+    datasets_dir = tmp_path / "datasets"
+    datasets_dir.mkdir()
+
+    # Create a real dir outside datasets_dir and symlink into it
+    outside_dir = tmp_path / "outside_target"
+    outside_dir.mkdir()
+    (outside_dir / "manifest.json").write_text("{}")
+
+    symlink_path = datasets_dir / "evil_link"
+    symlink_path.symlink_to(outside_dir)
+
+    with pytest.raises(RegistryError, match="escapes datasets_dir"):
+        verify_dataset_for_promotion("evil_link", datasets_dir)
+
+
+def test_verify_dataset_for_promotion_symlink_inside_blocked(tmp_path: Path) -> None:
+    """M8-04d: Symlink inside datasets_dir (non-escaping) still blocked."""
+    datasets_dir = tmp_path / "datasets"
+    real_dir = datasets_dir / "real_dataset"
+    real_dir.mkdir(parents=True)
+    (real_dir / "manifest.json").write_text("{}")
+
+    # Symlink within datasets_dir (passes containment but is still a symlink)
+    symlink_path = datasets_dir / "link_dataset"
+    symlink_path.symlink_to(real_dir)
+
+    with pytest.raises(RegistryError, match="symlink"):
+        verify_dataset_for_promotion("link_dataset", datasets_dir)
+
+
+# ---------------------------------------------------------------------------
+# M8-04d: dataset_id mismatch contract tests
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.skipif(not ONNX_AVAILABLE, reason="onnxruntime not installed")
+def test_promote_active_dataset_id_mismatch_fails(tmp_path: Path) -> None:
+    """M8-04d: Mismatch between --dataset-id and model manifest dataset_id -> error."""
+    registry_file = create_seed_registry(tmp_path)
+
+    # Copy test artifact and add dataset_id to manifest (v1.1)
+    artifact_dst = tmp_path / "test_artifact"
+    if TEST_ARTIFACT_DIR.exists():
+        shutil.copytree(TEST_ARTIFACT_DIR, artifact_dst)
+        # Patch manifest to v1.1 with dataset_id
+        manifest_path = artifact_dst / "manifest.json"
+        with manifest_path.open() as f:
+            manifest_data = json.load(f)
+        manifest_data["schema_version"] = "v1.1"
+        manifest_data["dataset_id"] = "correct_dataset"
+        manifest_data["created_at_utc"] = "2026-02-14T00:00:00Z"
+        with manifest_path.open("w") as f:
+            json.dump(manifest_data, f)
+    else:
+        pytest.skip("Test artifact not available")
+
+    with pytest.raises(RegistryError, match="dataset_id mismatch"):
+        promote_model(
+            registry_path=registry_file,
+            model_name="test_model",
+            stage=Stage.ACTIVE,
+            artifact_dir="test_artifact",
+            artifact_id="active_v1",
+            dataset_id="wrong_dataset",
+            git_sha="1234567890abcdef1234567890abcdef12345678",
+            notes=None,
+            reason=None,
+            dry_run=False,
+        )
+
+
+@pytest.mark.skipif(not ONNX_AVAILABLE, reason="onnxruntime not installed")
+def test_promote_active_dataset_id_match_passes(tmp_path: Path) -> None:
+    """M8-04d: Matching --dataset-id and model manifest dataset_id -> no mismatch error."""
+    registry_file = create_seed_registry(tmp_path)
+
+    # Copy test artifact and add dataset_id to manifest (v1.1)
+    artifact_dst = tmp_path / "test_artifact"
+    if TEST_ARTIFACT_DIR.exists():
+        shutil.copytree(TEST_ARTIFACT_DIR, artifact_dst)
+        manifest_path = artifact_dst / "manifest.json"
+        with manifest_path.open() as f:
+            manifest_data = json.load(f)
+        manifest_data["schema_version"] = "v1.1"
+        manifest_data["dataset_id"] = "correct_dataset"
+        manifest_data["created_at_utc"] = "2026-02-14T00:00:00Z"
+        with manifest_path.open("w") as f:
+            json.dump(manifest_data, f)
+    else:
+        pytest.skip("Test artifact not available")
+
+    # Mock verify_dataset_for_promotion (we only test the mismatch logic here)
+    with patch("scripts.promote_ml_model.verify_dataset_for_promotion"):
+        updated_data = promote_model(
+            registry_path=registry_file,
+            model_name="test_model",
+            stage=Stage.ACTIVE,
+            artifact_dir="test_artifact",
+            artifact_id="active_v1",
+            dataset_id="correct_dataset",
+            git_sha="1234567890abcdef1234567890abcdef12345678",
+            notes="Match test",
+            reason=None,
+            dry_run=False,
+        )
+
+    assert updated_data["models"]["test_model"]["active"]["dataset_id"] == "correct_dataset"

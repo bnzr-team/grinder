@@ -103,7 +103,27 @@ def verify_dataset_for_promotion(
     """
     from scripts.verify_dataset import verify_dataset  # noqa: PLC0415
 
+    # Path safety: dataset_id must not escape datasets_dir
+    if Path(dataset_id).is_absolute():
+        raise RegistryError(f"Absolute dataset_id not allowed: {dataset_id!r}")
+
+    if ".." in Path(dataset_id).parts:
+        raise RegistryError(f"Path traversal in dataset_id not allowed: {dataset_id!r}")
+
     dataset_dir = datasets_dir / dataset_id
+
+    # Containment check: resolved path must stay under datasets_dir
+    try:
+        dataset_dir.resolve().relative_to(datasets_dir.resolve())
+    except ValueError:
+        raise RegistryError(
+            f"dataset_id escapes datasets_dir: {dataset_id!r} -> {dataset_dir.resolve()}"
+        ) from None
+
+    # Symlink check: reject if dataset_dir is a symlink
+    if dataset_dir.is_symlink():
+        raise RegistryError(f"Dataset path is a symlink (not allowed): {dataset_dir}")
+
     manifest_path = dataset_dir / "manifest.json"
 
     if not dataset_dir.exists():
