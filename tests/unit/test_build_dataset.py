@@ -10,6 +10,9 @@ import json
 from typing import TYPE_CHECKING
 
 import pytest
+
+pytest.importorskip("pyarrow", reason="pyarrow not installed (ml extra)")
+
 from scripts.build_dataset import (
     LABEL_COLUMNS,
     VALID_SOURCES,

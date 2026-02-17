@@ -9,6 +9,10 @@ from __future__ import annotations
 import json
 from typing import TYPE_CHECKING
 
+import pytest
+
+pytest.importorskip("pyarrow", reason="pyarrow not installed (ml extra)")
+
 import pyarrow.parquet as pq
 from scripts.build_dataset import build_dataset
 from scripts.verify_dataset import verify_dataset
