@@ -1,0 +1,41 @@
+{
+  "schema_version": "v1",
+  "dataset_id": "tiny_valid",
+  "created_at_utc": "2026-02-17T10:00:00Z",
+  "source": "synthetic",
+  "source_description": "Test fixture for M8-04a",
+  "feature_order": [
+    "price_mid",
+    "price_bid",
+    "price_ask",
+    "spread_bps",
+    "volume_24h",
+    "volume_1h",
+    "volatility_1h_bps",
+    "volatility_24h_bps",
+    "position_size",
+    "position_notional",
+    "position_pnl_bps",
+    "grid_levels_active",
+    "grid_utilization_pct",
+    "trend_strength",
+    "momentum_1h"
+  ],
+  "feature_order_hash": "cc836e0d5383abd9",
+  "label_columns": [
+    "regime",
+    "spacing_multiplier"
+  ],
+  "row_count": 50,
+  "sha256": {
+    "data.bin": "831b5bb0cff29f12df79611a2c7608c469d19b8237d7b17b0acd530f5fc7edd3"
+  },
+  "determinism": {
+    "seed": 42,
+    "git_sha": "0000000000000000000000000000000000000000",
+    "build_command": "test fixture"
+  },
+  "git_sha": "0000000000000000000000000000000000000000",
+  "actor": "test@grinder.dev",
+  "notes": "Tiny fixture for verify_dataset tests"
+}
