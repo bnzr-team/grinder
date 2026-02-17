@@ -28,6 +28,18 @@ from scripts.train_regime_model import (
 from grinder.ml.onnx import ONNX_AVAILABLE, load_artifact
 from grinder.ml.onnx.features import FEATURE_ORDER
 
+try:
+    import sklearn  # noqa: F401
+
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    SKLEARN_AVAILABLE = False
+
+_needs_ml = pytest.mark.skipif(
+    not (ONNX_AVAILABLE and SKLEARN_AVAILABLE),
+    reason="onnxruntime and scikit-learn required (pip install grinder[ml])",
+)
+
 
 class TestGenerateSyntheticData:
     """Tests for synthetic data generation."""
@@ -93,7 +105,7 @@ class TestGenerateSyntheticData:
         assert X.dtype == np.float32
 
 
-@pytest.mark.skipif(not ONNX_AVAILABLE, reason="onnxruntime not installed")
+@_needs_ml
 class TestTrainModel:
     """Tests for model training."""
 
@@ -130,7 +142,7 @@ class TestTrainModel:
         assert np.allclose(pred1, pred2)
 
 
-@pytest.mark.skipif(not ONNX_AVAILABLE, reason="onnxruntime not installed")
+@_needs_ml
 class TestTrainAndExport:
     """Tests for full training pipeline."""
 

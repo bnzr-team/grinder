@@ -14,13 +14,23 @@ import pytest
 
 from grinder.ml.onnx import ONNX_AVAILABLE
 
-# Conditional imports - guarded by ONNX_AVAILABLE
-if ONNX_AVAILABLE:
+try:
+    import sklearn  # noqa: F401
+
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    SKLEARN_AVAILABLE = False
+
+# Conditional imports - guarded by ML availability
+if ONNX_AVAILABLE and SKLEARN_AVAILABLE:
     from scripts.train_regime_model import train_and_export
 
     from grinder.ml.onnx import OnnxMlModel, load_artifact
 
-pytestmark = pytest.mark.skipif(not ONNX_AVAILABLE, reason="onnxruntime not installed")
+pytestmark = pytest.mark.skipif(
+    not (ONNX_AVAILABLE and SKLEARN_AVAILABLE),
+    reason="onnxruntime and scikit-learn required (pip install grinder[ml])",
+)
 
 
 class TestTrainToInferenceRoundtrip:
