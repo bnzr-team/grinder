@@ -1414,13 +1414,13 @@ Comprehensive adaptive grid system design:
     - [DONE] **M8-03c-1b:** Registry implementation (PR #157)
     - [DONE] **M8-03c-2:** PaperEngine config wiring (PR #158)
     - [DONE] **M8-03c-3:** Promotion CLI + history[] audit trail (PR #159)
-  - **M8-04 (Feature Store):** In progress
+  - **M8-04 (Feature Store):** Complete
     - [DONE] **M8-04 spec:** Feature store specification (`docs/18_FEATURE_STORE_SPEC.md`) (PR #165)
     - [DONE] **M8-04a:** Dataset manifest verification CLI (`scripts/verify_dataset.py`) + tests + fixture (PR #166)
     - [DONE] **M8-04b:** Dataset builder CLI (`scripts/build_dataset.py`) + tests (PR #167)
     - [DONE] **M8-04c:** Train integration with dataset manifest (`--dataset-manifest`, dataset_id traceability) (PR #168)
-    - [DONE] **M8-04d:** ACTIVE promotion requires verified dataset artifact (`verify_dataset_for_promotion`, fail-closed guard in `promote_ml_model.py`)
-    - Remaining: M8-04e (registry links)
+    - [DONE] **M8-04d:** ACTIVE promotion requires verified dataset artifact (`verify_dataset_for_promotion`, fail-closed guard in `promote_ml_model.py`) (PR #169)
+    - [DONE] **M8-04e:** Operator runbook (`docs/runbooks/20_FEATURE_STORE_DATASETS.md`) + golden dataset integration test
 
 ### Multi-venue
 - **Current:** Binance Futures USDT-M only
