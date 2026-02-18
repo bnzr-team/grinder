@@ -27,6 +27,7 @@ Operational runbooks for GRINDER trading system.
 | [22_ACTIVE_ENABLEMENT_CEREMONY](22_ACTIVE_ENABLEMENT_CEREMONY.md) | ACTIVE enablement ceremony (Launch-02) |
 | [23_DATA_QUALITY_TRIAGE](23_DATA_QUALITY_TRIAGE.md) | Data quality alerts and triage (Launch-04) |
 | [24_LATENCY_RETRY_TRIAGE](24_LATENCY_RETRY_TRIAGE.md) | HTTP latency/retry alerts and triage (Launch-05) |
+| [25_LATENCY_RETRY_ENABLEMENT_CEREMONY](25_LATENCY_RETRY_ENABLEMENT_CEREMONY.md) | Latency/retry enablement ceremony (Launch-05b) |
 
 ## Quick Reference
 
