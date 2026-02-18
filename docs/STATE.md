@@ -1288,6 +1288,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
 - [DONE] Data quality wiring (Launch-03 PR2): DataQualityEngine wired into LiveFeed._process_snapshot (dq_enabled gated, metrics-only).
 - [DONE] Data quality gating (Launch-03 PR3): dq_blocking flag + 3 block reasons (stale/gap/outlier) in remediation gate; DataQualityVerdict; safe-by-default.
 - [DONE] Data quality alerts + triage (Launch-04): 4 DQ alert rules (stale/gap/outlier/blocking); triage runbook 23; alert rules validator.
+- [DONE] HTTP retry policy + latency metrics (Launch-05 PR1): HttpRetryPolicy, DeadlinePolicy (per-op budgets), MeasuredHttpClient (httpx wrapper), HTTP metrics (requests/retries/fail counters + latency_ms histogram). Safe-by-default (retries disabled, enabled=False). No behavior change.
 - Expand tests to >50% coverage.
 - Adaptive Controller v1 (EMA-based adaptive step, trend detection, DRAWDOWN mode).
 - ~~Live Connector v1~~ [DONE] Done (LC-21: stream_ticks wired to BinanceWsConnector).

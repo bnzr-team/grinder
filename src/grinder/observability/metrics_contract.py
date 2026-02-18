@@ -130,6 +130,18 @@ REQUIRED_METRICS_PATTERNS = [
     "# HELP grinder_data_outlier_total",
     "# TYPE grinder_data_outlier_total",
     "grinder_data_outlier_total{stream=",
+    # Launch-05: HTTP latency/retry metrics
+    "# HELP grinder_http_requests_total",
+    "# TYPE grinder_http_requests_total",
+    "grinder_http_requests_total{op=",
+    "# HELP grinder_http_retries_total",
+    "# TYPE grinder_http_retries_total",
+    "grinder_http_retries_total{op=",
+    "# HELP grinder_http_fail_total",
+    "# TYPE grinder_http_fail_total",
+    "grinder_http_fail_total{op=",
+    "# HELP grinder_http_latency_ms",
+    "# TYPE grinder_http_latency_ms",
 ]
 
 # Forbidden high-cardinality labels (H5-02 contract tightening)
