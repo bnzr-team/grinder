@@ -87,6 +87,7 @@ class RequestsHttpClient:
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         timeout_ms: int = 5000,
+        op: str = "",  # noqa: ARG002
     ) -> HttpResponse:
         """Execute HTTP request via requests library."""
         timeout_s = timeout_ms / 1000.0

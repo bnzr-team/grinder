@@ -55,6 +55,14 @@ from grinder.connectors.live_connector import SafeMode
 from grinder.core import OrderSide, OrderState
 from grinder.execution.binance_port import HttpClient, map_binance_error
 from grinder.execution.types import OrderRecord
+from grinder.net.retry_policy import (
+    OP_CANCEL_ALL,
+    OP_CANCEL_ORDER,
+    OP_GET_ACCOUNT,
+    OP_GET_OPEN_ORDERS,
+    OP_GET_POSITIONS,
+    OP_PLACE_ORDER,
+)
 from grinder.reconcile.identity import (
     OrderIdentityConfig,
     generate_client_order_id,
@@ -274,6 +282,7 @@ class BinanceFuturesPort:
             params=params,
             headers=self._get_headers(),
             timeout_ms=self.config.timeout_ms,
+            op=OP_GET_ACCOUNT,
         )
 
         if response.status_code != 200:
@@ -332,6 +341,7 @@ class BinanceFuturesPort:
             params=params,
             headers=self._get_headers(),
             timeout_ms=self.config.timeout_ms,
+            op=OP_PLACE_ORDER,
         )
 
         if response.status_code != 200:
@@ -361,6 +371,7 @@ class BinanceFuturesPort:
             params=params,
             headers=self._get_headers(),
             timeout_ms=self.config.timeout_ms,
+            op=OP_GET_POSITIONS,
         )
 
         if response.status_code != 200:
@@ -413,6 +424,7 @@ class BinanceFuturesPort:
             params=params,
             headers=self._get_headers(),
             timeout_ms=self.config.timeout_ms,
+            op=OP_GET_POSITIONS,
         )
 
         if response.status_code != 200:
@@ -441,6 +453,7 @@ class BinanceFuturesPort:
             params=params,
             headers=self._get_headers(),
             timeout_ms=self.config.timeout_ms,
+            op=OP_GET_ACCOUNT,
         )
 
         if response.status_code != 200:
@@ -537,6 +550,7 @@ class BinanceFuturesPort:
             params=params,
             headers=self._get_headers(),
             timeout_ms=self.config.timeout_ms,
+            op=OP_PLACE_ORDER,
         )
 
         if response.status_code != 200:
@@ -603,6 +617,7 @@ class BinanceFuturesPort:
             params=params,
             headers=self._get_headers(),
             timeout_ms=self.config.timeout_ms,
+            op=OP_PLACE_ORDER,
         )
 
         if response.status_code != 200:
@@ -652,6 +667,7 @@ class BinanceFuturesPort:
             params=params,
             headers=self._get_headers(),
             timeout_ms=self.config.timeout_ms,
+            op=OP_CANCEL_ORDER,
         )
 
         if response.status_code != 200:
@@ -690,6 +706,7 @@ class BinanceFuturesPort:
             params=params,
             headers=self._get_headers(),
             timeout_ms=self.config.timeout_ms,
+            op=OP_CANCEL_ORDER,
         )
 
         if response.status_code != 200:
@@ -724,6 +741,7 @@ class BinanceFuturesPort:
             params=params,
             headers=self._get_headers(),
             timeout_ms=self.config.timeout_ms,
+            op=OP_CANCEL_ALL,
         )
 
         if response.status_code != 200:
@@ -787,6 +805,7 @@ class BinanceFuturesPort:
             params=params,
             headers=self._get_headers(),
             timeout_ms=self.config.timeout_ms,
+            op=OP_GET_OPEN_ORDERS,
         )
 
         if response.status_code != 200:
@@ -811,6 +830,7 @@ class BinanceFuturesPort:
             params=params,
             headers=self._get_headers(),
             timeout_ms=self.config.timeout_ms,
+            op=OP_GET_OPEN_ORDERS,
         )
 
         if response.status_code != 200:

@@ -55,6 +55,10 @@ Environment Variables:
     BUDGET_STATE_STALE_HOURS      Hours before stale warning (default: 24)
     GRINDER_ARTIFACTS_DIR         Base artifacts directory (enables run-dir mode)
     GRINDER_ARTIFACT_TTL_DAYS     Days to keep old run-dirs (default: 14)
+    LATENCY_RETRY_ENABLED         "1" to enable per-op HTTP deadlines + retries (default: off)
+    HTTP_MAX_ATTEMPTS_READ        Max attempts for read ops (default: 1)
+    HTTP_MAX_ATTEMPTS_WRITE       Max attempts for write ops (default: 1)
+    HTTP_DEADLINE_<OP>_MS         Per-op deadline override (e.g. HTTP_DEADLINE_CANCEL_ORDER_MS=400)
 
 See ADR-052 for LC-18 design decisions.
 """
@@ -90,6 +94,9 @@ from grinder.execution.binance_futures_port import (
 )
 from grinder.execution.binance_port import HttpResponse
 from grinder.live.reconcile_loop import ReconcileLoop, ReconcileLoopConfig
+from grinder.net.measured_sync import MeasuredSyncHttpClient
+from grinder.net.retry_policy import DeadlinePolicy, HttpRetryPolicy
+from grinder.observability.latency_metrics import get_http_metrics
 from grinder.ops.artifacts import (
     ArtifactPaths,
     cleanup_old_runs,
@@ -337,6 +344,7 @@ class RequestsHttpClient:
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         timeout_ms: int = 5000,
+        op: str = "",  # noqa: ARG002 — used by MeasuredSyncHttpClient wrapper
     ) -> HttpResponse:
         """Execute HTTP request via requests library."""
         if requests is None:
@@ -387,6 +395,69 @@ def validate_credentials() -> tuple[str, str]:
     return api_key, api_secret
 
 
+def _build_measured_client(inner: RequestsHttpClient) -> MeasuredSyncHttpClient:
+    """Wrap inner HttpClient with MeasuredSyncHttpClient if LATENCY_RETRY_ENABLED=1.
+
+    Env vars (all optional, safe defaults):
+        LATENCY_RETRY_ENABLED        "1" to enable per-op deadlines + retries (default: off)
+        HTTP_MAX_ATTEMPTS_READ       Max attempts for read ops (default: 1)
+        HTTP_MAX_ATTEMPTS_WRITE      Max attempts for write ops (default: 1)
+        HTTP_DEADLINE_<OP>_MS        Per-op deadline override (e.g. HTTP_DEADLINE_CANCEL_ORDER_MS=400)
+
+    When disabled: returns a MeasuredSyncHttpClient with enabled=False (pure pass-through).
+    """
+    enabled = os.environ.get("LATENCY_RETRY_ENABLED", "") == "1"
+
+    max_read = _parse_int(
+        "HTTP_MAX_ATTEMPTS_READ",
+        os.environ.get("HTTP_MAX_ATTEMPTS_READ", ""),
+        default=1,
+    )
+    max_write = _parse_int(
+        "HTTP_MAX_ATTEMPTS_WRITE",
+        os.environ.get("HTTP_MAX_ATTEMPTS_WRITE", ""),
+        default=1,
+    )
+
+    # Build deadline overrides from HTTP_DEADLINE_<OP>_MS env vars
+    deadline_overrides: dict[str, int] = {}
+    for key, value in os.environ.items():
+        if key.startswith("HTTP_DEADLINE_") and key.endswith("_MS"):
+            op_name = key[len("HTTP_DEADLINE_") : -len("_MS")].lower()
+            deadline_overrides[op_name] = _parse_int(key, value, default=0)
+
+    deadline_policy = DeadlinePolicy.defaults()
+    if deadline_overrides:
+        merged = dict(deadline_policy.deadlines)
+        merged.update(deadline_overrides)
+        deadline_policy = DeadlinePolicy(deadlines=merged)
+
+    # Use the more permissive read policy (covers both read+write ops at the protocol level).
+    # The write-specific conservatism (e.g. no 429 retry) is handled by the retry_policy
+    # at the MeasuredSyncHttpClient level, but since we use a single client instance
+    # for all ops, we pick the read policy with the higher max_attempts.
+    # Write ops naturally get fewer retries because they exclude 429 from retryable reasons.
+    retry_policy = HttpRetryPolicy.for_read(max_attempts=max(max_read, max_write))
+
+    if enabled:
+        logger.info(
+            "HTTP measured client ENABLED: max_read=%d, max_write=%d, deadline_overrides=%s",
+            max_read,
+            max_write,
+            deadline_overrides or "none",
+        )
+    else:
+        logger.info("HTTP measured client DISABLED (pass-through)")
+
+    return MeasuredSyncHttpClient(
+        inner=inner,
+        deadline_policy=deadline_policy,
+        retry_policy=retry_policy,
+        enabled=enabled,
+        metrics=get_http_metrics(),
+    )
+
+
 def create_real_port(
     symbol_whitelist: list[str],
     dry_run: bool,
@@ -408,7 +479,8 @@ def create_real_port(
     """
     api_key, api_secret = validate_credentials()
 
-    http_client = RequestsHttpClient()
+    raw_client = RequestsHttpClient()
+    http_client = _build_measured_client(raw_client)
 
     config = BinanceFuturesPortConfig(
         mode=SafeMode.LIVE_TRADE,
