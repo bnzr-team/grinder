@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Validate Prometheus alert rules YAML (Launch-04).
+"""Validate Prometheus alert rules YAML (Launch-05).
 
 Checks:
 1. Valid YAML structure with ``groups[].rules[]``
 2. Unique alert names across all groups
-3. No ``symbol=`` in expr, labels, or annotations (forbidden label)
+3. No forbidden labels in expr (``symbol=``, ``order_id=``, ``key=``, ``client_id=``)
 4. Non-empty ``expr`` on every rule
+5. ``op=`` values in PromQL expressions match ops taxonomy allowlist
 
 Usage:
   python -m scripts.verify_alert_rules monitoring/alert_rules.yml
@@ -26,9 +27,30 @@ from typing import Any
 
 import yaml
 
-# Pattern matching symbol= in PromQL expressions and label values.
-# Catches: symbol=, symbol!=, symbol=~, symbol!~
-SYMBOL_PATTERN = re.compile(r"\bsymbol\s*[!=~]")
+# Forbidden labels — high-cardinality or sensitive data that must never appear
+# in alert expressions. Pattern matches: label=, label!=, label=~, label!~
+_FORBIDDEN_LABELS: tuple[str, ...] = ("symbol", "order_id", "key", "client_id")
+FORBIDDEN_PATTERN = re.compile(
+    r"\b(" + "|".join(re.escape(lbl) for lbl in _FORBIDDEN_LABELS) + r")\s*[!=~]"
+)
+
+# Ops taxonomy allowlist — SSOT from src/grinder/net/retry_policy.py
+_OPS_ALLOWLIST: frozenset[str] = frozenset(
+    {
+        "place_order",
+        "cancel_order",
+        "cancel_all",
+        "get_open_orders",
+        "get_positions",
+        "get_account",
+        "exchange_info",
+        "ping_time",
+    }
+)
+
+# Pattern to extract op= literal values from PromQL expressions.
+# Matches: op="value", op=~"value|value2", op!="value"
+_OP_VALUE_PATTERN = re.compile(r'\bop\s*[!=~]+\s*"([^"]*)"')
 
 
 def load_rules(path: Path) -> dict[str, Any]:
@@ -85,23 +107,40 @@ def validate(data: dict[str, Any]) -> list[str]:
             if not str(expr).strip():
                 errors.append(f"{rule_id}: empty 'expr'")
 
-            # symbol= check across all string fields
-            _check_symbol(rule, rule_id, errors)
+            # Forbidden label check across all string fields
+            _check_forbidden_labels(rule, rule_id, errors)
+
+            # op= value allowlist check on expr
+            _check_op_allowlist(str(expr), rule_id, errors)
 
     return errors
 
 
-def _check_symbol(obj: Any, context: str, errors: list[str], path: str = "") -> None:
-    """Recursively check for symbol= in all string values."""
+def _check_forbidden_labels(obj: Any, context: str, errors: list[str], path: str = "") -> None:
+    """Recursively check for forbidden labels in all string values."""
     if isinstance(obj, str):
-        if SYMBOL_PATTERN.search(obj):
-            errors.append(f"{context}: forbidden 'symbol=' found in {path or 'value'}")
+        match = FORBIDDEN_PATTERN.search(obj)
+        if match:
+            errors.append(
+                f"{context}: forbidden label '{match.group(1)}=' found in {path or 'value'}"
+            )
     elif isinstance(obj, dict):
         for k, v in obj.items():
-            _check_symbol(v, context, errors, path=f"{path}.{k}" if path else k)
+            _check_forbidden_labels(v, context, errors, path=f"{path}.{k}" if path else k)
     elif isinstance(obj, list):
         for i, v in enumerate(obj):
-            _check_symbol(v, context, errors, path=f"{path}[{i}]" if path else f"[{i}]")
+            _check_forbidden_labels(v, context, errors, path=f"{path}[{i}]" if path else f"[{i}]")
+
+
+def _check_op_allowlist(expr: str, context: str, errors: list[str]) -> None:
+    """Check that op= values in PromQL expressions are from the ops taxonomy."""
+    for match in _OP_VALUE_PATTERN.finditer(expr):
+        raw_value = match.group(1)
+        # Split on | for regex alternation (op=~"cancel_order|place_order")
+        ops = [op.strip() for op in raw_value.split("|") if op.strip()]
+        for op in ops:
+            if op not in _OPS_ALLOWLIST:
+                errors.append(f"{context}: unknown op '{op}' in expr (not in ops taxonomy)")
 
 
 def main(argv: list[str] | None = None) -> int:

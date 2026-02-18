@@ -1290,6 +1290,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
 - [DONE] Data quality alerts + triage (Launch-04): 4 DQ alert rules (stale/gap/outlier/blocking); triage runbook 23; alert rules validator.
 - [DONE] HTTP retry policy + latency metrics (Launch-05 PR1): HttpRetryPolicy, DeadlinePolicy (per-op budgets), MeasuredHttpClient (httpx wrapper), HTTP metrics (requests/retries/fail counters + latency_ms histogram). Safe-by-default (retries disabled, enabled=False). No behavior change.
 - [DONE] HTTP measured client wiring (Launch-05 PR2): MeasuredSyncHttpClient wrapping sync HttpClient; op= annotations on all 12 BinanceFuturesPort call sites; env config (LATENCY_RETRY_ENABLED, HTTP_MAX_ATTEMPTS_*, HTTP_DEADLINE_*_MS); safe-by-default (disabled pass-through).
+- [DONE] HTTP latency/retry alerts + triage (Launch-05 PR3): 4 alert rules (2 page + 2 ticket); triage runbook 24; validator update (op= allowlist + forbidden labels). Zero changes to src/.
 - Expand tests to >50% coverage.
 - Adaptive Controller v1 (EMA-based adaptive step, trend detection, DRAWDOWN mode).
 - ~~Live Connector v1~~ [DONE] Done (LC-21: stream_ticks wired to BinanceWsConnector).
