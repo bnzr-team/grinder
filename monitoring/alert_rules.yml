@@ -1,4 +1,4 @@
-# GRINDER Alert Rules v3
+# GRINDER Alert Rules v4
 # Based on metrics from src/grinder/observability/metrics_builder.py
 #
 # Available metrics:
@@ -33,6 +33,12 @@
 #   - grinder_reconcile_budget_notional_used_day (gauge): notional USDT used today (LC-18)
 #   - grinder_reconcile_budget_notional_remaining_day (gauge): notional USDT remaining (LC-18)
 #   - grinder_reconcile_budget_configured (gauge): 1 if budget tracking active (LC-18)
+#
+# Data quality metrics (Launch-03/Launch-04):
+#   - grinder_data_stale_total{stream} (counter): staleness events by stream
+#   - grinder_data_gap_total{stream,bucket} (counter): tick gap events by stream and bucket
+#   - grinder_data_outlier_total{stream,kind} (counter): outlier events by stream and kind
+#   - grinder_reconcile_action_blocked_total{reason="data_quality_*"} (counter): DQ gate blocks
 
 groups:
   - name: grinder_availability
@@ -331,3 +337,53 @@ groups:
           summary: "No ML inferences detected"
           description: "No ML inferences (success or error) in 10 minutes while GRINDER is up. Check ML configuration."
           runbook_url: "docs/runbooks/18_ML_INFERENCE_SLOS.md#mlinferencestalled"
+
+  # Launch-04: Data Quality Alerts
+  # Thresholds are conservative — tune after 1 week of shadow/staging.
+  # No symbol= labels anywhere (stream= only).
+  - name: grinder_data_quality
+    rules:
+      # Page: Data staleness burst — exchange or ingestion lagging
+      - alert: GrinderDataStaleBurst
+        expr: rate(grinder_data_stale_total[5m]) > 0.05
+        for: 3m
+        labels:
+          severity: page
+        annotations:
+          summary: "Data staleness burst detected"
+          description: "Staleness events firing at {{ $value | printf \"%.3f\" }}/sec over 5 minutes. Exchange feed or ingestion may be lagging."
+          runbook_url: "docs/runbooks/23_DATA_QUALITY_TRIAGE.md#grinderdatastaleburst"
+
+      # Ticket: Tick gaps in large buckets (>1s)
+      - alert: GrinderDataGapSpike
+        expr: rate(grinder_data_gap_total[5m]) > 0.02
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Tick gap rate elevated"
+          description: "Tick gaps firing at {{ $value | printf \"%.3f\" }}/sec. Check exchange connectivity and WebSocket health."
+          runbook_url: "docs/runbooks/23_DATA_QUALITY_TRIAGE.md#grinderdatagapspike"
+
+      # Ticket: Price outlier spike
+      - alert: GrinderDataOutlierSpike
+        expr: rate(grinder_data_outlier_total{kind="price"}[5m]) > 0.02
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Price outlier rate elevated"
+          description: "Price outlier events at {{ $value | printf \"%.3f\" }}/sec. May indicate flash crash, exchange glitch, or misconfigured thresholds."
+          runbook_url: "docs/runbooks/23_DATA_QUALITY_TRIAGE.md#grinderdataoutlierspike"
+
+      # Page: DQ gate is actively blocking remediation
+      - alert: GrinderDQBlockingActive
+        expr: |
+          rate(grinder_reconcile_action_blocked_total{reason=~"data_quality_(stale|gap|outlier)"}[5m]) > 0
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "DQ gate is blocking remediation actions"
+          description: "Remediation blocked by data quality gate (reason={{ $labels.reason }}). Rate: {{ $value | printf \"%.3f\" }}/sec. Investigate data feed quality before taking action."
+          runbook_url: "docs/runbooks/23_DATA_QUALITY_TRIAGE.md#grinderdqblockingactive"

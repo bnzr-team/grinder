@@ -25,6 +25,7 @@ Operational runbooks for GRINDER trading system.
 | [17_LIVE_TRADE_CONNECTOR_ENABLEMENT](17_LIVE_TRADE_CONNECTOR_ENABLEMENT.md) | LIVE_TRADE connector enablement (LC-22) |
 | [21_SINGLE_VENUE_LAUNCH](21_SINGLE_VENUE_LAUNCH.md) | Single-venue launch readiness (Launch-01) |
 | [22_ACTIVE_ENABLEMENT_CEREMONY](22_ACTIVE_ENABLEMENT_CEREMONY.md) | ACTIVE enablement ceremony (Launch-02) |
+| [23_DATA_QUALITY_TRIAGE](23_DATA_QUALITY_TRIAGE.md) | Data quality alerts and triage (Launch-04) |
 
 ## Quick Reference
 
