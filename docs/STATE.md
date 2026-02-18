@@ -1292,6 +1292,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
 - [DONE] HTTP measured client wiring (Launch-05 PR2): MeasuredSyncHttpClient wrapping sync HttpClient; op= annotations on all 12 BinanceFuturesPort call sites; env config (LATENCY_RETRY_ENABLED, HTTP_MAX_ATTEMPTS_*, HTTP_DEADLINE_*_MS); safe-by-default (disabled pass-through).
 - [DONE] HTTP latency/retry alerts + triage (Launch-05 PR3): 4 alert rules (2 page + 2 ticket); triage runbook 24; validator update (op= allowlist + forbidden labels). Zero changes to src/.
 - [DONE] Latency/retry enablement ceremony (Launch-05b): Runbook 25 — operator procedure for safely enabling LATENCY_RETRY_ENABLED=1 with conservative config, observation window, rollback, evidence bundle. Zero changes to src/.
+- [DONE] HTTP probe loop (Launch-05c): Shared measured-client factory + HTTP probe in run_live.py for observable grinder_http_* metrics. No API keys required (public endpoints only). Enables RB25 in STAGING.
 - Expand tests to >50% coverage.
 - Adaptive Controller v1 (EMA-based adaptive step, trend detection, DRAWDOWN mode).
 - ~~Live Connector v1~~ [DONE] Done (LC-21: stream_ticks wired to BinanceWsConnector).

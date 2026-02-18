@@ -16,9 +16,11 @@ Operator procedure for safely enabling `LATENCY_RETRY_ENABLED=1` (Launch-05b).
 ## Preconditions
 
 - [ ] Launch-05 PRs merged (#180, #181, #182)
+- [ ] Launch-05c PR merged (#184) -- HTTP probe for observable metrics
 - [ ] Alert rules deployed (`grinder_http_latency` group in Prometheus)
 - [ ] Running in **STAGING** (or SHADOW) -- do not enable directly in ACTIVE
 - [ ] Access to `/metrics`, `/healthz`, `/readyz` endpoints
+- [ ] `HTTP_PROBE_ENABLED=1` set (generates real HTTP traffic for observation; Launch-05c)
 - [ ] Operator assigned, time window: 15-30 minutes
 - [ ] Artifacts directory exists: `mkdir -p artifacts/`
 
@@ -134,6 +136,8 @@ curl -sf http://localhost:9090/metrics | grep 'grinder_http_requests_total'
 | GrinderHttp429RateLimitSpike | Any firing = follow RB24 rate limit triage |
 
 ### Metrics to check periodically
+
+With `HTTP_PROBE_ENABLED=1` (Launch-05c), expect `op="ping_time"` and `op="exchange_info"` counters to grow every probe interval (~5s).
 
 ```bash
 # Request counts by op (should see non-zero for active ops)
