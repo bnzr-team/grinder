@@ -10,6 +10,7 @@ Covers:
 
 from __future__ import annotations
 
+import pathlib
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -112,9 +113,19 @@ class MockInnerClient:
 class TestDisabledPassthrough:
     """When enabled=False, MeasuredSyncHttpClient is pure pass-through."""
 
-    def test_passes_all_args_unchanged(self) -> None:
+    def test_disabled_is_zero_behavior_change(self) -> None:
+        """THE proof: enabled=False → 1 call, 0 sleeps, 0 metrics, timeout unchanged."""
+        metrics = HttpMetrics()
         inner = MockInnerClient(responses=[HttpResponse(status_code=200, json_data={"ok": True})])
-        client = MeasuredSyncHttpClient(inner=inner, enabled=False)
+        clock = FakeClock()
+        sleep = FakeSleep(clock)
+        client = MeasuredSyncHttpClient(
+            inner=inner,
+            enabled=False,
+            metrics=metrics,
+            clock=clock,
+            sleep_func=sleep,
+        )
 
         result = client.request(
             method="GET",
@@ -128,23 +139,23 @@ class TestDisabledPassthrough:
         assert result.status_code == 200
         assert result.json_data == {"ok": True}
 
-        # Verify inner client received exact same args
+        # 1) Underlying client called exactly 1 time
+        assert len(inner.calls) == 1
         call = inner.calls[0]
         assert call["method"] == "GET"
-        assert call["timeout_ms"] == 3000  # NOT overridden by deadline
+        assert call["timeout_ms"] == 3000  # NOT overridden by DeadlinePolicy
         assert call["op"] == OP_GET_POSITIONS
-        assert len(inner.calls) == 1  # No retries
 
-    def test_no_metrics_recorded_when_disabled(self) -> None:
-        metrics = HttpMetrics()
-        inner = MockInnerClient(responses=[HttpResponse(status_code=200, json_data={})])
-        client = MeasuredSyncHttpClient(inner=inner, enabled=False, metrics=metrics)
+        # 2) sleep_func never called (0 retries)
+        assert sleep.calls == []
 
-        client.request(method="GET", url="/test", op=OP_GET_POSITIONS)
-
-        # No metrics should be recorded
+        # 3) No metrics recorded
         assert metrics.requests == {}
+        assert metrics.retries == {}
+        assert metrics.fails == {}
         assert metrics.latency_buckets == {}
+        assert metrics.latency_sum == {}
+        assert metrics.latency_count == {}
 
     def test_empty_op_is_passthrough_even_when_enabled(self) -> None:
         """When op="" (not annotated), pass through even if enabled=True."""
@@ -451,3 +462,34 @@ class TestLabelSafety:
                 assert "op=" in line
                 for forbidden in ["symbol=", "order_id=", "key=", "client_id="]:
                     assert forbidden not in line
+
+
+# ---------------------------------------------------------------------------
+# Static coverage: all BinanceFuturesPort call sites have op=OP_
+# ---------------------------------------------------------------------------
+
+
+class TestStaticOpCoverage:
+    """Verify every http_client.request() in BinanceFuturesPort passes op=OP_."""
+
+    def test_all_call_sites_have_op(self) -> None:
+        """Every http_client.request() in BinanceFuturesPort must have op=OP_."""
+        port_file = pathlib.Path(__file__).resolve().parents[2] / (
+            "src/grinder/execution/binance_futures_port.py"
+        )
+        lines = port_file.read_text().splitlines()
+
+        # Find line numbers of each call site
+        call_lines: list[int] = []
+        for i, line in enumerate(lines):
+            if "self.http_client.request(" in line:
+                call_lines.append(i)
+
+        assert len(call_lines) >= 12, f"Expected >=12 call sites, found {len(call_lines)}"
+
+        # For each call site, look within the next 10 lines for op=OP_
+        for line_no in call_lines:
+            window = "\n".join(lines[line_no : line_no + 10])
+            assert "op=OP_" in window, (
+                f"Call site at line {line_no + 1} missing op=OP_* annotation:\n{window}"
+            )
