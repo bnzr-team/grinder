@@ -59,6 +59,8 @@ Environment Variables:
     HTTP_MAX_ATTEMPTS_READ        Max attempts for read ops (default: 1)
     HTTP_MAX_ATTEMPTS_WRITE       Max attempts for write ops (default: 1)
     HTTP_DEADLINE_<OP>_MS         Per-op deadline override (e.g. HTTP_DEADLINE_CANCEL_ORDER_MS=400)
+    FILL_CURSOR_PATH              Path to persist fill cursor (default: None = in-memory only)
+    FILL_INGEST_ENABLED           "1" to enable fill ingestion from userTrades (default: off)
 
 See ADR-052 for LC-18 design decisions.
 """
@@ -93,7 +95,11 @@ from grinder.execution.binance_futures_port import (
     BinanceFuturesPort,
     BinanceFuturesPortConfig,
 )
+from grinder.execution.fill_cursor import FillCursor, load_fill_cursor, save_fill_cursor
+from grinder.execution.fill_ingest import ingest_fills, push_tracker_to_metrics
+from grinder.execution.fill_tracker import FillTracker
 from grinder.live.reconcile_loop import ReconcileLoop, ReconcileLoopConfig
+from grinder.observability.fill_metrics import get_fill_metrics
 from grinder.ops.artifacts import (
     ArtifactPaths,
     cleanup_old_runs,
@@ -324,6 +330,17 @@ class FakePort:
             }
         )
         return f"fake_order_{int(time.time() * 1000)}"
+
+    def fetch_user_trades_raw(
+        self,
+        symbol: str,  # noqa: ARG002
+        *,
+        start_time_ms: int | None = None,  # noqa: ARG002
+        from_id: int | None = None,  # noqa: ARG002
+        limit: int = 500,  # noqa: ARG002
+    ) -> list[dict[str, Any]]:
+        """Return empty trades (FakePort has no real exchange)."""
+        return []
 
 
 # =============================================================================
@@ -759,9 +776,26 @@ def main() -> int:  # noqa: PLR0915, PLR0912
         audit_writer = AuditWriter(config=audit_config)
         logger.info(f"Audit enabled: {artifact_paths.audit_out}")
 
+    # --- Fill ingestion setup (Launch-06 PR2) ---
+    fill_ingest_enabled = os.environ.get("FILL_INGEST_ENABLED", "") == "1"
+    fill_cursor_path = os.environ.get("FILL_CURSOR_PATH", "").strip() or None
+    fill_tracker = FillTracker()
+    fill_cursor = FillCursor()
+    fill_metrics = get_fill_metrics()
+
+    if fill_ingest_enabled:
+        if fill_cursor_path:
+            fill_cursor = load_fill_cursor(fill_cursor_path)
+        logger.info(
+            f"Fill ingestion ENABLED (cursor_path={fill_cursor_path}, "
+            f"last_trade_id={fill_cursor.last_trade_id})"
+        )
+    else:
+        logger.info("Fill ingestion DISABLED (set FILL_INGEST_ENABLED=1 to enable)")
+
     # Snapshot callback for REST polling (LC-19)
     def fetch_snapshot() -> None:
-        """Fetch REST snapshot (orders + positions) before each reconcile run."""
+        """Fetch REST snapshot (orders + positions + fills) before each reconcile run."""
         if args.use_fake_port:
             return  # FakePort has no fetch_open_orders_raw
 
@@ -787,6 +821,32 @@ def main() -> int:  # noqa: PLR0915, PLR0912
         observed.update_from_rest_orders(all_orders, ts)
         observed.update_from_rest_positions(all_positions, ts)
         logger.debug(f"Snapshot: {len(all_orders)} orders, {len(all_positions)} positions")
+
+        # --- Fill ingestion (Launch-06 PR2) ---
+        if fill_ingest_enabled:
+            _fetch_and_ingest_fills(ts)
+
+    def _fetch_and_ingest_fills(ts: int) -> None:
+        """Fetch userTrades and ingest into FillTracker (read-only)."""
+        all_trades: list[dict[str, Any]] = []
+        for symbol in symbol_whitelist:
+            try:
+                from_id = (fill_cursor.last_trade_id + 1) if fill_cursor.last_trade_id else None
+                trades = port.fetch_user_trades_raw(
+                    symbol,
+                    from_id=from_id,
+                    start_time_ms=fill_cursor.last_ts_ms if not from_id else None,
+                )
+                all_trades.extend(trades)
+            except (ConnectorNonRetryableError, ConnectorTransientError) as e:
+                logger.warning(f"Failed to fetch user trades for {symbol}: {e}")
+
+        if all_trades:
+            count = ingest_fills(all_trades, fill_tracker, fill_cursor)
+            if count > 0:
+                push_tracker_to_metrics(fill_tracker, fill_metrics)
+                if fill_cursor_path:
+                    save_fill_cursor(fill_cursor_path, fill_cursor, ts)
 
     # Runner
     runner = ReconcileRunner(

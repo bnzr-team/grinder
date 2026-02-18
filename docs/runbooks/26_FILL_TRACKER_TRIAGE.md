@@ -9,13 +9,13 @@ The FillTracker records fill events and emits Prometheus counters:
 
 **Labels**: `source` (reconcile/sim/manual/none), `side` (buy/sell/none), `liquidity` (maker/taker/none).
 
-**Current state (Launch-06 PR1)**: detect-only scaffold. Metrics are wired into `/metrics` but no live execution paths call `FillTracker.record()` yet. Counters will show placeholder zeros until future PRs connect real fill sources.
+**Current state (Launch-06 PR2)**: FillTracker is wired into the reconcile loop. When `FILL_INGEST_ENABLED=1`, each reconcile iteration fetches `userTrades` from Binance, ingests them into FillTracker, and pushes counters to FillMetrics. A persistent cursor file (`FILL_CURSOR_PATH`) prevents re-reading trades after restarts.
 
 ---
 
 ## What "good" looks like
 
-### Before wiring (PR1)
+### Feature OFF (FILL_INGEST_ENABLED unset or "0")
 
 Placeholder counters at zero:
 
@@ -25,7 +25,7 @@ grinder_fill_notional_total{source="none",side="none",liquidity="none"} 0
 grinder_fill_fees_total{source="none",side="none",liquidity="none"} 0
 ```
 
-### After wiring (future PRs)
+### Feature ON (FILL_INGEST_ENABLED=1) with trades
 
 Counters increment with real labels:
 
@@ -52,7 +52,9 @@ If no output:
 
 ### Counters still at zero (placeholder only)
 
-**Expected** until live fill sources are wired (future PRs). No action needed.
+1. Check `FILL_INGEST_ENABLED` is set to `"1"` in the environment.
+2. Check reconcile loop is actually running: `grinder_reconcile_runs_total` > 0.
+3. If no trades on the account, counters stay at zero (correct behavior).
 
 ### Counters growing but values seem wrong
 
@@ -66,6 +68,27 @@ If no output:
 1. Check if reconcile loop ran: `grinder_reconcile_runs_total`
 2. Check for market volatility (external)
 3. If fills are from `source="sim"`, this is paper trading (no real money)
+
+---
+
+### Cursor issues
+
+If fills seem to repeat after restart or skip trades:
+
+1. Check cursor file: `cat $FILL_CURSOR_PATH`
+2. Verify `last_trade_id` matches expected Binance trade ID
+3. To reset cursor: delete file and restart (`rm $FILL_CURSOR_PATH`)
+
+### Enabling fill ingestion
+
+```bash
+# Add to docker-compose override or .env:
+FILL_INGEST_ENABLED=1
+FILL_CURSOR_PATH=/var/lib/grinder/fill_cursor.json
+
+# Restart reconcile process
+docker-compose restart grinder
+```
 
 ---
 

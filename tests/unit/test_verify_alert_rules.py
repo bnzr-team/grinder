@@ -173,8 +173,8 @@ class TestValidateOpAllowlist:
         data = _rules_with(expr='grinder_http{op=~"cancel_order|place_order|cancel_all"} > 0')
         assert validate(data) == []
 
-    def test_all_8_ops_valid(self) -> None:
-        all_ops = "place_order|cancel_order|cancel_all|get_open_orders|get_positions|get_account|exchange_info|ping_time"
+    def test_all_9_ops_valid(self) -> None:
+        all_ops = "place_order|cancel_order|cancel_all|get_open_orders|get_positions|get_account|exchange_info|ping_time|get_user_trades"
         data = _rules_with(expr=f'grinder_http{{op=~"{all_ops}"}} > 0')
         assert validate(data) == []
 
