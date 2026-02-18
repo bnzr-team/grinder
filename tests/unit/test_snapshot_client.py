@@ -27,6 +27,7 @@ class MockHttpClient:
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         timeout_ms: int = 5000,
+        op: str = "",
     ) -> HttpResponse:
         """Return next response in sequence."""
         self.calls.append(
@@ -36,6 +37,7 @@ class MockHttpClient:
                 "params": params,
                 "headers": headers,
                 "timeout_ms": timeout_ms,
+                "op": op,
             }
         )
 

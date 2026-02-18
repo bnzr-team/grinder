@@ -90,6 +90,7 @@ class HttpClient(Protocol):
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         timeout_ms: int = 5000,
+        op: str = "",
     ) -> HttpResponse:
         """Execute HTTP request.
 
@@ -99,6 +100,8 @@ class HttpClient(Protocol):
             params: Query parameters
             headers: HTTP headers
             timeout_ms: Timeout in milliseconds
+            op: Operation name from ops taxonomy (Launch-05).
+                Used by MeasuredSyncHttpClient for per-op deadlines/metrics.
 
         Returns:
             HttpResponse with status_code and json data
@@ -164,6 +167,7 @@ class NoopHttpClient:
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         timeout_ms: int = 5000,
+        op: str = "",
     ) -> HttpResponse:
         """Record call and return mock response (0 real HTTP calls)."""
         self.calls.append(
@@ -173,6 +177,7 @@ class NoopHttpClient:
                 "params": params,
                 "headers": headers,
                 "timeout_ms": timeout_ms,
+                "op": op,
             }
         )
 

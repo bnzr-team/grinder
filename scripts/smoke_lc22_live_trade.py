@@ -77,6 +77,7 @@ class RequestsHttpClient:
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         timeout_ms: int = 10000,
+        op: str = "",  # noqa: ARG002
     ) -> HttpResponse:
         """Make HTTP request matching BinanceFuturesPort interface."""
         timeout_sec = timeout_ms / 1000.0

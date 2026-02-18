@@ -359,6 +359,7 @@ class MockHttpClient:
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,  # noqa: ARG002
         timeout_ms: int = 5000,  # noqa: ARG002
+        op: str = "",  # noqa: ARG002
     ) -> HttpResponse:
         self.calls.append({"method": method, "url": url, "params": params})
         if self.should_fail:

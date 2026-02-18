@@ -55,6 +55,7 @@ class RequestsHttpClient:
         params: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         timeout_ms: int = 5000,
+        op: str = "",  # noqa: ARG002
     ) -> HttpResponse:
         timeout_s = timeout_ms / 1000.0
         try:
