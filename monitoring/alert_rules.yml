@@ -39,6 +39,12 @@
 #   - grinder_data_gap_total{stream,bucket} (counter): tick gap events by stream and bucket
 #   - grinder_data_outlier_total{stream,kind} (counter): outlier events by stream and kind
 #   - grinder_reconcile_action_blocked_total{reason="data_quality_*"} (counter): DQ gate blocks
+#
+# HTTP latency/retry metrics (Launch-05):
+#   - grinder_http_requests_total{op,status_class} (counter): HTTP requests by op and status
+#   - grinder_http_retries_total{op,reason} (counter): HTTP retry events by op and reason
+#   - grinder_http_fail_total{op,reason} (counter): HTTP failures by op and reason
+#   - grinder_http_latency_ms{op,le} (histogram): HTTP request latency in milliseconds
 
 groups:
   - name: grinder_availability
@@ -387,3 +393,64 @@ groups:
           summary: "DQ gate is blocking remediation actions"
           description: "Remediation blocked by data quality gate (reason={{ $labels.reason }}). Rate: {{ $value | printf \"%.3f\" }}/sec. Investigate data feed quality before taking action."
           runbook_url: "docs/runbooks/23_DATA_QUALITY_TRIAGE.md#grinderdqblockingactive"
+
+  # Launch-05 PR3: HTTP Latency / Retry Alerts
+  # Metrics from src/grinder/observability/latency_metrics.py (PR1/PR2).
+  # Labels: op= only. No symbol= anywhere.
+  # Thresholds are conservative — tune after 1-2 weeks of data.
+  - name: grinder_http_latency
+    rules:
+      # Page: Write-op deadline misses (timeout on cancel/place/cancel_all)
+      # These are the most latency-sensitive ops. A burst of timeouts means
+      # orders may not be reaching the exchange in time.
+      - alert: GrinderHttpWriteDeadlineMissBurst
+        expr: |
+          sum(rate(grinder_http_fail_total{reason="timeout",op=~"cancel_order|place_order|cancel_all"}[5m])) > 0.02
+        for: 2m
+        labels:
+          severity: page
+        annotations:
+          summary: "Write-op deadline misses (timeout) elevated"
+          description: "Timeout failures on write ops at {{ $value | printf \"%.3f\" }}/sec. Cancel/place orders may not be reaching the exchange. Check network latency and exchange status."
+          runbook_url: "docs/runbooks/24_LATENCY_RETRY_TRIAGE.md#grinderhttpwritedeadlinemissburst"
+
+      # Page: cancel_order p99 latency exceeds deadline budget (600ms default)
+      # If p99 is above budget, most cancel attempts are timing out.
+      - alert: GrinderHttpCancelLatencyP99High
+        expr: |
+          histogram_quantile(0.99,
+            sum(rate(grinder_http_latency_ms_bucket{op="cancel_order"}[5m])) by (le)
+          ) > 600
+        for: 3m
+        labels:
+          severity: page
+        annotations:
+          summary: "cancel_order p99 latency exceeds deadline budget"
+          description: "cancel_order p99 latency is {{ $value | printf \"%.0f\" }}ms (budget: 600ms). Most cancel attempts are at risk of timing out. Check exchange API latency."
+          runbook_url: "docs/runbooks/24_LATENCY_RETRY_TRIAGE.md#grinderhttpcancellatencyp99high"
+
+      # Ticket: Read-op retries elevated (get_positions, get_account, etc.)
+      # Sustained retries waste budget and indicate degraded connectivity.
+      - alert: GrinderHttpReadRetriesSpike
+        expr: |
+          sum(rate(grinder_http_retries_total{op=~"get_positions|get_account|get_open_orders|exchange_info|ping_time"}[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "Read-op HTTP retries elevated"
+          description: "Read-op retry rate at {{ $value | printf \"%.3f\" }}/sec over 5 minutes. Sustained retries waste latency budget. Check exchange connectivity."
+          runbook_url: "docs/runbooks/24_LATENCY_RETRY_TRIAGE.md#grinderhttpreadretriesspike"
+
+      # Ticket: 429 rate-limit retries spiking
+      # Exchange is throttling us. May need to reduce request frequency.
+      - alert: GrinderHttp429RateLimitSpike
+        expr: |
+          sum(rate(grinder_http_retries_total{reason="429"}[5m])) > 0.01
+        for: 3m
+        labels:
+          severity: ticket
+        annotations:
+          summary: "HTTP 429 rate-limit retries detected"
+          description: "Rate-limit retries at {{ $value | printf \"%.3f\" }}/sec. Exchange is throttling requests. Consider reducing reconcile interval or request frequency."
+          runbook_url: "docs/runbooks/24_LATENCY_RETRY_TRIAGE.md#grinderhttp429ratelimitspike"

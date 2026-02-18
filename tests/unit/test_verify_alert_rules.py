@@ -1,11 +1,12 @@
-"""Tests for scripts/verify_alert_rules.py (Launch-04).
+"""Tests for scripts/verify_alert_rules.py (Launch-05).
 
 Covers:
 - Valid YAML → PASS
 - Duplicate alert names → FAIL
-- symbol= in expr/labels/annotations → FAIL
+- Forbidden labels (symbol=, order_id=, key=, client_id=) → FAIL
 - Empty expr → FAIL
 - Invalid YAML → exit 2
+- op= allowlist: valid ops pass, unknown ops fail
 - Real alert_rules.yml passes validation
 """
 
@@ -132,6 +133,66 @@ class TestValidateSymbol:
         data = _rules_with(expr='rate(grinder_data_stale_total{stream="live_feed"}[5m])')
         errors = validate(data)
         assert errors == []
+
+
+class TestValidateForbiddenLabels:
+    """All forbidden labels (not just symbol=) are caught."""
+
+    def test_order_id_in_expr(self) -> None:
+        data = _rules_with(expr='metric{order_id="123"} > 0')
+        errors = validate(data)
+        assert len(errors) == 1
+        assert "order_id=" in errors[0]
+
+    def test_key_in_expr(self) -> None:
+        data = _rules_with(expr='metric{key="abc"} > 0')
+        errors = validate(data)
+        assert len(errors) == 1
+        assert "key=" in errors[0]
+
+    def test_client_id_in_expr(self) -> None:
+        data = _rules_with(expr='metric{client_id="x"} > 0')
+        errors = validate(data)
+        assert len(errors) == 1
+        assert "client_id=" in errors[0]
+
+    def test_op_label_allowed(self) -> None:
+        data = _rules_with(expr='grinder_http_fail_total{op="cancel_order"} > 0')
+        errors = validate(data)
+        assert errors == []
+
+
+class TestValidateOpAllowlist:
+    """op= values must be from the ops taxonomy."""
+
+    def test_valid_single_op(self) -> None:
+        data = _rules_with(expr='grinder_http{op="cancel_order"} > 0')
+        assert validate(data) == []
+
+    def test_valid_regex_alternation(self) -> None:
+        data = _rules_with(expr='grinder_http{op=~"cancel_order|place_order|cancel_all"} > 0')
+        assert validate(data) == []
+
+    def test_all_8_ops_valid(self) -> None:
+        all_ops = "place_order|cancel_order|cancel_all|get_open_orders|get_positions|get_account|exchange_info|ping_time"
+        data = _rules_with(expr=f'grinder_http{{op=~"{all_ops}"}} > 0')
+        assert validate(data) == []
+
+    def test_unknown_op_rejected(self) -> None:
+        data = _rules_with(expr='grinder_http{op="unknown_op"} > 0')
+        errors = validate(data)
+        assert len(errors) == 1
+        assert "unknown op 'unknown_op'" in errors[0]
+
+    def test_mixed_valid_invalid_ops(self) -> None:
+        data = _rules_with(expr='grinder_http{op=~"cancel_order|bad_op"} > 0')
+        errors = validate(data)
+        assert len(errors) == 1
+        assert "bad_op" in errors[0]
+
+    def test_no_op_label_is_fine(self) -> None:
+        data = _rules_with(expr="grinder_up == 1")
+        assert validate(data) == []
 
 
 class TestValidateEmptyExpr:
