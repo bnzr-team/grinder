@@ -20,6 +20,7 @@ from grinder.data.quality_metrics import get_data_quality_metrics
 from grinder.gating import get_gating_metrics
 from grinder.ha.role import HARole, get_ha_state
 from grinder.ml.metrics import ml_metrics_to_prometheus_lines
+from grinder.observability.fill_metrics import get_fill_metrics
 from grinder.observability.latency_metrics import get_http_metrics
 from grinder.reconcile.metrics import get_reconcile_metrics
 
@@ -104,6 +105,9 @@ class MetricsBuilder:
 
         # HTTP latency/retry metrics (Launch-05)
         lines.extend(self._build_http_metrics())
+
+        # Fill tracking metrics (Launch-06)
+        lines.extend(self._build_fill_metrics())
 
         return "\n".join(lines)
 
@@ -225,6 +229,11 @@ class MetricsBuilder:
         """Build HTTP latency/retry metrics (Launch-05)."""
         http_metrics = get_http_metrics()
         return http_metrics.to_prometheus_lines()
+
+    def _build_fill_metrics(self) -> list[str]:
+        """Build fill tracking metrics (Launch-06)."""
+        fill_metrics = get_fill_metrics()
+        return fill_metrics.to_prometheus_lines()
 
 
 class _BuilderHolder:

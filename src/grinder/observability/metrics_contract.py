@@ -142,6 +142,16 @@ REQUIRED_METRICS_PATTERNS = [
     "grinder_http_fail_total{op=",
     "# HELP grinder_http_latency_ms",
     "# TYPE grinder_http_latency_ms",
+    # Launch-06: Fill tracking metrics
+    "# HELP grinder_fills_total",
+    "# TYPE grinder_fills_total",
+    "grinder_fills_total{source=",
+    "# HELP grinder_fill_notional_total",
+    "# TYPE grinder_fill_notional_total",
+    "grinder_fill_notional_total{source=",
+    "# HELP grinder_fill_fees_total",
+    "# TYPE grinder_fill_fees_total",
+    "grinder_fill_fees_total{source=",
 ]
 
 # Forbidden high-cardinality labels (H5-02 contract tightening)
