@@ -1,4 +1,4 @@
-"""Shared factory for MeasuredSyncHttpClient (Launch-05c).
+"""Shared factory for MeasuredSyncHttpClient (Launch-05c/05d).
 
 Extracted from run_live_reconcile.py so both run_live.py (HTTP probe)
 and run_live_reconcile.py (reconcile loop) use the exact same wiring.
@@ -16,13 +16,10 @@ from __future__ import annotations
 
 import logging
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
-try:
-    import requests as _requests_lib
-except ImportError:
-    _requests_lib = None
+import httpx
 
 from grinder.connectors.errors import ConnectorNonRetryableError, ConnectorTransientError
 from grinder.execution.binance_port import HttpResponse
@@ -49,11 +46,14 @@ def _parse_int(name: str, value: str, default: int) -> int:
 
 @dataclass
 class RequestsHttpClient:
-    """HTTP client using requests library for real API calls.
+    """HTTP client using httpx for real API calls.
 
     Implements the HttpClient protocol (binance_port.py).
     Shared between run_live.py (probe) and run_live_reconcile.py (reconcile).
+    Uses httpx (already a project dependency) instead of requests.
     """
+
+    _client: httpx.Client = field(default_factory=httpx.Client, repr=False)
 
     def request(
         self,
@@ -64,32 +64,27 @@ class RequestsHttpClient:
         timeout_ms: int = 5000,
         op: str = "",  # noqa: ARG002 — used by MeasuredSyncHttpClient wrapper
     ) -> HttpResponse:
-        """Execute HTTP request via requests library."""
-        if _requests_lib is None:
-            raise ConfigError("requests library required. Run: pip install requests")
-
+        """Execute HTTP request via httpx."""
         timeout_s = timeout_ms / 1000.0
 
         try:
-            if method == "GET":
-                resp = _requests_lib.get(url, params=params, headers=headers, timeout=timeout_s)
-            elif method == "POST":
-                resp = _requests_lib.post(url, params=params, headers=headers, timeout=timeout_s)
-            elif method == "DELETE":
-                resp = _requests_lib.delete(url, params=params, headers=headers, timeout=timeout_s)
-            else:
-                raise ConnectorNonRetryableError(f"Unsupported method: {method}")
-
+            resp = self._client.request(
+                method,
+                url,
+                params=params,
+                headers=headers,
+                timeout=timeout_s,
+            )
             return HttpResponse(
                 status_code=resp.status_code,
                 json_data=resp.json() if resp.content else {},
             )
 
-        except _requests_lib.exceptions.Timeout as e:
+        except httpx.TimeoutException as e:
             raise ConnectorTransientError(f"Request timeout: {e}") from e
-        except _requests_lib.exceptions.ConnectionError as e:
+        except httpx.ConnectError as e:
             raise ConnectorTransientError(f"Connection error: {e}") from e
-        except _requests_lib.exceptions.RequestException as e:
+        except httpx.HTTPError as e:
             raise ConnectorNonRetryableError(f"Request error: {e}") from e
 
 
