@@ -9,6 +9,12 @@ HA Mode (enabled via GRINDER_HA_ENABLED=true):
     - Starts LeaderElector for single-active coordination
     - /readyz returns 200 only when ACTIVE (ready to trade)
     - Automatic failover on lock loss (fail-safe to STANDBY)
+
+HTTP Probe (enabled via HTTP_PROBE_ENABLED=1, Launch-05c):
+    - Periodically calls public Binance endpoints through MeasuredSyncHttpClient
+    - Generates grinder_http_* metrics observable on /metrics
+    - No API keys required (uses public endpoints only)
+    - Requires LATENCY_RETRY_ENABLED=1 for metrics to be recorded
 """
 
 import argparse
@@ -119,6 +125,39 @@ def start_ha_elector() -> LeaderElector | None:
         return None
 
 
+def start_http_probe(shutdown: threading.Event) -> threading.Thread | None:
+    """Start HTTP probe loop if HTTP_PROBE_ENABLED=1 (Launch-05c).
+
+    Returns:
+        Background thread running the probe, or None if disabled.
+    """
+    from scripts.http_measured_client import (  # noqa: PLC0415
+        RequestsHttpClient,
+        build_measured_client,
+    )
+    from scripts.http_probe import HttpProbeConfig, HttpProbeRunner  # noqa: PLC0415
+
+    config = HttpProbeConfig.from_env()
+    if not config.enabled:
+        print("  HTTP probe: DISABLED (set HTTP_PROBE_ENABLED=1 to enable)")
+        return None
+
+    inner = RequestsHttpClient()
+    client = build_measured_client(inner)
+    runner = HttpProbeRunner(client=client, config=config)
+
+    print(f"  HTTP probe: ENABLED (ops={config.ops}, interval={config.interval_ms}ms)")
+
+    thread = threading.Thread(
+        target=runner.run_loop,
+        args=(shutdown,),
+        daemon=True,
+        name="http-probe",
+    )
+    thread.start()
+    return thread
+
+
 def run_main_loop(shutdown: threading.Event, duration_s: int) -> None:
     """Run main event loop, logging role changes."""
     state = get_ha_state()
@@ -159,12 +198,17 @@ def main() -> None:
     signal.signal(signal.SIGINT, lambda *_: shutdown.set())
     signal.signal(signal.SIGTERM, lambda *_: shutdown.set())
 
+    probe_thread = start_http_probe(shutdown)
+
     print("\nGRINDER running. Press Ctrl+C to stop.")
     run_main_loop(shutdown, args.duration_s)
 
     if elector is not None:
         print("  Stopping LeaderElector...")
         elector.stop()
+    if probe_thread is not None:
+        print("  Stopping HTTP probe...")
+        probe_thread.join(timeout=5.0)
     server.shutdown()
     print("GRINDER stopped.")
     sys.exit(0)

@@ -82,6 +82,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from grinder.core import OrderSide
+    from grinder.net.measured_sync import MeasuredSyncHttpClient
     from grinder.reconcile.metrics import ReconcileMetrics
 
 # Real port imports
@@ -92,11 +93,7 @@ from grinder.execution.binance_futures_port import (
     BinanceFuturesPort,
     BinanceFuturesPortConfig,
 )
-from grinder.execution.binance_port import HttpResponse
 from grinder.live.reconcile_loop import ReconcileLoop, ReconcileLoopConfig
-from grinder.net.measured_sync import MeasuredSyncHttpClient
-from grinder.net.retry_policy import DeadlinePolicy, HttpRetryPolicy
-from grinder.observability.latency_metrics import get_http_metrics
 from grinder.ops.artifacts import (
     ArtifactPaths,
     cleanup_old_runs,
@@ -117,6 +114,7 @@ from grinder.reconcile.observed_state import ObservedStateStore
 from grinder.reconcile.remediation import RemediationExecutor
 from grinder.reconcile.runner import ReconcileRunner
 from grinder.reconcile.types import ExpectedPosition
+from scripts.http_measured_client import RequestsHttpClient, build_measured_client
 
 # =============================================================================
 # LOGGING
@@ -333,48 +331,6 @@ class FakePort:
 # =============================================================================
 
 
-@dataclass
-class RequestsHttpClient:
-    """HTTP client using requests library for real API calls."""
-
-    def request(
-        self,
-        method: str,
-        url: str,
-        params: dict[str, Any] | None = None,
-        headers: dict[str, str] | None = None,
-        timeout_ms: int = 5000,
-        op: str = "",  # noqa: ARG002 — used by MeasuredSyncHttpClient wrapper
-    ) -> HttpResponse:
-        """Execute HTTP request via requests library."""
-        if requests is None:
-            raise ConfigError("requests library required. Run: pip install requests")
-
-        timeout_s = timeout_ms / 1000.0
-
-        try:
-            if method == "GET":
-                resp = requests.get(url, params=params, headers=headers, timeout=timeout_s)
-            elif method == "POST":
-                resp = requests.post(url, params=params, headers=headers, timeout=timeout_s)
-            elif method == "DELETE":
-                resp = requests.delete(url, params=params, headers=headers, timeout=timeout_s)
-            else:
-                raise ConnectorNonRetryableError(f"Unsupported method: {method}")
-
-            return HttpResponse(
-                status_code=resp.status_code,
-                json_data=resp.json() if resp.content else {},
-            )
-
-        except requests.exceptions.Timeout as e:
-            raise ConnectorTransientError(f"Request timeout: {e}") from e
-        except requests.exceptions.ConnectionError as e:
-            raise ConnectorTransientError(f"Connection error: {e}") from e
-        except requests.exceptions.RequestException as e:
-            raise ConnectorNonRetryableError(f"Request error: {e}") from e
-
-
 def validate_credentials() -> tuple[str, str]:
     """Validate and return API credentials.
 
@@ -398,64 +354,9 @@ def validate_credentials() -> tuple[str, str]:
 def _build_measured_client(inner: RequestsHttpClient) -> MeasuredSyncHttpClient:
     """Wrap inner HttpClient with MeasuredSyncHttpClient if LATENCY_RETRY_ENABLED=1.
 
-    Env vars (all optional, safe defaults):
-        LATENCY_RETRY_ENABLED        "1" to enable per-op deadlines + retries (default: off)
-        HTTP_MAX_ATTEMPTS_READ       Max attempts for read ops (default: 1)
-        HTTP_MAX_ATTEMPTS_WRITE      Max attempts for write ops (default: 1)
-        HTTP_DEADLINE_<OP>_MS        Per-op deadline override (e.g. HTTP_DEADLINE_CANCEL_ORDER_MS=400)
-
-    When disabled: returns a MeasuredSyncHttpClient with enabled=False (pure pass-through).
+    Delegates to shared factory in scripts.http_measured_client (Launch-05c).
     """
-    enabled = os.environ.get("LATENCY_RETRY_ENABLED", "") == "1"
-
-    max_read = _parse_int(
-        "HTTP_MAX_ATTEMPTS_READ",
-        os.environ.get("HTTP_MAX_ATTEMPTS_READ", ""),
-        default=1,
-    )
-    max_write = _parse_int(
-        "HTTP_MAX_ATTEMPTS_WRITE",
-        os.environ.get("HTTP_MAX_ATTEMPTS_WRITE", ""),
-        default=1,
-    )
-
-    # Build deadline overrides from HTTP_DEADLINE_<OP>_MS env vars
-    deadline_overrides: dict[str, int] = {}
-    for key, value in os.environ.items():
-        if key.startswith("HTTP_DEADLINE_") and key.endswith("_MS"):
-            op_name = key[len("HTTP_DEADLINE_") : -len("_MS")].lower()
-            deadline_overrides[op_name] = _parse_int(key, value, default=0)
-
-    deadline_policy = DeadlinePolicy.defaults()
-    if deadline_overrides:
-        merged = dict(deadline_policy.deadlines)
-        merged.update(deadline_overrides)
-        deadline_policy = DeadlinePolicy(deadlines=merged)
-
-    # Use the more permissive read policy (covers both read+write ops at the protocol level).
-    # The write-specific conservatism (e.g. no 429 retry) is handled by the retry_policy
-    # at the MeasuredSyncHttpClient level, but since we use a single client instance
-    # for all ops, we pick the read policy with the higher max_attempts.
-    # Write ops naturally get fewer retries because they exclude 429 from retryable reasons.
-    retry_policy = HttpRetryPolicy.for_read(max_attempts=max(max_read, max_write))
-
-    if enabled:
-        logger.info(
-            "HTTP measured client ENABLED: max_read=%d, max_write=%d, deadline_overrides=%s",
-            max_read,
-            max_write,
-            deadline_overrides or "none",
-        )
-    else:
-        logger.info("HTTP measured client DISABLED (pass-through)")
-
-    return MeasuredSyncHttpClient(
-        inner=inner,
-        deadline_policy=deadline_policy,
-        retry_policy=retry_policy,
-        enabled=enabled,
-        metrics=get_http_metrics(),
-    )
+    return build_measured_client(inner)
 
 
 def create_real_port(
