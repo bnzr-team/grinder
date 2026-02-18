@@ -1294,6 +1294,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
 - [DONE] Latency/retry enablement ceremony (Launch-05b): Runbook 25 — operator procedure for safely enabling LATENCY_RETRY_ENABLED=1 with conservative config, observation window, rollback, evidence bundle. Zero changes to src/.
 - [DONE] HTTP probe loop (Launch-05c): Shared measured-client factory + HTTP probe in run_live.py for observable grinder_http_* metrics. No API keys required (public endpoints only). Enables RB25 in STAGING.
 - [DONE] FillTracker MVP (Launch-06 PR1): In-memory FillTracker + FillMetrics (counters with source/side/liquidity labels) + metrics contract + RB26 triage runbook. Detect-only scaffold; no execution wiring.
+- [DONE] FillTracker wiring (Launch-06 PR2): Wired into reconcile loop via `FILL_INGEST_ENABLED=1`. Reads `userTrades` from Binance, ingests into FillTracker, pushes to FillMetrics. Persistent cursor file (`FILL_CURSOR_PATH`). Still detect-only (read-only, no place/cancel). `OP_GET_USER_TRADES` added to ops taxonomy.
 - Expand tests to >50% coverage.
 - Adaptive Controller v1 (EMA-based adaptive step, trend detection, DRAWDOWN mode).
 - ~~Live Connector v1~~ [DONE] Done (LC-21: stream_ticks wired to BinanceWsConnector).

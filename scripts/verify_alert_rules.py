@@ -45,6 +45,7 @@ _OPS_ALLOWLIST: frozenset[str] = frozenset(
         "get_account",
         "exchange_info",
         "ping_time",
+        "get_user_trades",
     }
 )
 

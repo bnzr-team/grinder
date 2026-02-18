@@ -61,6 +61,7 @@ from grinder.net.retry_policy import (
     OP_GET_ACCOUNT,
     OP_GET_OPEN_ORDERS,
     OP_GET_POSITIONS,
+    OP_GET_USER_TRADES,
     OP_PLACE_ORDER,
 )
 from grinder.reconcile.identity import (
@@ -861,6 +862,55 @@ class BinanceFuturesPort:
             )
 
         return orders
+
+    def fetch_user_trades_raw(
+        self,
+        symbol: str,
+        *,
+        start_time_ms: int | None = None,
+        from_id: int | None = None,
+        limit: int = 500,
+    ) -> list[dict[str, Any]]:
+        """Fetch recent user trades for a symbol (read-only).
+
+        Uses GET /fapi/v1/userTrades.  Returns raw dicts from Binance.
+
+        Args:
+            symbol: Trading symbol to query.
+            start_time_ms: Only trades >= this timestamp (optional).
+            from_id: TradeId to fetch from (inclusive, optional).
+            limit: Max trades to return (1-1000, default 500).
+
+        Returns:
+            List of raw trade dicts from Binance REST response.
+        """
+        self._validate_symbol(symbol)
+
+        if self.config.dry_run:
+            return []
+
+        params: dict[str, Any] = {"symbol": symbol, "limit": min(limit, 1000)}
+        if start_time_ms is not None:
+            params["startTime"] = start_time_ms
+        if from_id is not None:
+            params["fromId"] = from_id
+
+        params = self._sign_request(params)
+
+        url = f"{self.config.base_url}/fapi/v1/userTrades"
+        response = self.http_client.request(
+            method="GET",
+            url=url,
+            params=params,
+            headers=self._get_headers(),
+            timeout_ms=self.config.timeout_ms,
+            op=OP_GET_USER_TRADES,
+        )
+
+        if response.status_code != 200:
+            map_binance_error(response.status_code, response.json_data)
+
+        return response.json_data if isinstance(response.json_data, list) else []
 
     def close_position(self, symbol: str) -> str | None:
         """Close any open position for symbol (safety cleanup).

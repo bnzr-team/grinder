@@ -178,6 +178,17 @@ class TestTrueDryRunMode:
         assert mode == "one-way"
         assert len(noop_client.calls) == 0
 
+    def test_fetch_user_trades_dry_run_zero_http_calls(
+        self, noop_client: NoopHttpClient, dry_run_config: BinanceFuturesPortConfig
+    ) -> None:
+        """fetch_user_trades_raw with dry_run=True makes 0 http_client calls."""
+        port = BinanceFuturesPort(http_client=noop_client, config=dry_run_config)
+
+        trades = port.fetch_user_trades_raw("BTCUSDT")
+
+        assert trades == []
+        assert len(noop_client.calls) == 0
+
 
 # --- SafeMode Tests ---
 
@@ -663,6 +674,22 @@ class TestMockTransportMode:
         call = futures_noop_client.calls[0]
         assert call["method"] == "DELETE"
         assert "/fapi/v1/order" in call["url"]
+
+    def test_fetch_user_trades_calls_fapi_endpoint(
+        self, futures_noop_client: NoopHttpClient, live_trade_config: BinanceFuturesPortConfig
+    ) -> None:
+        """fetch_user_trades_raw calls correct /fapi/v1/userTrades endpoint."""
+        port = BinanceFuturesPort(http_client=futures_noop_client, config=live_trade_config)
+
+        port.fetch_user_trades_raw("BTCUSDT", from_id=100, limit=50)
+
+        assert len(futures_noop_client.calls) == 1
+        call = futures_noop_client.calls[0]
+        assert call["method"] == "GET"
+        assert "/fapi/v1/userTrades" in call["url"]
+        assert call["params"]["symbol"] == "BTCUSDT"
+        assert call["params"]["fromId"] == 100
+        assert call["params"]["limit"] == 50
 
 
 # --- Cancel Order Identity Parsing Tests (LC-12) ---

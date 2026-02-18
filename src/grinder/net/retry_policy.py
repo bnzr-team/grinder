@@ -67,6 +67,7 @@ OP_GET_POSITIONS = "get_positions"
 OP_GET_ACCOUNT = "get_account"
 OP_EXCHANGE_INFO = "exchange_info"
 OP_PING_TIME = "ping_time"
+OP_GET_USER_TRADES = "get_user_trades"
 
 WRITE_OPS: frozenset[str] = frozenset(
     {
@@ -83,6 +84,7 @@ READ_OPS: frozenset[str] = frozenset(
         OP_GET_ACCOUNT,
         OP_EXCHANGE_INFO,
         OP_PING_TIME,
+        OP_GET_USER_TRADES,
     }
 )
 
@@ -166,6 +168,7 @@ _DEFAULT_DEADLINES: dict[str, int] = {
     OP_GET_ACCOUNT: 2500,
     OP_EXCHANGE_INFO: 5000,
     OP_PING_TIME: 800,
+    OP_GET_USER_TRADES: 2500,
 }
 
 
