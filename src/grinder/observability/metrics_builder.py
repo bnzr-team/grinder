@@ -6,6 +6,7 @@ Consolidates all metrics into a single Prometheus-compatible text output:
 - Risk metrics (kill-switch, drawdown)
 - HA metrics (role)
 - Connector metrics (retries, idempotency, circuit breaker) - H5
+- HTTP latency/retry metrics (Launch-05)
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from grinder.data.quality_metrics import get_data_quality_metrics
 from grinder.gating import get_gating_metrics
 from grinder.ha.role import HARole, get_ha_state
 from grinder.ml.metrics import ml_metrics_to_prometheus_lines
+from grinder.observability.latency_metrics import get_http_metrics
 from grinder.reconcile.metrics import get_reconcile_metrics
 
 
@@ -99,6 +101,9 @@ class MetricsBuilder:
 
         # Data quality metrics (Launch-03)
         lines.extend(self._build_data_quality_metrics())
+
+        # HTTP latency/retry metrics (Launch-05)
+        lines.extend(self._build_http_metrics())
 
         return "\n".join(lines)
 
@@ -215,6 +220,11 @@ class MetricsBuilder:
         """Build data quality metrics (Launch-03)."""
         dq_metrics = get_data_quality_metrics()
         return dq_metrics.to_prometheus_lines()
+
+    def _build_http_metrics(self) -> list[str]:
+        """Build HTTP latency/retry metrics (Launch-05)."""
+        http_metrics = get_http_metrics()
+        return http_metrics.to_prometheus_lines()
 
 
 class _BuilderHolder:
