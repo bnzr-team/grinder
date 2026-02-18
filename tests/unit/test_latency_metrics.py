@@ -149,6 +149,17 @@ class TestLabelSafety:
                 for forbidden in ["symbol=", "order_id=", "key=", "client_id="]:
                     assert forbidden not in line
 
+    def test_real_records_never_use_op_none(self) -> None:
+        """op="none" is only for zero-value placeholders, never for real data."""
+        m = HttpMetrics()
+        m.record_request("cancel_order", "2xx")
+        m.record_retry("place_order", "timeout")
+        m.record_fail("get_positions", "connect")
+        m.record_latency("ping_time", 100.0)
+        text = "\n".join(m.to_prometheus_lines())
+        # op="none" must not appear once real data is recorded
+        assert 'op="none"' not in text
+
 
 # ---------------------------------------------------------------------------
 # Singleton

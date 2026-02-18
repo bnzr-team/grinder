@@ -155,11 +155,12 @@ class HttpRetryPolicy:
 # DeadlinePolicy (per-op budgets)
 # ---------------------------------------------------------------------------
 
-# Default deadlines (ms) — conservative values for Binance REST API.
+# Default deadlines (ms) — conservative starting values for Binance REST API.
+# Tune after observing real p95/p99 from grinder_http_latency_ms in SHADOW/STAGING.
 _DEFAULT_DEADLINES: dict[str, int] = {
     OP_PLACE_ORDER: 1500,
     OP_CANCEL_ORDER: 600,
-    OP_CANCEL_ALL: 1200,
+    OP_CANCEL_ALL: 1200,  # heavier than single cancel; may need tuning with many open orders
     OP_GET_OPEN_ORDERS: 2000,
     OP_GET_POSITIONS: 2500,
     OP_GET_ACCOUNT: 2500,
