@@ -25,7 +25,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-import yaml  # type: ignore[import-untyped]
+import yaml
 
 
 def load_json(path: Path) -> dict[str, Any]:
