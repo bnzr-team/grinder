@@ -7,9 +7,164 @@ The FillTracker records fill events and emits Prometheus counters:
 - `grinder_fill_notional_total{source,side,liquidity}` — cumulative notional
 - `grinder_fill_fees_total{source,side,liquidity}` — cumulative fees
 
-**Labels**: `source` (reconcile/sim/manual/none), `side` (buy/sell/none), `liquidity` (maker/taker/none).
+Health / operational metrics (PR3):
+- `grinder_fill_ingest_polls_total{source}` — ingest poll iterations
+- `grinder_fill_ingest_enabled{source}` — 1 if ingest is on, 0 otherwise
+- `grinder_fill_ingest_errors_total{source,reason}` — errors (http/parse/cursor/unknown)
+- `grinder_fill_cursor_load_total{source,result}` — cursor load ok/error
+- `grinder_fill_cursor_save_total{source,result}` — cursor save ok/error
 
-**Current state (Launch-06 PR2)**: FillTracker is wired into the reconcile loop. When `FILL_INGEST_ENABLED=1`, each reconcile iteration fetches `userTrades` from Binance, ingests them into FillTracker, and pushes counters to FillMetrics. A persistent cursor file (`FILL_CURSOR_PATH`) prevents re-reading trades after restarts.
+**Labels**: `source` (reconcile/sim/manual/none), `side` (buy/sell/none), `liquidity` (maker/taker/none), `reason` (http/parse/cursor/unknown), `result` (ok/error).
+
+**Current state (Launch-06 PR3)**: FillTracker is wired into the reconcile loop with health metrics and alert rules. When `FILL_INGEST_ENABLED=1`, each reconcile iteration fetches `userTrades` from Binance, ingests them into FillTracker, and pushes counters to FillMetrics. A persistent cursor file (`FILL_CURSOR_PATH`) prevents re-reading trades after restarts.
+
+---
+
+## Alert rules
+
+| Alert | Severity | Condition | Meaning |
+|-------|----------|-----------|---------|
+| FillIngestDisabled | warning | `enabled < 1` for 5m | Ingest not active (expected in staging-off) |
+| FillIngestNoPolls | page | `polls == 0` for 10m AND `enabled == 1` | Ingest enabled but loop stuck |
+| FillCursorSaveErrors | page | `cursor_save{result="error"} > 0` in 10m | Dedup at risk after restart |
+| FillParseErrors | warning | `errors{reason="parse"} > 0` in 10m | Binance schema drift |
+| FillIngestHttpErrors | warning | `errors{reason="http"} > 3` in 10m | Network/API issues |
+
+---
+
+## Enablement procedure
+
+### Recommended cursor path
+
+```
+FILL_CURSOR_PATH=/var/lib/grinder/fill_cursor.json
+```
+
+### Docker Compose snippet
+
+```yaml
+services:
+  grinder:
+    environment:
+      - FILL_INGEST_ENABLED=1
+      - FILL_CURSOR_PATH=/var/lib/grinder/fill_cursor.json
+    volumes:
+      - grinder_state:/var/lib/grinder
+volumes:
+  grinder_state:
+```
+
+---
+
+## Gate 0 — Baseline (OFF)
+
+`FILL_INGEST_ENABLED` unset or `"0"`.
+
+```bash
+curl -sf http://localhost:9090/metrics | grep grinder_fill_ingest
+# Expected:
+#   grinder_fill_ingest_enabled{source="reconcile"} 0
+#   grinder_fill_ingest_polls_total{source="none"} 0
+#   grinder_fill_ingest_errors_total{source="none",reason="none"} 0
+```
+
+Fill event counters show placeholders at zero:
+
+```bash
+curl -sf http://localhost:9090/metrics | grep grinder_fills_total
+# grinder_fills_total{source="none",side="none",liquidity="none"} 0
+```
+
+---
+
+## Gate 1 — Enable (ON) dry-run
+
+```bash
+export FILL_INGEST_ENABLED=1
+export FILL_CURSOR_PATH=/var/lib/grinder/fill_cursor.json
+docker-compose up -d --force-recreate
+sleep 20
+```
+
+Verify:
+
+```bash
+# Polls are growing
+curl -sf http://localhost:9090/metrics | grep grinder_fill_ingest_polls_total
+# grinder_fill_ingest_polls_total{source="reconcile"} >0
+
+# Enabled gauge is 1
+curl -sf http://localhost:9090/metrics | grep grinder_fill_ingest_enabled
+# grinder_fill_ingest_enabled{source="reconcile"} 1
+
+# No errors
+curl -sf http://localhost:9090/metrics | grep grinder_fill_ingest_errors_total
+# grinder_fill_ingest_errors_total{source="none",reason="none"} 0  (or no error lines)
+
+# Events growing (if trades exist on account)
+curl -sf http://localhost:9090/metrics | grep grinder_fills_total
+# grinder_fills_total{source="reconcile",side="buy",liquidity="taker"} >0
+
+# Cursor file exists and changes
+ls -la /var/lib/grinder/fill_cursor.json
+cat /var/lib/grinder/fill_cursor.json
+# {"last_trade_id": ..., "last_ts_ms": ..., "updated_at_ms": ...}
+
+# Cursor save OK
+curl -sf http://localhost:9090/metrics | grep grinder_fill_cursor_save_total
+# grinder_fill_cursor_save_total{source="reconcile",result="ok"} >0
+```
+
+---
+
+## Gate 2 — Restart safety
+
+```bash
+docker-compose restart grinder
+sleep 20
+```
+
+Verify:
+
+```bash
+# Polls continue growing (no reset to zero — Prometheus scrapes cumulative)
+curl -sf http://localhost:9090/metrics | grep grinder_fill_ingest_polls_total
+
+# No "wild jump" in fills (cursor prevents re-ingestion)
+curl -sf http://localhost:9090/metrics | grep grinder_fills_total
+
+# Cursor file still present
+ls -la /var/lib/grinder/fill_cursor.json
+
+# Cursor load OK after restart
+curl -sf http://localhost:9090/metrics | grep grinder_fill_cursor_load_total
+# grinder_fill_cursor_load_total{source="reconcile",result="ok"} >0
+```
+
+---
+
+## Rollback
+
+```bash
+unset FILL_INGEST_ENABLED
+docker-compose up -d --force-recreate
+sleep 20
+```
+
+Verify:
+
+```bash
+# Enabled gauge is 0
+curl -sf http://localhost:9090/metrics | grep grinder_fill_ingest_enabled
+# grinder_fill_ingest_enabled{source="reconcile"} 0
+
+# Polls stop growing
+curl -sf http://localhost:9090/metrics | grep grinder_fill_ingest_polls_total
+# Value frozen (no new increments)
+
+# Fill counters frozen (not reset — Prometheus keeps last value)
+curl -sf http://localhost:9090/metrics | grep grinder_fills_total
+```
 
 ---
 
@@ -23,6 +178,7 @@ Placeholder counters at zero:
 grinder_fills_total{source="none",side="none",liquidity="none"} 0
 grinder_fill_notional_total{source="none",side="none",liquidity="none"} 0
 grinder_fill_fees_total{source="none",side="none",liquidity="none"} 0
+grinder_fill_ingest_enabled{source="reconcile"} 0
 ```
 
 ### Feature ON (FILL_INGEST_ENABLED=1) with trades
@@ -33,6 +189,9 @@ Counters increment with real labels:
 grinder_fills_total{source="reconcile",side="buy",liquidity="taker"} 42
 grinder_fill_notional_total{source="reconcile",side="buy",liquidity="taker"} 12345.67
 grinder_fill_fees_total{source="reconcile",side="buy",liquidity="taker"} 4.93
+grinder_fill_ingest_polls_total{source="reconcile"} 120
+grinder_fill_ingest_enabled{source="reconcile"} 1
+grinder_fill_cursor_save_total{source="reconcile",result="ok"} 42
 ```
 
 ---
@@ -41,20 +200,27 @@ grinder_fill_fees_total{source="reconcile",side="buy",liquidity="taker"} 4.93
 
 ### Metrics missing entirely
 
-```
+```bash
 curl -sf http://localhost:9090/metrics | grep grinder_fill
 ```
 
 If no output:
 1. Check that grinder container is running: `docker-compose ps`
 2. Check `/healthz`: `curl -sf http://localhost:9090/healthz`
-3. Check that Launch-06 PR1 is deployed (code includes `fill_metrics.py`)
+3. Check that Launch-06 PR3 is deployed (code includes fill health metrics)
 
 ### Counters still at zero (placeholder only)
 
 1. Check `FILL_INGEST_ENABLED` is set to `"1"` in the environment.
-2. Check reconcile loop is actually running: `grinder_reconcile_runs_total` > 0.
-3. If no trades on the account, counters stay at zero (correct behavior).
+2. Check `grinder_fill_ingest_enabled{source="reconcile"}` gauge — should be `1`.
+3. Check reconcile loop is actually running: `grinder_reconcile_runs_total` > 0.
+4. If no trades on the account, counters stay at zero (correct behavior).
+
+### Ingest polls not growing
+
+1. Check `grinder_fill_ingest_enabled` is 1.
+2. Check reconcile loop: `increase(grinder_reconcile_runs_total[5m])`.
+3. Check for errors: `grinder_fill_ingest_errors_total`.
 
 ### Counters growing but values seem wrong
 
@@ -69,50 +235,49 @@ If no output:
 2. Check for market volatility (external)
 3. If fills are from `source="sim"`, this is paper trading (no real money)
 
----
-
 ### Cursor issues
 
 If fills seem to repeat after restart or skip trades:
 
 1. Check cursor file: `cat $FILL_CURSOR_PATH`
 2. Verify `last_trade_id` matches expected Binance trade ID
-3. To reset cursor: delete file and restart (`rm $FILL_CURSOR_PATH`)
+3. Check cursor save metric: `grinder_fill_cursor_save_total{result="error"}`
+4. Check cursor load metric: `grinder_fill_cursor_load_total{result="error"}`
+5. Check file permissions: `ls -la $FILL_CURSOR_PATH`
+6. To reset cursor: delete file and restart (`rm $FILL_CURSOR_PATH`)
 
-### Enabling fill ingestion
+### Cursor not writing
 
-```bash
-# Add to docker-compose override or .env:
-FILL_INGEST_ENABLED=1
-FILL_CURSOR_PATH=/var/lib/grinder/fill_cursor.json
-
-# Restart reconcile process
-docker-compose restart grinder
-```
+1. Check `grinder_fill_cursor_save_total{result="error"}` — if > 0, disk issue.
+2. Check directory exists and is writable: `ls -la $(dirname $FILL_CURSOR_PATH)`
+3. Check disk space: `df -h $(dirname $FILL_CURSOR_PATH)`
 
 ---
 
 ## Evidence bundle commands
 
 ```bash
-# 1. Current fill metrics
+# 1. All fill metrics (health + event counters)
 curl -sf http://localhost:9090/metrics | grep grinder_fill
 
 # 2. Health check
 curl -sf http://localhost:9090/healthz | python3 -m json.tool
 
-# 3. Fill metrics contract check
-curl -sf http://localhost:9090/metrics | grep -c grinder_fill
+# 3. Fill health metrics specifically
+curl -sf http://localhost:9090/metrics | grep -E 'grinder_fill_(ingest|cursor)'
 
 # 4. Check for forbidden labels
 curl -sf http://localhost:9090/metrics | grep grinder_fill | grep -E 'symbol=|order_id=|client_id=' || echo "CLEAN: no forbidden labels"
 
-# 5. Recent container logs
+# 5. Cursor file state
+cat $FILL_CURSOR_PATH 2>/dev/null || echo "No cursor file"
+
+# 6. Recent container logs
 docker logs grinder --since 5m 2>&1 | tail -30
 
-# 6. Reconcile state (for context)
+# 7. Reconcile state (for context)
 curl -sf http://localhost:9090/metrics | grep grinder_reconcile_runs_total
 
-# 7. Full metrics snapshot (for archival)
+# 8. Full metrics snapshot (for archival)
 curl -sf http://localhost:9090/metrics > /tmp/metrics_snapshot_$(date +%s).txt
 ```

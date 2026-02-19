@@ -45,6 +45,13 @@
 #   - grinder_http_retries_total{op,reason} (counter): HTTP retry events by op and reason
 #   - grinder_http_fail_total{op,reason} (counter): HTTP failures by op and reason
 #   - grinder_http_latency_ms{op,le} (histogram): HTTP request latency in milliseconds
+#
+# Fill health metrics (Launch-06 PR3):
+#   - grinder_fill_ingest_polls_total{source} (counter): ingest poll iterations
+#   - grinder_fill_ingest_enabled{source} (gauge): 1 if ingest enabled, 0 otherwise
+#   - grinder_fill_ingest_errors_total{source,reason} (counter): ingest errors by reason
+#   - grinder_fill_cursor_load_total{source,result} (counter): cursor load attempts
+#   - grinder_fill_cursor_save_total{source,result} (counter): cursor save attempts
 
 groups:
   - name: grinder_availability
@@ -454,3 +461,70 @@ groups:
           summary: "HTTP 429 rate-limit retries detected"
           description: "Rate-limit retries at {{ $value | printf \"%.3f\" }}/sec. Exchange is throttling requests. Consider reducing reconcile interval or request frequency."
           runbook_url: "docs/runbooks/24_LATENCY_RETRY_TRIAGE.md#grinderhttp429ratelimitspike"
+
+  # Launch-06 PR3: Fill Ingestion Health Alerts
+  # Metrics from src/grinder/observability/fill_metrics.py (PR3).
+  # Labels: source=, reason=, result= only. No symbol= anywhere.
+  - name: grinder_fill_health
+    rules:
+      # Warning: Fill ingest is disabled (informational status alert)
+      - alert: FillIngestDisabled
+        expr: |
+          max_over_time(grinder_fill_ingest_enabled{source="reconcile"}[5m]) < 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Fill ingest disabled (FILL_INGEST_ENABLED != 1)"
+          description: "Fill ingestion is not active. Set FILL_INGEST_ENABLED=1 to enable."
+          runbook_url: "docs/runbooks/26_FILL_TRACKER_TRIAGE.md#fillingestdisabled"
+
+      # Page: Fill ingest polls stopped (enabled but not polling)
+      - alert: FillIngestNoPolls
+        expr: |
+          increase(grinder_fill_ingest_polls_total{source="reconcile"}[10m]) == 0
+          and
+          grinder_fill_ingest_enabled{source="reconcile"} == 1
+        for: 10m
+        labels:
+          severity: page
+        annotations:
+          summary: "No fill ingest polls for 10m"
+          description: "Fill ingestion is enabled but no polls detected in 10 minutes. Reconcile loop may be stuck."
+          runbook_url: "docs/runbooks/26_FILL_TRACKER_TRIAGE.md#fillingestnopolls"
+
+      # Page: Cursor save errors (dedup at risk after restart)
+      - alert: FillCursorSaveErrors
+        expr: |
+          increase(grinder_fill_cursor_save_total{source="reconcile",result="error"}[10m]) > 0
+        for: 5m
+        labels:
+          severity: page
+        annotations:
+          summary: "Fill cursor save failing"
+          description: "Cursor persistence is broken. After restart, old trades may be re-ingested. Check disk permissions and path."
+          runbook_url: "docs/runbooks/26_FILL_TRACKER_TRIAGE.md#fillcursorsaveerrors"
+
+      # Warning: Parse errors (schema drift or unexpected Binance payload)
+      - alert: FillParseErrors
+        expr: |
+          increase(grinder_fill_ingest_errors_total{source="reconcile",reason="parse"}[10m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Fill parse errors detected"
+          description: "Binance userTrades response contains fields the parser cannot handle. Check for API schema changes."
+          runbook_url: "docs/runbooks/26_FILL_TRACKER_TRIAGE.md#fillparseerrors"
+
+      # Warning: HTTP errors fetching userTrades (elevated threshold for noise)
+      - alert: FillIngestHttpErrors
+        expr: |
+          increase(grinder_fill_ingest_errors_total{source="reconcile",reason="http"}[10m]) > 3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Fill ingest HTTP errors rising"
+          description: "More than 3 HTTP errors fetching userTrades in 10 minutes. Check Binance connectivity and API key permissions."
+          runbook_url: "docs/runbooks/26_FILL_TRACKER_TRIAGE.md#fillingesthttperrors"

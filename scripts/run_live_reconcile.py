@@ -776,16 +776,22 @@ def main() -> int:  # noqa: PLR0915, PLR0912
         audit_writer = AuditWriter(config=audit_config)
         logger.info(f"Audit enabled: {artifact_paths.audit_out}")
 
-    # --- Fill ingestion setup (Launch-06 PR2) ---
+    # --- Fill ingestion setup (Launch-06 PR2, health metrics PR3) ---
     fill_ingest_enabled = os.environ.get("FILL_INGEST_ENABLED", "") == "1"
     fill_cursor_path = os.environ.get("FILL_CURSOR_PATH", "").strip() or None
     fill_tracker = FillTracker()
     fill_cursor = FillCursor()
     fill_metrics = get_fill_metrics()
 
+    # Set enabled gauge (PR3) — always, so /metrics reflects current state
+    fill_metrics.set_ingest_enabled("reconcile", fill_ingest_enabled)
+
     if fill_ingest_enabled:
         if fill_cursor_path:
-            fill_cursor = load_fill_cursor(fill_cursor_path)
+            fill_cursor = load_fill_cursor(
+                fill_cursor_path,
+                fill_metrics=fill_metrics,
+            )
         logger.info(
             f"Fill ingestion ENABLED (cursor_path={fill_cursor_path}, "
             f"last_trade_id={fill_cursor.last_trade_id})"
@@ -840,13 +846,23 @@ def main() -> int:  # noqa: PLR0915, PLR0912
                 all_trades.extend(trades)
             except (ConnectorNonRetryableError, ConnectorTransientError) as e:
                 logger.warning(f"Failed to fetch user trades for {symbol}: {e}")
+                fill_metrics.inc_ingest_error("reconcile", "http")
 
-        if all_trades:
-            count = ingest_fills(all_trades, fill_tracker, fill_cursor)
-            if count > 0:
-                push_tracker_to_metrics(fill_tracker, fill_metrics)
-                if fill_cursor_path:
-                    save_fill_cursor(fill_cursor_path, fill_cursor, ts)
+        count = ingest_fills(
+            all_trades,
+            fill_tracker,
+            fill_cursor,
+            fill_metrics=fill_metrics,
+        )
+        if count > 0:
+            push_tracker_to_metrics(fill_tracker, fill_metrics)
+            if fill_cursor_path:
+                save_fill_cursor(
+                    fill_cursor_path,
+                    fill_cursor,
+                    ts,
+                    fill_metrics=fill_metrics,
+                )
 
     # Runner
     runner = ReconcileRunner(

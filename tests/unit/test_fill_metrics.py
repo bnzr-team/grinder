@@ -99,7 +99,7 @@ class TestForbiddenLabels:
 class TestAllowlistedLabelsOnly:
     """Only allowed label keys appear in fill metrics output."""
 
-    ALLOWED_LABEL_KEYS: frozenset[str] = frozenset({"source", "side", "liquidity"})
+    ALLOWED_LABEL_KEYS: frozenset[str] = frozenset({"source", "side", "liquidity", "reason", "result"})
 
     def test_only_allowed_labels(self) -> None:
         fm = FillMetrics()
@@ -150,12 +150,15 @@ class TestFillMetricsRecording:
         assert f'{METRIC_FILLS}{{source="reconcile",side="sell",liquidity="maker"}} 1' in output
         assert f'{METRIC_FILLS}{{source="sim",side="buy",liquidity="taker"}} 1' in output
 
-    def test_placeholders_replaced_after_record(self) -> None:
-        """Once real data is recorded, placeholder 'none' labels disappear."""
+    def test_fill_placeholders_replaced_after_record(self) -> None:
+        """Once real fill data is recorded, fill counter placeholders disappear."""
         fm = FillMetrics()
         fm.record_fill(source="sim", side="buy", liquidity="taker", notional_value=100.0, fee=0.1)
         output = _output(fm)
-        assert 'source="none"' not in output
+        # Fill counters should no longer have "none" placeholders
+        assert f'{METRIC_FILLS}{{source="none"' not in output
+        assert f'{METRIC_FILL_NOTIONAL}{{source="none"' not in output
+        assert f'{METRIC_FILL_FEES}{{source="none"' not in output
 
 
 # ---------------------------------------------------------------------------

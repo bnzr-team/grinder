@@ -1,4 +1,4 @@
-"""Fill ingestion: Binance userTrades -> FillTracker + FillMetrics (Launch-06 PR2).
+"""Fill ingestion: Binance userTrades -> FillTracker + FillMetrics (Launch-06 PR2/PR3).
 
 Converts raw Binance Futures ``/fapi/v1/userTrades`` response dicts into
 ``FillEvent`` objects, records them in the ``FillTracker``, pushes counters
@@ -11,6 +11,7 @@ Label safety:
 - ``source`` is always ``"reconcile"`` (hardcoded).
 - ``side`` comes from ``trade["side"].lower()`` (buy / sell).
 - ``liquidity`` comes from ``trade["maker"]`` (maker / taker).
+- ``reason`` for errors: http / parse / cursor / unknown (allowlist).
 - No ``symbol``, ``order_id``, or other high-cardinality labels.
 """
 
@@ -23,6 +24,7 @@ from grinder.execution.fill_tracker import FILL_LIQUIDITY, FILL_SIDES, FillEvent
 
 if TYPE_CHECKING:
     from grinder.execution.fill_cursor import FillCursor
+    from grinder.observability.fill_metrics import FillMetrics
 
 logger = logging.getLogger(__name__)
 
@@ -30,10 +32,14 @@ logger = logging.getLogger(__name__)
 _SOURCE = "reconcile"
 
 
-def parse_binance_trade(raw: dict[str, Any]) -> FillEvent | None:
+def parse_binance_trade(
+    raw: dict[str, Any],
+    fill_metrics: FillMetrics | None = None,
+) -> FillEvent | None:
     """Parse a single Binance Futures userTrade dict into a FillEvent.
 
     Returns None if the trade has invalid/missing fields (logged as warning).
+    Increments ``ingest_errors{reason="parse"}`` on failure if metrics provided.
 
     Binance response fields used:
         - ``time``   (int ms) -> ts_ms
@@ -66,6 +72,8 @@ def parse_binance_trade(raw: dict[str, Any]) -> FillEvent | None:
         )
     except (KeyError, ValueError, TypeError) as e:
         logger.warning("FILL_PARSE_ERROR", extra={"error": str(e), "trade_id": raw.get("id")})
+        if fill_metrics is not None:
+            fill_metrics.inc_ingest_error(_SOURCE, "parse")
         return None
 
 
@@ -73,27 +81,34 @@ def ingest_fills(
     raw_trades: list[dict[str, Any]],
     tracker: FillTracker,
     cursor: FillCursor,
+    fill_metrics: FillMetrics | None = None,
 ) -> int:
     """Parse raw trades, record in tracker, advance cursor.
 
     Only processes trades with ``id > cursor.last_trade_id`` to guarantee
     deduplication even when Binance returns overlapping pages.
 
+    Increments ``ingest_polls`` on every call (if metrics provided).
+
     Args:
         raw_trades: Raw dicts from ``port.fetch_user_trades_raw()``.
         tracker: FillTracker to record events into.
         cursor: Mutable cursor — updated in-place with the newest trade ID/ts.
+        fill_metrics: Optional metrics for health counters.
 
     Returns:
         Number of new fills recorded.
     """
+    if fill_metrics is not None:
+        fill_metrics.inc_ingest_polls(_SOURCE)
+
     recorded = 0
     for raw in raw_trades:
         trade_id = int(raw.get("id", 0))
         if trade_id <= cursor.last_trade_id:
             continue
 
-        event = parse_binance_trade(raw)
+        event = parse_binance_trade(raw, fill_metrics=fill_metrics)
         if event is None:
             continue
 
