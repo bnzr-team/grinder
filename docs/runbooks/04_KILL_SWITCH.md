@@ -187,6 +187,40 @@ See: [08_SMOKE_TEST_TESTNET.md](08_SMOKE_TEST_TESTNET.md)
 
 ---
 
+## Fire drill verification
+
+A deterministic, CI-safe fire drill proves that kill-switch and drawdown enforcement
+work correctly without API keys or network calls:
+
+```bash
+bash scripts/fire_drill_risk_killswitch_drawdown.sh
+```
+
+| Drill | What it proves | Key assertions |
+|-------|---------------|----------------|
+| A: KillSwitch latch | Trip sets `grinder_kill_switch_triggered 1`, trips counter increments, INCREASE_RISK/REDUCE_RISK blocked while CANCEL allowed, second trip is idempotent | 6 checks |
+| B: DrawdownGuardV1 | 12% DD triggers 10% limit, INCREASE_RISK blocked in DRAWDOWN, REDUCE_RISK/CANCEL allowed, state latched after equity recovery | 7 checks |
+
+This verifies **enforcement gate behavior and metrics rendering**, not alert
+thresholds or production timing. If the drill passes but alerts misfire in prod,
+check alert expression thresholds vs actual drawdown values.
+
+### Artifact inventory
+
+```
+.artifacts/risk_fire_drill/<YYYYMMDDTHHMMSS>/
+  drill_a_metrics.txt      # Full Prometheus text after kill-switch trip
+  drill_a_log.txt          # Captured stderr (trip, gate, idempotent markers)
+  drill_b_metrics.txt      # Full Prometheus text after drawdown trigger
+  drill_b_log.txt          # Captured stderr (state transitions, intent decisions)
+  summary.txt              # Copy/paste evidence block with exact metric lines
+  sha256sums.txt           # Full 64-char sha256 of all artifact files
+```
+
+See also: [Ops Quickstart](00_OPS_QUICKSTART.md) | [Evidence Index](00_EVIDENCE_INDEX.md)
+
+---
+
 ## Prevention
 
 - Monitor `grinder_drawdown_pct` for early warning

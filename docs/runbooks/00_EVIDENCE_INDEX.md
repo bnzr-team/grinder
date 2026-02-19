@@ -14,6 +14,8 @@ See also: [Ops Quickstart](00_OPS_QUICKSTART.md) | [Fill Tracker Triage](26_FILL
 | Staging enablement | Gates A/B/C pass, real Binance reads work, cursor persists across restart | `scripts/smoke_fill_ingest_staging.sh` | `.artifacts/fill_ingest_staging/<ts>/` | `gate_a_metrics.txt`, `gate_b_metrics.txt`, `gate_c_metrics.txt`, `cursor_after_run1.json`, `cursor_after_run2.json` | evidence block in terminal output |
 | Alert inputs (non-monotonic rejection) | `rejected_non_monotonic` counter increments, cursor unchanged, log marker present | `scripts/fire_drill_fill_alerts.sh` | `.artifacts/fill_alert_fire_drill/<ts>/` | `drill_a_metrics.txt`, `drill_a_log.txt`, `cursor_before_drill_a.json`, `cursor_after_drill_a.json` | `summary.txt` |
 | Alert inputs (cursor stuck) | `cursor_save error` counter increments, `cursor_age_seconds` grows over time | `scripts/fire_drill_fill_alerts.sh` | `.artifacts/fill_alert_fire_drill/<ts>/` | `drill_b_metrics_1.txt`, `drill_b_metrics_2.txt`, `drill_b_log.txt`, `cursor_drill_b.json` | `summary.txt` |
+| Kill-switch + enforcement | Kill-switch trips, gauge=1, INCREASE_RISK blocked, CANCEL allowed, idempotent latch | `scripts/fire_drill_risk_killswitch_drawdown.sh` | `.artifacts/risk_fire_drill/<ts>/` | `drill_a_metrics.txt`, `drill_a_log.txt` | `summary.txt` |
+| Drawdown guard | DrawdownGuardV1 blocks INCREASE_RISK in DRAWDOWN, allows REDUCE_RISK/CANCEL, state latched | `scripts/fire_drill_risk_killswitch_drawdown.sh` | `.artifacts/risk_fire_drill/<ts>/` | `drill_b_metrics.txt`, `drill_b_log.txt` | `summary.txt` |
 
 ---
 
@@ -52,6 +54,18 @@ Gate B/C artifacts only present when `BINANCE_API_KEY` and `BINANCE_API_SECRET` 
   drill_b_log.txt             # Captured stderr from Drill B
   summary.txt                 # Copy/paste evidence block with exact metric lines
   sha256sums.txt              # Full 64-char sha256 of all artifact files
+```
+
+### Risk fire drill (`fire_drill_risk_killswitch_drawdown.sh`)
+
+```
+.artifacts/risk_fire_drill/<YYYYMMDDTHHMMSS>/
+  drill_a_metrics.txt      # Full Prometheus text after kill-switch trip
+  drill_a_log.txt          # Captured stderr (trip, gate, idempotent markers)
+  drill_b_metrics.txt      # Full Prometheus text after drawdown trigger
+  drill_b_log.txt          # Captured stderr (state transitions, intent decisions)
+  summary.txt              # Copy/paste evidence block with exact metric lines
+  sha256sums.txt           # Full 64-char sha256 of all artifact files
 ```
 
 ---
