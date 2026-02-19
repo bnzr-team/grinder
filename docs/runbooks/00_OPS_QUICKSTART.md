@@ -1,4 +1,4 @@
-# Runbook 00: Ops Quickstart (Launch-07)
+# Runbook 00: Ops Quickstart (Launch-11)
 
 Quick-reference for operators: from "alert fired" to "evidence pasted" in under 2 minutes.
 
@@ -6,9 +6,9 @@ See also: [Evidence Index](00_EVIDENCE_INDEX.md) | [Fill Tracker Triage](26_FILL
 
 ---
 
-## One-command triage
+## Unified entrypoint (recommended)
 
-The fastest path: use the triage wrapper. It runs the right script, surfaces the evidence directory, and tells you what to do next.
+One command for all fill and connector evidence:
 
 ```bash
 bash scripts/ops_fill_triage.sh <mode>
@@ -19,13 +19,17 @@ bash scripts/ops_fill_triage.sh <mode>
 | `local` | `smoke_fill_ingest.sh` (FakePort) | No | ~5s |
 | `staging` | `smoke_fill_ingest_staging.sh` (Gate A always; B/C if creds) | Yes (Gate B/C) | ~2 min |
 | `fire-drill` | `fire_drill_fill_alerts.sh` (alert input proof) | No | ~10s |
+| `connector-market-data` | `fire_drill_connector_market_data.sh` (L2 parse, DQ, whitelist) | No | ~2s |
+| `connector-exchange-port` | `fire_drill_connector_exchange_port.sh` (gate chain, idempotency, retry) | No | ~2s |
 
 ```bash
 # Examples
-bash scripts/ops_fill_triage.sh local        # quick wiring check
-bash scripts/ops_fill_triage.sh fire-drill   # prove alert inputs
-bash scripts/ops_fill_triage.sh staging      # full staging evidence
-bash scripts/ops_fill_triage.sh -h           # help
+bash scripts/ops_fill_triage.sh local                  # quick wiring check
+bash scripts/ops_fill_triage.sh fire-drill             # prove alert inputs
+bash scripts/ops_fill_triage.sh staging                # full staging evidence
+bash scripts/ops_fill_triage.sh connector-market-data  # L2 parse + DQ proof
+bash scripts/ops_fill_triage.sh connector-exchange-port # gate chain + retry proof
+bash scripts/ops_fill_triage.sh -h                     # help
 ```
 
 The wrapper does **not** change the underlying script output or evidence format. It runs the script, shows its output live, then prints where artifacts landed and what to do next.
@@ -64,7 +68,9 @@ bash scripts/ops_exec_triage.sh exec-fire-drill  # execution gate chain proof
 bash scripts/ops_exec_triage.sh -h               # help
 ```
 
-### Connector triage (one command)
+### Connector triage (standalone)
+
+> **Recommended**: use the unified entrypoint instead: `bash scripts/ops_fill_triage.sh connector-market-data` or `connector-exchange-port`.
 
 ```bash
 bash scripts/ops_connector_triage.sh <mode>
@@ -225,7 +231,7 @@ bash scripts/<script_name>.sh
 | Active remediation and budget limits | [12_ACTIVE_REMEDIATION.md](12_ACTIVE_REMEDIATION.md) |
 | Evidence artifact index | [00_EVIDENCE_INDEX.md](00_EVIDENCE_INDEX.md) |
 | Execution intent gate chain | Fire drill only (no dedicated runbook yet) |
-| Market data connector | Fire drill: `ops_connector_triage.sh market-data` |
-| Exchange port boundary | Fire drill: `ops_connector_triage.sh exchange-port` |
+| Market data connector | `ops_fill_triage.sh connector-market-data` |
+| Exchange port boundary | `ops_fill_triage.sh connector-exchange-port` |
 | General alert response | [06_ALERT_RESPONSE.md](06_ALERT_RESPONSE.md) |
 | Health checks | [02_HEALTH_TRIAGE.md](02_HEALTH_TRIAGE.md) |

@@ -1,6 +1,8 @@
-# Runbook 00: Evidence Index (Launch-07)
+# Runbook 00: Evidence Index (Launch-11)
 
 One-table reference: what you want to prove, which script to run, and where to find the artifacts.
+
+**Recommended**: use the unified entrypoint `bash scripts/ops_fill_triage.sh <mode>` for all fill and connector evidence. See [Ops Quickstart](00_OPS_QUICKSTART.md).
 
 See also: [Ops Quickstart](00_OPS_QUICKSTART.md) | [Fill Tracker Triage](26_FILL_TRACKER_TRIAGE.md)
 
@@ -19,8 +21,8 @@ See also: [Ops Quickstart](00_OPS_QUICKSTART.md) | [Fill Tracker Triage](26_FILL
 | Budget per-run cap | Per-run notional cap blocks execution, block reason + metrics correct | `scripts/fire_drill_reconcile_budget_limits.sh` | `.artifacts/budget_fire_drill/<ts>/` | `drill_a_metrics.txt`, `drill_a_log.txt`, `drill_a_state.json` | `summary.txt` |
 | Budget per-day cap | Per-day notional cap blocks across run boundaries, UTC day key, state persisted | `scripts/fire_drill_reconcile_budget_limits.sh` | `.artifacts/budget_fire_drill/<ts>/` | `drill_b_metrics.txt`, `drill_b_log.txt`, `drill_b_state.json` | `summary.txt` |
 | Execution intent gates | NOT_ARMED blocks all, kill-switch blocks non-CANCEL, drawdown blocks INCREASE_RISK, all-pass reaches port | `scripts/fire_drill_execution_intents.sh` | `.artifacts/execution_fire_drill/<ts>/` | `drill_a_*.txt`, `drill_b_*.txt`, `drill_c_*.txt`, `drill_d_*.txt` | `summary.txt` |
-| Market data connector | L2 parse validation, DQ staleness/gaps/outliers, symbol whitelist | `scripts/fire_drill_connector_market_data.sh` | `.artifacts/connector_market_data_fire_drill/<ts>/` | `drill_a_*.txt` .. `drill_e_*.txt` | `summary.txt` |
-| Exchange port boundary | Gate chain (5 gates), idempotency cache, retry classification (transient vs fatal) | `scripts/fire_drill_connector_exchange_port.sh` | `.artifacts/connector_exchange_port_fire_drill/<ts>/` | `drill_a_log.txt` .. `drill_f_log.txt`, `drill_e_metrics.txt`, `drill_f_metrics.txt` | `summary.txt` |
+| Market data connector | L2 parse validation, DQ staleness/gaps/outliers, symbol whitelist | `scripts/ops_fill_triage.sh connector-market-data` | `.artifacts/connector_market_data_fire_drill/<ts>/` | `drill_a_*.txt` .. `drill_e_*.txt` | `summary.txt` + `sha256sums.txt` |
+| Exchange port boundary | Gate chain (5 gates), idempotency cache, retry classification (transient vs fatal) | `scripts/ops_fill_triage.sh connector-exchange-port` | `.artifacts/connector_exchange_port_fire_drill/<ts>/` | `drill_a_log.txt` .. `drill_f_log.txt`, `drill_e_metrics.txt`, `drill_f_metrics.txt` | `summary.txt` + `sha256sums.txt` |
 
 ---
 
@@ -103,7 +105,18 @@ Gate B/C artifacts only present when `BINANCE_API_KEY` and `BINANCE_API_SECRET` 
   sha256sums.txt           # Full 64-char sha256 of all artifact files
 ```
 
-### Market data connector fire drill (`fire_drill_connector_market_data.sh`)
+### Market data connector fire drill
+
+**Command**: `bash scripts/ops_fill_triage.sh connector-market-data`
+
+**Expected PASS markers** (grep to verify):
+```
+=== Results: 21 passed, 0 failed, 0 skipped ===
+  PASSED: connector-market-data
+  evidence_dir: .artifacts/connector_market_data_fire_drill/<ts>
+```
+
+**Files to attach**: `summary.txt`, `sha256sums.txt`
 
 ```
 .artifacts/connector_market_data_fire_drill/<YYYYMMDDTHHMMSS>/
@@ -114,11 +127,23 @@ Gate B/C artifacts only present when `BINANCE_API_KEY` and `BINANCE_API_SECRET` 
   drill_d_log.txt          # Gap detection + outlier detection
   drill_d_metrics.txt      # Prometheus text (gap + outlier counters)
   drill_e_log.txt          # Happy path: clean DQ + valid L2 parse
+  drill_e_metrics.txt      # Prometheus text (happy path zeroes)
   summary.txt              # Copy/paste evidence block
   sha256sums.txt           # Full 64-char sha256 of all artifact files
 ```
 
-### Exchange port boundary fire drill (`fire_drill_connector_exchange_port.sh`)
+### Exchange port boundary fire drill
+
+**Command**: `bash scripts/ops_fill_triage.sh connector-exchange-port`
+
+**Expected PASS markers** (grep to verify):
+```
+=== Results: 40 passed, 0 failed, 0 skipped ===
+  PASSED: connector-exchange-port
+  evidence_dir: .artifacts/connector_exchange_port_fire_drill/<ts>
+```
+
+**Files to attach**: `summary.txt`, `sha256sums.txt`
 
 ```
 .artifacts/connector_exchange_port_fire_drill/<YYYYMMDDTHHMMSS>/
@@ -142,8 +167,8 @@ Gate B/C artifacts only present when `BINANCE_API_KEY` and `BINANCE_API_SECRET` 
 - Each run creates a timestamped subdirectory. Old runs are not auto-deleted.
 - `sha256sums.txt` (fire drill) and inline sha256/bytes (staging smoke) provide integrity proof.
 - All scripts exit non-zero on any failure.
-- **Fill triage wrapper**: `bash scripts/ops_fill_triage.sh <mode>` runs the right fill script, surfaces `evidence_dir`, and prints next-step pointers.
+- **Unified entrypoint (recommended)**: `bash scripts/ops_fill_triage.sh <mode>` covers fill modes (`local`, `staging`, `fire-drill`) and connector modes (`connector-market-data`, `connector-exchange-port`).
 - **Risk triage wrapper**: `bash scripts/ops_risk_triage.sh <mode>` runs the right risk script (`killswitch-drawdown` or `budget-limits`).
 - **Execution triage wrapper**: `bash scripts/ops_exec_triage.sh <mode>` runs the execution intent fire drill (`exec-fire-drill`).
-- **Connector triage wrapper**: `bash scripts/ops_connector_triage.sh <mode>` runs connector fire drills (`market-data` or `exchange-port`).
+- **Connector triage wrapper (standalone)**: `bash scripts/ops_connector_triage.sh <mode>` — same drills, but prefer the unified entrypoint above.
 - See [Ops Quickstart](00_OPS_QUICKSTART.md) for one-command examples.
