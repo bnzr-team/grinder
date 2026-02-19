@@ -152,6 +152,22 @@ REQUIRED_METRICS_PATTERNS = [
     "# HELP grinder_fill_fees_total",
     "# TYPE grinder_fill_fees_total",
     "grinder_fill_fees_total{source=",
+    # Launch-06 PR3: Fill health metrics
+    "# HELP grinder_fill_ingest_polls_total",
+    "# TYPE grinder_fill_ingest_polls_total",
+    "grinder_fill_ingest_polls_total{source=",
+    "# HELP grinder_fill_ingest_enabled",
+    "# TYPE grinder_fill_ingest_enabled",
+    "grinder_fill_ingest_enabled{source=",
+    "# HELP grinder_fill_ingest_errors_total",
+    "# TYPE grinder_fill_ingest_errors_total",
+    "grinder_fill_ingest_errors_total{source=",
+    "# HELP grinder_fill_cursor_load_total",
+    "# TYPE grinder_fill_cursor_load_total",
+    "grinder_fill_cursor_load_total{source=",
+    "# HELP grinder_fill_cursor_save_total",
+    "# TYPE grinder_fill_cursor_save_total",
+    "grinder_fill_cursor_save_total{source=",
 ]
 
 # Forbidden high-cardinality labels (H5-02 contract tightening)
