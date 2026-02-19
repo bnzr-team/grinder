@@ -62,6 +62,8 @@ api_keys.json
 
 # Artifacts
 artifacts/
+# Smoke test evidence (timestamped, ephemeral)
+.artifacts/
 *.log
 *.jsonl
 # But track test fixture JSONL files

@@ -419,3 +419,90 @@ curl -sf http://localhost:9090/metrics > /tmp/metrics_snapshot_$(date +%s).txt
 | `scripts/smoke_fill_ingest_staging.sh` | Staging dry-run — validates real Binance reads + cursor persistence | Yes |
 
 Both scripts print PASS/FAIL and exit non-zero on failure.
+
+---
+
+## Staging evidence bundle
+
+### Where artifacts live
+
+```
+.artifacts/fill_ingest_staging/<YYYYMMDDTHHMMSS>/
+  gate_a_metrics.txt          # Prometheus text (Gate A: OFF)
+  gate_b_metrics.txt          # Prometheus text (Gate B: ON, real Binance)
+  gate_c_metrics.txt          # Prometheus text (Gate C: restart)
+  cursor_after_run1.json      # Cursor state after first real run
+  cursor_before_restart.json  # Cursor snapshot before restart (for monotonicity)
+  cursor_after_run2.json      # Cursor state after restart run
+```
+
+The directory is **gitignored** (`.artifacts/`). Each smoke run creates a timestamped subdirectory.
+Old runs are not auto-deleted -- clean up manually with `rm -rf .artifacts/fill_ingest_staging/`.
+
+### How to run
+
+```bash
+# Gate A only (no credentials needed)
+bash scripts/smoke_fill_ingest_staging.sh
+
+# Full run with real Binance (read-only, detect_only mode)
+BINANCE_API_KEY=... BINANCE_API_SECRET=... ALLOW_MAINNET_TRADE=1 \
+  bash scripts/smoke_fill_ingest_staging.sh
+
+# Custom durations
+DUR_B=120 DUR_C=60 bash scripts/smoke_fill_ingest_staging.sh
+```
+
+### Interpreting sha256 and bytes
+
+Each artifact is saved with `sha256sum` and `wc -c` output in the evidence block:
+
+- **Integrity**: sha256 proves the artifact was not tampered with after the smoke run.
+- **Non-emptiness**: bytes > 0 confirms the file was written. Typical sizes:
+  - Metrics file: 2,000-10,000 bytes (depends on metric count)
+  - Cursor JSON: 80-120 bytes
+
+If sha256 or bytes are missing from the evidence block, the artifact was not created (check FAIL/SKIP lines).
+
+### Cursor monotonicity checks
+
+The staging script validates cursor monotonicity with **two separate checks** (PR7):
+
+1. **SSOT key** `(last_trade_id, last_ts_ms)` must be non-decreasing -- matches the PR6 monotonicity guard in `fill_cursor.py`.
+2. **updated_at_ms** must be non-decreasing -- this timestamp advances on every successful save.
+
+A single 3-tuple comparison is intentionally avoided: `updated_at_ms` growth could mask `(trade_id, ts_ms)` regression in lexicographic comparison.
+
+### What good looks like
+
+**Gate A** (always runs, no credentials):
+```
+Gate A: OFF (FakePort)
+  enabled=0, no forbidden labels
+  fill_line_count=12
+  metrics: gate_a_metrics.txt  sha256=<64-char-hex>  bytes=3421
+```
+
+**Gate B** (real Binance, detect_only):
+```
+Gate B: ON (real Binance reads, detect_only)
+  enabled=1
+  fill_line_count=18
+  metrics: gate_b_metrics.txt  sha256=<64-char-hex>  bytes=5678
+  cursor: cursor_after_run1.json  sha256=<64-char-hex>  bytes=95
+```
+
+**Gate C** (restart persistence):
+```
+Gate C: Restart persistence
+  fill_line_count=18
+  metrics: gate_c_metrics.txt  sha256=<64-char-hex>  bytes=5702
+  cursor: cursor_after_run2.json  sha256=<64-char-hex>  bytes=95
+  monotonicity=PASS
+```
+
+Key indicators:
+- `fill_line_count` >= 10 (grinder_fill_* metric lines present)
+- `bytes` > 0 for all artifacts
+- `monotonicity=PASS` (cursor tuple did not regress across restart)
+- Gate B `enabled=1`, Gate A `enabled=0`
