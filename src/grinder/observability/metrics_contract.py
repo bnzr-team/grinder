@@ -168,6 +168,22 @@ REQUIRED_METRICS_PATTERNS = [
     "# HELP grinder_fill_cursor_save_total",
     "# TYPE grinder_fill_cursor_save_total",
     "grinder_fill_cursor_save_total{source=",
+    # Launch-06 PR6: Cursor stuck detection
+    "# HELP grinder_fill_cursor_last_save_ts",
+    "# TYPE grinder_fill_cursor_last_save_ts",
+    "grinder_fill_cursor_last_save_ts{source=",
+    "# HELP grinder_fill_cursor_age_seconds",
+    "# TYPE grinder_fill_cursor_age_seconds",
+    "grinder_fill_cursor_age_seconds{source=",
+]
+
+# PR6: Concrete series patterns requiring fill ingest to be running.
+# Separated from REQUIRED_METRICS_PATTERNS because system-level tests
+# validate against fresh/default state (no ingest running). Tested in
+# test_fill_health_metrics.py::TestFillHealthMetricsContract.
+FILL_INGEST_SERIES_PATTERNS = [
+    'grinder_fill_cursor_last_save_ts{source="reconcile"}',
+    'grinder_fill_cursor_age_seconds{source="reconcile"}',
 ]
 
 # Forbidden high-cardinality labels (H5-02 contract tightening)

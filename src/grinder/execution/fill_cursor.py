@@ -1,4 +1,4 @@
-"""Persistent fill cursor for deduplication across restarts (Launch-06 PR2/PR3).
+"""Persistent fill cursor for deduplication across restarts (Launch-06 PR2/PR3/PR6).
 
 Stores the last seen Binance trade ID so that the fill ingestion loop
 does not re-read the same trades after a container restart.
@@ -18,12 +18,18 @@ Follows the BudgetTracker persistence pattern (budget.py).
 
 PR3: load/save now emit ``grinder_fill_cursor_load_total`` /
 ``grinder_fill_cursor_save_total`` counters via optional FillMetrics.
+
+PR6: Monotonicity guard rejects backward cursor writes
+(``rejected_non_monotonic``).  Cursor save also tracks
+``cursor_last_save_ts`` for stuck detection.
+Monotonic key: ``(last_trade_id, last_ts_ms)`` lexicographic.
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -94,10 +100,47 @@ def save_fill_cursor(
     fill_metrics: FillMetrics | None = None,
     source: str = "reconcile",
 ) -> None:
-    """Persist cursor to disk (atomic-ish: write then close)."""
+    """Persist cursor to disk (atomic-ish: write then close).
+
+    PR6: Monotonicity guard — rejects writes where the new cursor's
+    ``(last_trade_id, last_ts_ms)`` tuple is strictly less than the
+    existing file's.  Corrupt/missing existing file is not an error
+    (best-effort recovery: proceed with save).
+    """
     try:
         p = Path(path)
         p.parent.mkdir(parents=True, exist_ok=True)
+
+        # PR6: Monotonicity guard — reject backward cursor (tuple compare)
+        if p.exists():
+            try:
+                existing_data = json.loads(p.read_text())
+                existing_key = (
+                    int(existing_data.get("last_trade_id", 0)),
+                    int(existing_data.get("last_ts_ms", 0)),
+                )
+                new_key = (cursor.last_trade_id, cursor.last_ts_ms)
+                if new_key < existing_key:
+                    logger.warning(
+                        "FILL_CURSOR_REJECTED_NON_MONOTONIC",
+                        extra={
+                            "path": path,
+                            "existing_key": existing_key,
+                            "new_key": new_key,
+                        },
+                    )
+                    if fill_metrics is not None:
+                        fill_metrics.inc_cursor_save(source, "rejected_non_monotonic")
+                    return
+            except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+                # Corrupt existing file — best-effort recovery: proceed with save
+                logger.warning(
+                    "FILL_CURSOR_CORRUPT_ON_MONOTONICITY_CHECK",
+                    extra={"path": path},
+                )
+                if fill_metrics is not None:
+                    fill_metrics.inc_ingest_error(source, "cursor")
+
         payload = {
             "last_trade_id": cursor.last_trade_id,
             "last_ts_ms": cursor.last_ts_ms,
@@ -106,6 +149,7 @@ def save_fill_cursor(
         p.write_text(json.dumps(payload, indent=2))
         if fill_metrics is not None:
             fill_metrics.inc_cursor_save(source, "ok")
+            fill_metrics.set_cursor_last_save_ts(source, time.time())
     except OSError as e:
         logger.error("FILL_CURSOR_SAVE_ERROR", extra={"path": path, "error": str(e)})
         if fill_metrics is not None:

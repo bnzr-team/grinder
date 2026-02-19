@@ -528,3 +528,37 @@ groups:
           summary: "Fill ingest HTTP errors rising"
           description: "More than 3 HTTP errors fetching userTrades in 10 minutes. Check Binance connectivity and API key permissions."
           runbook_url: "docs/runbooks/26_FILL_TRACKER_TRIAGE.md#fillingesthttperrors"
+
+      # Warning: Fill cursor not advancing (PR6 — stuck detection)
+      # Disambiguated from quiet markets: cursor is saved on every successful
+      # poll (PR6), so cursor_age_seconds stays low during quiet markets.
+      # Suppressed when cursor_save errors or non-monotonic rejections are
+      # present (those have their own alerts).
+      - alert: FillCursorStuck
+        expr: |
+          grinder_fill_cursor_age_seconds{source="reconcile"} > 1800
+          and
+          grinder_fill_ingest_enabled{source="reconcile"} == 1
+          and
+          increase(grinder_fill_ingest_polls_total{source="reconcile"}[30m]) > 0
+          and
+          increase(grinder_fill_cursor_save_total{source="reconcile",result=~"error|rejected_non_monotonic"}[30m]) == 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Fill cursor not saved for 30m"
+          description: "Fill ingest is enabled and polling, but cursor has not been saved for 30+ minutes. This alert is suppressed when cursor_save errors or non-monotonic rejections are present (those have their own alerts). Check cursor file permissions, disk space, and logs."
+          runbook_url: "docs/runbooks/26_FILL_TRACKER_TRIAGE.md#fillcursorstuck"
+
+      # Warning: Cursor writes rejected due to non-monotonic trade_id/ts_ms (PR6)
+      - alert: FillCursorNonMonotonicRejected
+        expr: |
+          increase(grinder_fill_cursor_save_total{source="reconcile",result="rejected_non_monotonic"}[30m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Cursor writes rejected (non-monotonic)"
+          description: "Cursor save was rejected because the new (trade_id, ts_ms) tuple is less than the existing file. This may indicate data corruption or a logic bug."
+          runbook_url: "docs/runbooks/26_FILL_TRACKER_TRIAGE.md#fillcursornonmonotonicrejected"

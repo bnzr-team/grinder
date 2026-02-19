@@ -122,7 +122,7 @@ assert_fill_metrics_in_artifact() {
   fi
 }
 
-echo "=== Fill Ingest STAGING Smoke (Launch-06 PR5) ==="
+echo "=== Fill Ingest STAGING Smoke (Launch-06 PR5+PR6) ==="
 echo ""
 
 # =========================================================================
@@ -217,6 +217,18 @@ else
       fail "cursor_save metric missing"
     fi
 
+    # PR6: Cursor stuck detection metrics present
+    if grep -q 'grinder_fill_cursor_last_save_ts' "$METRICS_B"; then
+      pass "cursor_last_save_ts metric present"
+    else
+      fail "cursor_last_save_ts metric missing"
+    fi
+    if grep -q 'grinder_fill_cursor_age_seconds' "$METRICS_B"; then
+      pass "cursor_age_seconds metric present"
+    else
+      fail "cursor_age_seconds metric missing"
+    fi
+
     # HTTP errors not exploding (0 or small)
     http_err=$(get_metric "$METRICS_B" 'grinder_fill_ingest_errors_total{source="reconcile",reason="http"}')
     if [[ -z "$http_err" || "$http_err" == "0" ]]; then
@@ -291,6 +303,18 @@ else
       fail "cursor_load errors on Run 2 ($cl_err)"
     fi
 
+    # PR6: Cursor stuck detection metrics present after restart
+    if grep -q 'grinder_fill_cursor_last_save_ts' "$METRICS_C"; then
+      pass "cursor_last_save_ts present after restart"
+    else
+      fail "cursor_last_save_ts missing after restart"
+    fi
+    if grep -q 'grinder_fill_cursor_age_seconds' "$METRICS_C"; then
+      pass "cursor_age_seconds present after restart"
+    else
+      fail "cursor_age_seconds missing after restart"
+    fi
+
     # Artifact assertion (PR5)
     assert_fill_metrics_in_artifact "$METRICS_C" "Gate C"
   else
@@ -345,10 +369,10 @@ echo "  enabled=0, no forbidden labels, fill metrics in artifact"
 echo ""
 if [[ "$HAS_CREDS" -eq 1 ]]; then
   echo "Gate B: ON (real Binance reads, detect_only)"
-  echo "  polls, cursor load/save, no HTTP errors"
+  echo "  polls, cursor load/save, cursor_last_save_ts, cursor_age_seconds, no HTTP errors"
   echo ""
   echo "Gate C: Restart persistence"
-  echo "  cursor_load OK, cursor monotonic, valid JSON"
+  echo "  cursor_load OK, cursor monotonic, cursor_last_save_ts/age_seconds present, valid JSON"
   echo ""
 fi
 

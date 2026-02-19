@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from grinder.execution.fill_cursor import FillCursor
@@ -334,6 +335,8 @@ class TestFillIntegration:
         raw_trades = [_make_trade(trade_id=1)]
         ingest_fills(raw_trades, tracker, cursor)
         push_tracker_to_metrics(tracker, metrics)
+        # PR6: cursor stuck detection metrics (needed for contract)
+        metrics.set_cursor_last_save_ts("reconcile", time.time())
 
         lines = metrics.to_prometheus_lines()
         text = "\n".join(lines)

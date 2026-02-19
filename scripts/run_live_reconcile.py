@@ -856,13 +856,16 @@ def main() -> int:  # noqa: PLR0915, PLR0912
         )
         if count > 0:
             push_tracker_to_metrics(fill_tracker, fill_metrics)
-            if fill_cursor_path:
-                save_fill_cursor(
-                    fill_cursor_path,
-                    fill_cursor,
-                    ts,
-                    fill_metrics=fill_metrics,
-                )
+        # PR6: save cursor on every successful poll (not just count > 0).
+        # updated_at_ms gets now_ms, keeping cursor file fresh during quiet
+        # markets.  This prevents FillCursorStuck false-positives.
+        if fill_cursor_path:
+            save_fill_cursor(
+                fill_cursor_path,
+                fill_cursor,
+                ts,
+                fill_metrics=fill_metrics,
+            )
 
     # Runner
     runner = ReconcileRunner(
