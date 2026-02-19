@@ -19,6 +19,7 @@ import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 MARKDOWN_PATH = PROJECT_ROOT / "docs" / "runbooks" / "00_EVIDENCE_INDEX.md"
@@ -28,7 +29,7 @@ JSON_PATH = PROJECT_ROOT / "docs" / "runbooks" / "00_EVIDENCE_INDEX.json"
 # Evidence registry (SSOT)
 # =========================================================================
 
-ENTRIES: list[dict] = [
+ENTRIES: list[dict[str, Any]] = [
     {
         "id": "fill_wiring_local",
         "title": "Fill wiring (local)",
@@ -343,7 +344,7 @@ def _git_sha() -> str:
         return "unknown"
 
 
-def validate(entries: list[dict]) -> list[str]:
+def validate(entries: list[dict[str, Any]]) -> list[str]:
     """Validate entries. Returns list of error strings (empty = ok)."""
     errors: list[str] = []
 
@@ -378,7 +379,7 @@ def validate(entries: list[dict]) -> list[str]:
     return errors
 
 
-def generate() -> dict:
+def generate() -> dict[str, Any]:
     """Build the full JSON document."""
     return {
         "schema_version": 1,
