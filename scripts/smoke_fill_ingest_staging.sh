@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# smoke_fill_ingest_staging.sh — Staging dry-run validation (Launch-06 PR4).
+# smoke_fill_ingest_staging.sh — Staging dry-run validation (Launch-06 PR4+PR5).
 #
-# Three gates:
-#   A: OFF (FakePort)       — enabled=0, no forbidden labels
+# Three gates + artifact assertion:
+#   A: OFF (FakePort)       — enabled=0, no forbidden labels, fill metrics in artifact
 #   B: ON  (real Binance)   — polls grow, cursor metrics present, no HTTP errors
 #   C: Restart persistence  — cursor load OK, cursor doesn't regress
+#   *: Every --metrics-out file is verified to contain grinder_fill_* lines (PR5)
 #
 # Gate A runs always (no API keys needed).
 # Gates B+C require BINANCE_API_KEY + BINANCE_API_SECRET + ALLOW_MAINNET_TRADE=1.
@@ -100,7 +101,28 @@ check_no_forbidden() {
   fi
 }
 
-echo "=== Fill Ingest STAGING Smoke (Launch-06 PR4) ==="
+# Assert that a --metrics-out artifact contains grinder_fill_* lines.
+# This catches the PR3 bug where --metrics-out only wrote reconcile metrics.
+assert_fill_metrics_in_artifact() {
+  local file="$1" label="$2"
+  if [[ ! -s "$file" ]]; then
+    fail "metrics-out artifact empty or missing ($label)"
+    return 1
+  fi
+  local count
+  count=$(grep -c '^grinder_fill_' "$file" 2>/dev/null || echo "0")
+  if [[ "$count" -gt 0 ]]; then
+    pass "metrics-out artifact contains grinder_fill_* ($count lines, $label)"
+    return 0
+  else
+    fail "metrics-out artifact missing grinder_fill_* lines ($label)"
+    echo "    First 5 lines of artifact:"
+    head -5 "$file" | sed 's/^/    /'
+    return 1
+  fi
+}
+
+echo "=== Fill Ingest STAGING Smoke (Launch-06 PR5) ==="
 echo ""
 
 # =========================================================================
@@ -121,6 +143,7 @@ if [[ -f "$METRICS_A" ]]; then
   val=$(get_metric "$METRICS_A" 'grinder_fill_ingest_enabled{source="reconcile"}')
   assert_eq "$val" "0" "enabled gauge = 0 when OFF"
   check_no_forbidden "$METRICS_A" "Gate A"
+  assert_fill_metrics_in_artifact "$METRICS_A" "Gate A"
 else
   fail "metrics file not created (Gate A)"
 fi
@@ -208,6 +231,9 @@ else
 
     # No forbidden labels
     check_no_forbidden "$METRICS_B" "Gate B"
+
+    # Artifact assertion (PR5): fill metrics must be in --metrics-out
+    assert_fill_metrics_in_artifact "$METRICS_B" "Gate B"
   else
     fail "metrics file not created (Gate B)"
   fi
@@ -264,6 +290,9 @@ else
     else
       fail "cursor_load errors on Run 2 ($cl_err)"
     fi
+
+    # Artifact assertion (PR5)
+    assert_fill_metrics_in_artifact "$METRICS_C" "Gate C"
   else
     fail "metrics file not created (Gate C)"
   fi
@@ -312,7 +341,7 @@ echo ""
 echo "=== EVIDENCE BLOCK (copy/paste into PR Proof) ==="
 echo ""
 echo "Gate A: OFF (FakePort)"
-echo "  enabled=0, no forbidden labels"
+echo "  enabled=0, no forbidden labels, fill metrics in artifact"
 echo ""
 if [[ "$HAS_CREDS" -eq 1 ]]; then
   echo "Gate B: ON (real Binance reads, detect_only)"
