@@ -6,7 +6,35 @@ See also: [Evidence Index](00_EVIDENCE_INDEX.md) | [Fill Tracker Triage](26_FILL
 
 ---
 
-## What to run first
+## One-command triage
+
+The fastest path: use the triage wrapper. It runs the right script, surfaces the evidence directory, and tells you what to do next.
+
+```bash
+bash scripts/ops_fill_triage.sh <mode>
+```
+
+| Mode | What it runs | API keys | Runtime |
+|------|-------------|----------|---------|
+| `local` | `smoke_fill_ingest.sh` (FakePort) | No | ~5s |
+| `staging` | `smoke_fill_ingest_staging.sh` (Gate A always; B/C if creds) | Yes (Gate B/C) | ~2 min |
+| `fire-drill` | `fire_drill_fill_alerts.sh` (alert input proof) | No | ~10s |
+
+```bash
+# Examples
+bash scripts/ops_fill_triage.sh local        # quick wiring check
+bash scripts/ops_fill_triage.sh fire-drill   # prove alert inputs
+bash scripts/ops_fill_triage.sh staging      # full staging evidence
+bash scripts/ops_fill_triage.sh -h           # help
+```
+
+The wrapper does **not** change the underlying script output or evidence format. It runs the script, shows its output live, then prints where artifacts landed and what to do next.
+
+---
+
+## What to run first (without wrapper)
+
+You can also run the scripts directly:
 
 | Situation | Script | API keys | Runtime |
 |-----------|--------|----------|---------|
@@ -16,9 +44,9 @@ See also: [Evidence Index](00_EVIDENCE_INDEX.md) | [Fill Tracker Triage](26_FILL
 
 **Decision tree:**
 
-1. No API keys or just checking wiring? Run `smoke_fill_ingest.sh`.
-2. Have staging credentials and need end-to-end proof? Run `smoke_fill_ingest_staging.sh`.
-3. Alert fired and you need to verify the inputs are real? Run `fire_drill_fill_alerts.sh`.
+1. No API keys or just checking wiring? Run `local`.
+2. Have staging credentials and need end-to-end proof? Run `staging`.
+3. Alert fired and you need to verify the inputs are real? Run `fire-drill`.
 
 All scripts exit non-zero on failure and print `PASS`/`FAIL` per check.
 
