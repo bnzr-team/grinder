@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-# smoke_fill_ingest_staging.sh — Staging dry-run validation (Launch-06 PR4+PR5).
+# smoke_fill_ingest_staging.sh — Staging dry-run validation (Launch-06 PR4-PR7).
 #
 # Three gates + artifact assertion:
 #   A: OFF (FakePort)       — enabled=0, no forbidden labels, fill metrics in artifact
 #   B: ON  (real Binance)   — polls grow, cursor metrics present, no HTTP errors
-#   C: Restart persistence  — cursor load OK, cursor doesn't regress
+#   C: Restart persistence  — cursor load OK, cursor doesn't regress (full-tuple monotonicity)
 #   *: Every --metrics-out file is verified to contain grinder_fill_* lines (PR5)
+#
+# PR7: Persistent evidence artifacts saved under .artifacts/fill_ingest_staging/<ts>/
+#       with sha256 + byte count for integrity verification.
 #
 # Gate A runs always (no API keys needed).
 # Gates B+C require BINANCE_API_KEY + BINANCE_API_SECRET + ALLOW_MAINNET_TRADE=1.
@@ -40,9 +43,22 @@ DUR_B="${DUR_B:-75}"
 DUR_C="${DUR_C:-30}"
 INTERVAL_MS="${INTERVAL_MS:-5000}"
 
+# PR7: Persistent evidence directory (timestamped, gitignored).
+EVIDENCE_TS="$(date +%Y%m%dT%H%M%S)"
+EVIDENCE_DIR=".artifacts/fill_ingest_staging/${EVIDENCE_TS}"
+mkdir -p "$EVIDENCE_DIR"
+
+# Centralized variable defaults — prevents set -u errors when Gates B+C are skipped.
 PASS=0
 FAIL=0
 SKIP=0
+GATE_A_SHA256="" GATE_A_BYTES="" GATE_A_FILL_COUNT=""
+GATE_B_SHA256="" GATE_B_BYTES="" GATE_B_FILL_COUNT=""
+GATE_C_SHA256="" GATE_C_BYTES="" GATE_C_FILL_COUNT=""
+CURSOR_B_SHA256="" CURSOR_B_BYTES=""
+CURSOR_C_SHA256="" CURSOR_C_BYTES=""
+MONOTONICITY_RESULT="N/A"
+HAS_CREDS=1
 
 pass() { echo "  PASS: $1"; PASS=$((PASS + 1)); }
 fail() { echo "  FAIL: $1"; FAIL=$((FAIL + 1)); }
@@ -122,7 +138,91 @@ assert_fill_metrics_in_artifact() {
   fi
 }
 
-echo "=== Fill Ingest STAGING Smoke (Launch-06 PR5+PR6) ==="
+# PR7: Save artifact with sha256 + byte count verification.
+# Usage: save_artifact <src_path> <dest_name> <label>
+# Sets globals: LAST_SHA256, LAST_BYTES (caller captures immediately).
+save_artifact() {
+  local src="$1" dest_name="$2" label="$3"
+  if [[ ! -f "$src" ]]; then
+    fail "artifact source missing ($label: $src)"
+    LAST_SHA256=""
+    LAST_BYTES=""
+    return 1
+  fi
+  cp "$src" "$EVIDENCE_DIR/$dest_name"
+  LAST_SHA256=$(sha256sum "$EVIDENCE_DIR/$dest_name" | awk '{print $1}')
+  LAST_BYTES=$(wc -c < "$EVIDENCE_DIR/$dest_name")
+  echo "  artifact: $dest_name  sha256=$LAST_SHA256  bytes=$LAST_BYTES"
+  pass "artifact saved ($label: $dest_name)"
+  return 0
+}
+
+# PR7: Validate cursor JSON has expected keys via print_fill_cursor.py.
+# Usage: assert_json_valid <path>
+assert_json_valid() {
+  local path="$1"
+  if [[ ! -f "$path" ]]; then
+    fail "cursor file not found for JSON validation ($path)"
+    return 1
+  fi
+  if python3 scripts/print_fill_cursor.py "$path" >/dev/null 2>&1; then
+    pass "cursor file valid JSON with expected fields"
+    return 0
+  else
+    fail "cursor file invalid or missing expected fields"
+    return 1
+  fi
+}
+
+# PR7: Full cursor monotonicity check — two separate assertions:
+#   1. SSOT key (last_trade_id, last_ts_ms) must be non-decreasing (matches PR6 guard)
+#   2. updated_at_ms must be non-decreasing
+# Usage: assert_cursor_monotonic <before_path> <after_path>
+assert_cursor_monotonic() {
+  local before="$1" after="$2"
+  local b_fields a_fields
+  b_fields=$(python3 scripts/print_fill_cursor.py "$before" 2>/dev/null) || {
+    fail "cannot read 'before' cursor for monotonicity ($before)"
+    return 1
+  }
+  a_fields=$(python3 scripts/print_fill_cursor.py "$after" 2>/dev/null) || {
+    fail "cannot read 'after' cursor for monotonicity ($after)"
+    return 1
+  }
+  echo "  cursor before: $b_fields"
+  echo "  cursor after:  $a_fields"
+
+  # Check 1: SSOT key (trade_id, ts_ms) non-decreasing
+  if python3 -c "
+import sys
+b = list(map(int, '${b_fields}'.split()))
+a = list(map(int, '${a_fields}'.split()))
+sys.exit(0 if (a[0], a[1]) >= (b[0], b[1]) else 1)
+" 2>/dev/null; then
+    pass "SSOT key monotonic ((trade_id, ts_ms): ($a_fields) >= ($b_fields))"
+  else
+    fail "SSOT key regressed ((trade_id, ts_ms): ($a_fields) < ($b_fields))"
+    return 1
+  fi
+
+  # Check 2: updated_at_ms non-decreasing
+  if python3 -c "
+import sys
+b = list(map(int, '${b_fields}'.split()))
+a = list(map(int, '${a_fields}'.split()))
+sys.exit(0 if a[2] >= b[2] else 1)
+" 2>/dev/null; then
+    pass "updated_at_ms monotonic"
+  else
+    fail "updated_at_ms regressed"
+    return 1
+  fi
+
+  return 0
+}
+
+echo "=== Fill Ingest STAGING Smoke (Launch-06 PR4-PR7) ==="
+echo "evidence_dir: $EVIDENCE_DIR"
 echo ""
 
 # =========================================================================
@@ -144,6 +244,12 @@ if [[ -f "$METRICS_A" ]]; then
   assert_eq "$val" "0" "enabled gauge = 0 when OFF"
   check_no_forbidden "$METRICS_A" "Gate A"
   assert_fill_metrics_in_artifact "$METRICS_A" "Gate A"
+
+  # PR7: Save artifact + capture evidence
+  GATE_A_FILL_COUNT=$(grep -c '^grinder_fill_' "$METRICS_A" 2>/dev/null || echo "0")
+  save_artifact "$METRICS_A" "gate_a_metrics.txt" "Gate A"
+  GATE_A_SHA256="$LAST_SHA256"
+  GATE_A_BYTES="$LAST_BYTES"
 else
   fail "metrics file not created (Gate A)"
 fi
@@ -158,7 +264,6 @@ echo ""
 echo "--- Gate B: ON (real Binance reads, detect-only) ---"
 
 # Check prerequisites for real port
-HAS_CREDS=1
 if [[ -z "${BINANCE_API_KEY:-}" ]]; then
   echo "  BINANCE_API_KEY not set"
   HAS_CREDS=0
@@ -181,6 +286,7 @@ if [[ "$HAS_CREDS" -eq 0 ]]; then
   echo "  Skipping Gates B+C (set BINANCE_API_KEY, BINANCE_API_SECRET, ALLOW_MAINNET_TRADE=1)"
   skip "Gate B: real Binance reads (no credentials)"
   skip "Gate C: restart persistence (no credentials)"
+  MONOTONICITY_RESULT="SKIP"
   echo ""
 else
   rm -f "$CURSOR_PATH" "$METRICS_B" "$METRICS_C"
@@ -246,6 +352,12 @@ else
 
     # Artifact assertion (PR5): fill metrics must be in --metrics-out
     assert_fill_metrics_in_artifact "$METRICS_B" "Gate B"
+
+    # PR7: Save Gate B metrics artifact
+    GATE_B_FILL_COUNT=$(grep -c '^grinder_fill_' "$METRICS_B" 2>/dev/null || echo "0")
+    save_artifact "$METRICS_B" "gate_b_metrics.txt" "Gate B"
+    GATE_B_SHA256="$LAST_SHA256"
+    GATE_B_BYTES="$LAST_BYTES"
   else
     fail "metrics file not created (Gate B)"
   fi
@@ -256,8 +368,14 @@ else
     CURSOR_TRADE_ID_1=$(python3 -c "import json; d=json.load(open('$CURSOR_PATH')); print(d.get('last_trade_id', 0))" 2>/dev/null || echo "")
     echo "  cursor after Run 1: last_trade_id=$CURSOR_TRADE_ID_1"
     pass "cursor file exists after Run 1"
+
+    # PR7: Save cursor snapshot + copy for Gate C monotonicity
+    save_artifact "$CURSOR_PATH" "cursor_after_run1.json" "Gate B cursor"
+    CURSOR_B_SHA256="$LAST_SHA256"
+    CURSOR_B_BYTES="$LAST_BYTES"
+    cp "$CURSOR_PATH" "$EVIDENCE_DIR/cursor_before_restart.json"
   else
-    echo "  cursor file not created (quiet market — no new fills, expected)"
+    echo "  cursor file not created (quiet market -- no new fills, expected)"
     skip "cursor file not created (quiet market)"
   fi
 
@@ -272,7 +390,7 @@ else
   CURSOR_HASH_BEFORE=""
   if [[ -f "$CURSOR_PATH" ]]; then
     CURSOR_HASH_BEFORE=$(sha256sum "$CURSOR_PATH" | awk '{print $1}')
-    echo "  cursor hash before restart: ${CURSOR_HASH_BEFORE:0:16}..."
+    echo "  cursor hash before restart: $CURSOR_HASH_BEFORE"
   fi
 
   echo "  Running reconcile again (same cursor path)..."
@@ -317,64 +435,97 @@ else
 
     # Artifact assertion (PR5)
     assert_fill_metrics_in_artifact "$METRICS_C" "Gate C"
+
+    # PR7: Save Gate C metrics artifact
+    GATE_C_FILL_COUNT=$(grep -c '^grinder_fill_' "$METRICS_C" 2>/dev/null || echo "0")
+    save_artifact "$METRICS_C" "gate_c_metrics.txt" "Gate C"
+    GATE_C_SHA256="$LAST_SHA256"
+    GATE_C_BYTES="$LAST_BYTES"
   else
     fail "metrics file not created (Gate C)"
   fi
 
-  # Cursor monotonicity check
+  # PR7: Cursor monotonicity check (full tuple, two separate assertions)
   if [[ -f "$CURSOR_PATH" ]]; then
-    CURSOR_TRADE_ID_2=$(python3 -c "import json; d=json.load(open('$CURSOR_PATH')); print(d.get('last_trade_id', 0))" 2>/dev/null || echo "")
-    echo "  cursor after Run 2: last_trade_id=$CURSOR_TRADE_ID_2"
+    # Validate JSON with all expected fields
+    assert_json_valid "$CURSOR_PATH"
 
-    if [[ -n "$CURSOR_TRADE_ID_1" && -n "$CURSOR_TRADE_ID_2" ]]; then
-      if python3 -c "import sys; sys.exit(0 if int('$CURSOR_TRADE_ID_2') >= int('$CURSOR_TRADE_ID_1') else 1)" 2>/dev/null; then
-        pass "cursor monotonic ($CURSOR_TRADE_ID_2 >= $CURSOR_TRADE_ID_1)"
+    # Full monotonicity: SSOT key (trade_id, ts_ms) + updated_at_ms
+    if [[ -f "$EVIDENCE_DIR/cursor_before_restart.json" ]]; then
+      if assert_cursor_monotonic "$EVIDENCE_DIR/cursor_before_restart.json" "$CURSOR_PATH"; then
+        MONOTONICITY_RESULT="PASS"
       else
-        fail "cursor regressed ($CURSOR_TRADE_ID_2 < $CURSOR_TRADE_ID_1)"
+        MONOTONICITY_RESULT="FAIL"
       fi
+    elif [[ -n "$CURSOR_TRADE_ID_1" ]]; then
+      fail "cursor_before_restart.json not found for monotonicity check"
+      MONOTONICITY_RESULT="FAIL"
+    else
+      skip "cursor monotonicity (no cursor after Run 1)"
+      MONOTONICITY_RESULT="SKIP"
     fi
 
-    # Cursor file is valid JSON with expected fields
-    if python3 -c "
-import json, sys
-d = json.load(open('$CURSOR_PATH'))
-assert 'last_trade_id' in d, 'missing last_trade_id'
-assert isinstance(d['last_trade_id'], int), 'last_trade_id not int'
-" 2>/dev/null; then
-      pass "cursor file valid JSON with expected fields"
-    else
-      fail "cursor file invalid or missing expected fields"
-    fi
+    # PR7: Save Gate C cursor artifact
+    save_artifact "$CURSOR_PATH" "cursor_after_run2.json" "Gate C cursor"
+    CURSOR_C_SHA256="$LAST_SHA256"
+    CURSOR_C_BYTES="$LAST_BYTES"
   elif [[ -z "$CURSOR_TRADE_ID_1" ]]; then
-    # No cursor after either run — quiet market
-    skip "cursor monotonicity (quiet market — no cursor file)"
+    # No cursor after either run -- quiet market
+    skip "cursor monotonicity (quiet market -- no cursor file)"
+    MONOTONICITY_RESULT="SKIP"
   else
     fail "cursor file disappeared after Run 2"
+    MONOTONICITY_RESULT="FAIL"
   fi
 
-  # Cleanup
+  # Cleanup temp files (artifacts are persisted in EVIDENCE_DIR)
   rm -f "$METRICS_B" "$METRICS_C" "$CURSOR_PATH"
 fi
 
 echo ""
 
 # =========================================================================
-# Evidence block
+# Evidence block (PR7: dynamic with real data)
 # =========================================================================
 
 echo "=== EVIDENCE BLOCK (copy/paste into PR Proof) ==="
 echo ""
+echo "evidence_dir: $EVIDENCE_DIR"
+echo ""
 echo "Gate A: OFF (FakePort)"
-echo "  enabled=0, no forbidden labels, fill metrics in artifact"
+echo "  enabled=0, no forbidden labels"
+echo "  fill_line_count=$GATE_A_FILL_COUNT"
+if [[ -n "$GATE_A_SHA256" ]]; then
+  echo "  metrics: gate_a_metrics.txt  sha256=$GATE_A_SHA256  bytes=$GATE_A_BYTES"
+fi
 echo ""
 if [[ "$HAS_CREDS" -eq 1 ]]; then
   echo "Gate B: ON (real Binance reads, detect_only)"
-  echo "  polls, cursor load/save, cursor_last_save_ts, cursor_age_seconds, no HTTP errors"
+  if [[ -f "$EVIDENCE_DIR/gate_b_metrics.txt" ]]; then
+    val_b=$(get_metric "$EVIDENCE_DIR/gate_b_metrics.txt" 'grinder_fill_ingest_enabled{source="reconcile"}')
+    echo "  enabled=$val_b"
+  fi
+  echo "  fill_line_count=$GATE_B_FILL_COUNT"
+  if [[ -n "$GATE_B_SHA256" ]]; then
+    echo "  metrics: gate_b_metrics.txt  sha256=$GATE_B_SHA256  bytes=$GATE_B_BYTES"
+  fi
+  if [[ -n "$CURSOR_B_SHA256" ]]; then
+    echo "  cursor: cursor_after_run1.json  sha256=$CURSOR_B_SHA256  bytes=$CURSOR_B_BYTES"
+  fi
   echo ""
   echo "Gate C: Restart persistence"
-  echo "  cursor_load OK, cursor monotonic, cursor_last_save_ts/age_seconds present, valid JSON"
+  echo "  fill_line_count=$GATE_C_FILL_COUNT"
+  if [[ -n "$GATE_C_SHA256" ]]; then
+    echo "  metrics: gate_c_metrics.txt  sha256=$GATE_C_SHA256  bytes=$GATE_C_BYTES"
+  fi
+  if [[ -n "$CURSOR_C_SHA256" ]]; then
+    echo "  cursor: cursor_after_run2.json  sha256=$CURSOR_C_SHA256  bytes=$CURSOR_C_BYTES"
+  fi
+  echo "  monotonicity=$MONOTONICITY_RESULT"
   echo ""
 fi
+echo "NOTE: Artifacts saved under $EVIDENCE_DIR (gitignored). Do not commit."
+echo ""
 
 echo "=== Results: $PASS passed, $FAIL failed, $SKIP skipped ==="
 if [[ "$FAIL" -gt 0 ]]; then
