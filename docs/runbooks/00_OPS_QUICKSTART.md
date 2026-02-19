@@ -30,6 +30,24 @@ bash scripts/ops_fill_triage.sh -h           # help
 
 The wrapper does **not** change the underlying script output or evidence format. It runs the script, shows its output live, then prints where artifacts landed and what to do next.
 
+### Risk triage (one command)
+
+```bash
+bash scripts/ops_risk_triage.sh <mode>
+```
+
+| Mode | What it runs | API keys | Runtime |
+|------|-------------|----------|---------|
+| `killswitch-drawdown` | `fire_drill_risk_killswitch_drawdown.sh` | No | ~2s |
+| `budget-limits` | `fire_drill_reconcile_budget_limits.sh` | No | ~2s |
+
+```bash
+# Examples
+bash scripts/ops_risk_triage.sh killswitch-drawdown  # kill-switch + drawdown proof
+bash scripts/ops_risk_triage.sh budget-limits        # budget enforcement proof
+bash scripts/ops_risk_triage.sh -h                   # help
+```
+
 ---
 
 ## What to run first (without wrapper)
@@ -60,7 +78,9 @@ All evidence scripts write to `.artifacts/.../<timestamp>/`:
 
 ```
 .artifacts/fill_ingest_staging/<YYYYMMDDTHHMMSS>/    # staging smoke
-.artifacts/fill_alert_fire_drill/<YYYYMMDDTHHMMSS>/  # fire drill
+.artifacts/fill_alert_fire_drill/<YYYYMMDDTHHMMSS>/  # fill alert fire drill
+.artifacts/risk_fire_drill/<YYYYMMDDTHHMMSS>/        # kill-switch + drawdown drill
+.artifacts/budget_fire_drill/<YYYYMMDDTHHMMSS>/      # budget limits drill
 ```
 
 The `.artifacts/` directory is **gitignored**. Do not commit evidence files.
@@ -164,6 +184,8 @@ bash scripts/<script_name>.sh
 | Topic | Runbook |
 |-------|---------|
 | Fill tracker metrics and alerts | [26_FILL_TRACKER_TRIAGE.md](26_FILL_TRACKER_TRIAGE.md) |
+| Kill-switch and drawdown | [04_KILL_SWITCH.md](04_KILL_SWITCH.md) |
+| Active remediation and budget limits | [12_ACTIVE_REMEDIATION.md](12_ACTIVE_REMEDIATION.md) |
 | Evidence artifact index | [00_EVIDENCE_INDEX.md](00_EVIDENCE_INDEX.md) |
 | General alert response | [06_ALERT_RESPONSE.md](06_ALERT_RESPONSE.md) |
 | Health checks | [02_HEALTH_TRIAGE.md](02_HEALTH_TRIAGE.md) |

@@ -234,6 +234,8 @@ limits misfire in prod, check config values vs actual notional sizes.
   sha256sums.txt           # Full 64-char sha256 of all artifact files
 ```
 
+One-command wrapper: `bash scripts/ops_risk_triage.sh budget-limits`
+
 See also: [Ops Quickstart](00_OPS_QUICKSTART.md) | [Evidence Index](00_EVIDENCE_INDEX.md)
 
 ---

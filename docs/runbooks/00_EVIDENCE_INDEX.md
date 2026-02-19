@@ -92,4 +92,6 @@ Gate B/C artifacts only present when `BINANCE_API_KEY` and `BINANCE_API_SECRET` 
 - Each run creates a timestamped subdirectory. Old runs are not auto-deleted.
 - `sha256sums.txt` (fire drill) and inline sha256/bytes (staging smoke) provide integrity proof.
 - All scripts exit non-zero on any failure.
-- **Triage wrapper**: `bash scripts/ops_fill_triage.sh <mode>` runs the right script, surfaces `evidence_dir`, and prints next-step pointers. See [Ops Quickstart](00_OPS_QUICKSTART.md).
+- **Fill triage wrapper**: `bash scripts/ops_fill_triage.sh <mode>` runs the right fill script, surfaces `evidence_dir`, and prints next-step pointers.
+- **Risk triage wrapper**: `bash scripts/ops_risk_triage.sh <mode>` runs the right risk script (`killswitch-drawdown` or `budget-limits`).
+- See [Ops Quickstart](00_OPS_QUICKSTART.md) for one-command examples.
