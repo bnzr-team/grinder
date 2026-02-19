@@ -99,7 +99,9 @@ class TestForbiddenLabels:
 class TestAllowlistedLabelsOnly:
     """Only allowed label keys appear in fill metrics output."""
 
-    ALLOWED_LABEL_KEYS: frozenset[str] = frozenset({"source", "side", "liquidity", "reason", "result"})
+    ALLOWED_LABEL_KEYS: frozenset[str] = frozenset(
+        {"source", "side", "liquidity", "reason", "result"}
+    )
 
     def test_only_allowed_labels(self) -> None:
         fm = FillMetrics()
