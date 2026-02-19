@@ -6,6 +6,8 @@ Operational runbooks for GRINDER trading system.
 
 | Runbook | Description |
 |---------|-------------|
+| [00_OPS_QUICKSTART](00_OPS_QUICKSTART.md) | Operator quickstart: alert → script → evidence (Launch-07) |
+| [00_EVIDENCE_INDEX](00_EVIDENCE_INDEX.md) | Evidence artifact index: scripts, paths, key files (Launch-07) |
 | [01_STARTUP_SHUTDOWN](01_STARTUP_SHUTDOWN.md) | How to start and stop GRINDER |
 | [02_HEALTH_TRIAGE](02_HEALTH_TRIAGE.md) | Quick health checks and diagnostics |
 | [03_METRICS_DASHBOARDS](03_METRICS_DASHBOARDS.md) | Prometheus metrics and Grafana dashboards |
