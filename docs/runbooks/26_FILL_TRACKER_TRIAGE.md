@@ -411,14 +411,63 @@ curl -sf http://localhost:9090/metrics > /tmp/metrics_snapshot_$(date +%s).txt
 
 ---
 
+## Fire drill verification
+
+The fire drill script (`scripts/fire_drill_fill_alerts.sh`) deterministically triggers two fill alert scenarios locally, without API keys or real exchange calls. Use it to verify that the alert **input signals** are correctly produced by the code paths the alerts watch.
+
+This does **not** wait for the 30-minute alert threshold; it proves the alert's inputs are correct.
+
+### What it tests
+
+| Drill | Alert simulated | Mechanism | Key assertion |
+|-------|----------------|-----------|---------------|
+| A | FillCursorNonMonotonicRejected | Write cursor with LOW `(trade_id, ts_ms)` against HIGH existing file | Cursor unchanged, `rejected_non_monotonic` counter > 0, log contains `FILL_CURSOR_REJECTED_NON_MONOTONIC` |
+| B | FillCursorStuck | `chmod 0400` cursor file after initial successful save, then attempt writes | `cursor_save{result="error"}` > 0, `cursor_age_seconds` grows between scrapes |
+
+### How to run
+
+```bash
+bash scripts/fire_drill_fill_alerts.sh
+```
+
+No API keys needed. No environment variables required. Takes ~10 seconds (6s of `sleep` in Drill B).
+
+### Artifact inventory
+
+```
+.artifacts/fill_alert_fire_drill/<YYYYMMDDTHHMMSS>/
+  cursor_before_drill_a.json    # Cursor with HIGH tuple (before rejection attempt)
+  cursor_after_drill_a.json     # Cursor after rejection (should match before)
+  cursor_drill_a.json           # Working cursor file used during Drill A
+  drill_a_metrics.txt           # Prometheus metrics after Drill A
+  drill_a_log.txt               # Captured stderr (FILL_CURSOR_REJECTED_NON_MONOTONIC)
+  cursor_drill_b.json           # Cursor used for Drill B
+  drill_b_metrics_1.txt         # Scrape 1: after initial successful save
+  drill_b_metrics_2.txt         # Scrape 2: after failed saves + time passage
+  drill_b_log.txt               # Captured stderr from Drill B
+  summary.txt                   # Copy/paste evidence block with exact metric lines
+  sha256sums.txt                # Full 64-char sha256 of all artifact files
+```
+
+### Interpreting failures
+
+- **Drill A: cursor changed** -- monotonicity guard in `save_fill_cursor()` is broken. Check the `(last_trade_id, last_ts_ms)` tuple comparison logic.
+- **Drill A: no rejected counter** -- `FillMetrics.inc_cursor_save()` not called on the rejection path.
+- **Drill B: no error counter** -- `PermissionError` not caught as `OSError`, or `inc_cursor_save(source, "error")` not called in the exception handler.
+- **Drill B: age not growing** -- `cursor_last_save_ts` not set during initial save, or `cursor_age_seconds` rendering broken, or wrong `source=` label.
+- **Drill B passes but FillCursorStuck fires in prod** -- check alert expression thresholds vs reconcile interval. The drill proves inputs are correct; the alert threshold may need tuning.
+
+---
+
 ## Companion scripts
 
 | Script | Purpose | API keys needed |
 |--------|---------|-----------------|
 | `scripts/smoke_fill_ingest.sh` | Local CI smoke (FakePort) — validates metric wiring | No |
 | `scripts/smoke_fill_ingest_staging.sh` | Staging dry-run — validates real Binance reads + cursor persistence | Yes |
+| `scripts/fire_drill_fill_alerts.sh` | Deterministic alert input proof -- triggers non-monotonic rejection + cursor stuck | No |
 
-Both scripts print PASS/FAIL and exit non-zero on failure.
+All scripts print PASS/FAIL and exit non-zero on failure.
 
 ---
 
