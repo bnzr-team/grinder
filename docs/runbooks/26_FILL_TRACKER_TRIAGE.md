@@ -20,6 +20,32 @@ Health / operational metrics (PR3):
 
 ---
 
+## Safety invariants
+
+These invariants MUST hold for any PR touching fill ingest code:
+
+1. **metrics-out artifact MUST include `grinder_fill_*` alongside reconcile metrics.** The `--metrics-out` file writes both `metrics.to_prometheus_lines()` and `fill_metrics.to_prometheus_lines()`.
+
+2. **Zero write ops in fill code.** Fill ingestion is read-only. Verify with:
+
+   ```bash
+   rg -n 'place_order|cancel_order|replace_order' \
+     src/grinder/execution/fill_cursor.py \
+     src/grinder/execution/fill_ingest.py \
+     src/grinder/observability/fill_metrics.py
+   ```
+
+3. **Broader write-op grep** (for PRs touching REST call sites):
+
+   ```bash
+   rg -n 'POST\s+/fapi|newOrder|DELETE\s+/fapi|/order' \
+     src/grinder/execution src/grinder/net scripts
+   ```
+
+4. **No forbidden labels** (`symbol=`, `order_id=`, `client_id=`, `trade_id=`) in fill metrics output.
+
+---
+
 ## Alert rules
 
 | Alert | Severity | Condition | Meaning |
@@ -168,6 +194,29 @@ curl -sf http://localhost:9090/metrics | grep grinder_fills_total
 
 ---
 
+## Quiet market semantics
+
+When the market is quiet (no new fills), this is **normal and expected**:
+
+| Metric | Quiet market behavior | Meaning |
+|--------|----------------------|---------|
+| `grinder_fill_ingest_polls_total` | **Increases** | Reconcile loop is running, polling API |
+| `grinder_fill_ingest_enabled` | **1** (if ON) | Feature is active |
+| `grinder_fills_total` | **Unchanged** | No new fills to count |
+| `grinder_fill_notional_total` | **Unchanged** | No new notional |
+| `grinder_fill_cursor_save_total` | **Unchanged** | Cursor only saves when new fills arrive |
+| `grinder_fill_cursor_load_total` | **Increments on restart only** | Cursor loaded once at startup |
+
+**What pages and what doesn't:**
+
+- **Pages**: No polls while `enabled==1` (FillIngestNoPolls) — loop is stuck or HTTP dead. Cursor save errors (FillCursorSaveErrors) — data loss risk.
+- **Warns**: HTTP errors > 3 (FillIngestHttpErrors) — degraded connectivity. Parse errors (FillParseErrors) — Binance schema drift.
+- **Does NOT page**: Quiet market (no new fills). Ingest disabled (FillIngestDisabled = warning only).
+
+**Key insight**: Polls growing + fills not growing = quiet market (safe). Polls NOT growing + enabled = 1 = problem (page).
+
+---
+
 ## What "good" looks like
 
 ### Feature OFF (FILL_INGEST_ENABLED unset or "0")
@@ -281,3 +330,14 @@ curl -sf http://localhost:9090/metrics | grep grinder_reconcile_runs_total
 # 8. Full metrics snapshot (for archival)
 curl -sf http://localhost:9090/metrics > /tmp/metrics_snapshot_$(date +%s).txt
 ```
+
+---
+
+## Companion scripts
+
+| Script | Purpose | API keys needed |
+|--------|---------|-----------------|
+| `scripts/smoke_fill_ingest.sh` | Local CI smoke (FakePort) — validates metric wiring | No |
+| `scripts/smoke_fill_ingest_staging.sh` | Staging dry-run — validates real Binance reads + cursor persistence | Yes |
+
+Both scripts print PASS/FAIL and exit non-zero on failure.
