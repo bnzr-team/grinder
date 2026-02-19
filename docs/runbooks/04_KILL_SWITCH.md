@@ -217,6 +217,8 @@ check alert expression thresholds vs actual drawdown values.
   sha256sums.txt           # Full 64-char sha256 of all artifact files
 ```
 
+One-command wrapper: `bash scripts/ops_risk_triage.sh killswitch-drawdown`
+
 See also: [Ops Quickstart](00_OPS_QUICKSTART.md) | [Evidence Index](00_EVIDENCE_INDEX.md)
 
 ---
