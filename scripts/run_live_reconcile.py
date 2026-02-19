@@ -954,8 +954,9 @@ def main() -> int:  # noqa: PLR0915, PLR0912
 
     # Save metrics to file if configured (Prometheus text format)
     if artifact_paths.metrics_out:
-        # Get Prometheus lines from reconcile metrics
+        # Get Prometheus lines from reconcile metrics + fill metrics
         prom_lines = metrics.to_prometheus_lines()
+        prom_lines.extend(fill_metrics.to_prometheus_lines())
         # Add summary metrics as comments for debugging
         prom_lines.append("")
         prom_lines.append("# run_live_reconcile summary")
