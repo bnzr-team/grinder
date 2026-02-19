@@ -113,6 +113,10 @@ executor = RemediationExecutor(
 | `max_symbols_reached` | Hit max_symbols_per_action | Wait for next run |
 | `whitelist_required` | Empty whitelist | Configure symbol_whitelist |
 | `port_error` | Exchange API error | Check connectivity, credentials |
+| `max_calls_per_run` | Hit per-run call limit | Wait for next run |
+| `max_notional_per_run` | Cumulative notional exceeds per-run cap | Wait for next run |
+| `max_calls_per_day` | Hit per-day call limit | Wait for next UTC day |
+| `max_notional_per_day` | Cumulative notional exceeds per-day cap | Wait for next UTC day |
 
 ## Troubleshooting
 
@@ -197,6 +201,42 @@ Before enabling active remediation in production:
 - [ ] Notional limits appropriate for position sizes
 - [ ] Alerting configured for blocked actions
 - [ ] Team aware of active remediation go-live
+
+## Fire drill verification
+
+A deterministic, CI-safe fire drill proves that budget enforcement gates
+block execution correctly and metrics reflect the block reasons:
+
+```bash
+bash scripts/fire_drill_reconcile_budget_limits.sh
+```
+
+| Drill | What it proves | Key assertions |
+|-------|---------------|----------------|
+| A: Per-run notional cap | BudgetTracker blocks when cumulative notional exceeds per-run limit, metrics record `max_notional_per_run` block reason | 9 checks |
+| B: Per-day notional cap | Per-day cap persists across run resets, blocks cumulative spend, UTC date key proven, smaller amounts still allowed within remaining budget | 12 checks |
+
+This verifies **budget gate behavior, block reason mapping, and metrics rendering**,
+not exchange connectivity or remediation execution. If the drill passes but budget
+limits misfire in prod, check config values vs actual notional sizes.
+
+### Artifact inventory
+
+```
+.artifacts/budget_fire_drill/<YYYYMMDDTHHMMSS>/
+  drill_a_metrics.txt      # Full Prometheus text after per-run cap block
+  drill_a_log.txt          # Captured stderr (budget checks, block decisions)
+  drill_a_state.json       # BudgetTracker state file (persistence proof)
+  drill_b_metrics.txt      # Full Prometheus text after per-day cap block
+  drill_b_log.txt          # Captured stderr (cross-run blocking, day key)
+  drill_b_state.json       # BudgetTracker state file (cross-run persistence)
+  summary.txt              # Copy/paste evidence block with exact metric lines
+  sha256sums.txt           # Full 64-char sha256 of all artifact files
+```
+
+See also: [Ops Quickstart](00_OPS_QUICKSTART.md) | [Evidence Index](00_EVIDENCE_INDEX.md)
+
+---
 
 ## See Also
 
