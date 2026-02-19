@@ -7,6 +7,7 @@
 #   fire-drill             -> fire_drill_fill_alerts.sh
 #   connector-market-data  -> fire_drill_connector_market_data.sh
 #   connector-exchange-port -> fire_drill_connector_exchange_port.sh
+#   all                    -> runs connector-market-data + connector-exchange-port sequentially
 #
 # Does NOT invent a new evidence format -- runs the underlying script,
 # surfaces its evidence_dir, and prints next-step pointers.
@@ -22,6 +23,7 @@
 #   fire-drill             No API keys. Proves alert inputs are produced (~10s).
 #   connector-market-data  No API keys. L2 parse, DQ, symbol whitelist (~2s).
 #   connector-exchange-port No API keys. Gate chain, idempotency, retry (~2s).
+#   all                    Runs connector-market-data + connector-exchange-port (~4s).
 #
 # Exit codes:
 #   0  All checks passed
@@ -60,6 +62,7 @@ Modes:
   fire-drill              Deterministic alert input proof (no API keys needed)
   connector-market-data   L2 parse, DQ staleness/gaps/outliers, symbol whitelist
   connector-exchange-port Gate chain, idempotency cache, retry classification
+  all                     Run all connector modes sequentially (~4s)
 
 Options:
   -h, --help       Show this help and exit
@@ -72,8 +75,9 @@ Examples:
   bash scripts/ops_fill_triage.sh connector-market-data
   bash scripts/ops_fill_triage.sh connector-exchange-port
   bash scripts/ops_fill_triage.sh connector-market-data --no-status
+  bash scripts/ops_fill_triage.sh all
 
-No API keys needed for local, fire-drill, or connector modes.
+No API keys needed for local, fire-drill, connector, or all modes.
 Evidence artifacts are saved under .artifacts/... (gitignored). Do not commit.
 
 Docs:
@@ -129,7 +133,112 @@ if [[ -z "$MODE" ]]; then
 fi
 
 # =========================================================================
-# Mode dispatch
+# Batch mode: "all" runs connector modes sequentially
+# =========================================================================
+
+if [[ "$MODE" == "all" ]]; then
+  ALL_MODES=("connector-market-data" "connector-exchange-port")
+  ALL_SCRIPTS=("fire_drill_connector_market_data.sh" "fire_drill_connector_exchange_port.sh")
+  ALL_LABELS=("Market data connector fire drill" "Exchange port boundary fire drill")
+
+  TOTAL=${#ALL_MODES[@]}
+  PASS_COUNT=0
+  FAIL_COUNT=0
+  FAILED_MODES=()
+  EVIDENCE_DIRS=()
+
+  BATCH_START=$(date +%s)
+
+  for i in "${!ALL_MODES[@]}"; do
+    SUB_MODE="${ALL_MODES[$i]}"
+    SUB_SCRIPT="$SCRIPT_DIR/${ALL_SCRIPTS[$i]}"
+    SUB_LABEL="${ALL_LABELS[$i]}"
+
+    print_header "$SUB_LABEL"
+
+    SUB_START=$(date +%s)
+    SUB_RC=0
+    SUB_OUTPUT_FILE="$(mktemp)"
+
+    bash "$SUB_SCRIPT" 2>&1 | tee "$SUB_OUTPUT_FILE" || SUB_RC=$?
+
+    SUB_OUTPUT="$(cat "$SUB_OUTPUT_FILE")"
+    rm -f "$SUB_OUTPUT_FILE"
+
+    SUB_END=$(date +%s)
+    SUB_ELAPSED=$((SUB_END - SUB_START))
+
+    echo ""
+
+    if [[ "$SUB_RC" -ne 0 ]]; then
+      echo "========================================"
+      echo "  FAILED: $SUB_MODE (exit code $SUB_RC)"
+      echo "  elapsed: ${SUB_ELAPSED}s"
+      echo "========================================"
+      FAIL_COUNT=$((FAIL_COUNT + 1))
+      FAILED_MODES+=("$SUB_MODE")
+      EVIDENCE_DIRS+=("FAILED")
+    else
+      SUB_EVIDENCE="$(extract_evidence_dir "$SUB_OUTPUT")"
+      echo "========================================"
+      echo "  PASSED: $SUB_MODE"
+      echo "  elapsed: ${SUB_ELAPSED}s"
+      if [[ -n "$SUB_EVIDENCE" ]]; then
+        echo "  evidence_dir: $SUB_EVIDENCE"
+      fi
+      echo "========================================"
+      PASS_COUNT=$((PASS_COUNT + 1))
+      EVIDENCE_DIRS+=("${SUB_EVIDENCE:-UNKNOWN}")
+    fi
+    echo ""
+  done
+
+  BATCH_END=$(date +%s)
+  BATCH_ELAPSED=$((BATCH_END - BATCH_START))
+
+  # Aggregated summary.
+  echo "========================================"
+  if [[ "$FAIL_COUNT" -eq 0 ]]; then
+    echo "  ALL PASSED ($PASS_COUNT/$TOTAL)"
+  else
+    echo "  SOME FAILED ($PASS_COUNT passed, $FAIL_COUNT failed out of $TOTAL)"
+    echo "  failed: ${FAILED_MODES[*]}"
+  fi
+  echo "  total elapsed: ${BATCH_ELAPSED}s"
+  echo "========================================"
+  echo ""
+
+  # Per-mode evidence directories.
+  for i in "${!ALL_MODES[@]}"; do
+    if [[ "${EVIDENCE_DIRS[$i]}" != "FAILED" ]] && [[ "${EVIDENCE_DIRS[$i]}" != "UNKNOWN" ]]; then
+      echo "  ${ALL_MODES[$i]}: ${EVIDENCE_DIRS[$i]}"
+    fi
+  done
+  echo ""
+
+  # Git status guardrail.
+  if [[ "$SKIP_STATUS" -eq 0 ]]; then
+    if git status --porcelain 2>/dev/null | grep -qF ".artifacts/"; then
+      echo "WARNING: .artifacts/ appears in git status (gitignore may be broken)"
+      git status --porcelain 2>/dev/null | grep -F ".artifacts/" | head -5
+      echo ""
+    fi
+  fi
+
+  echo "NEXT STEPS:"
+  echo "  - Paste summary.txt + sha256sums.txt from each evidence_dir into PR body"
+  echo "  - Quickstart: docs/runbooks/00_OPS_QUICKSTART.md"
+  echo "  - Evidence index: docs/runbooks/00_EVIDENCE_INDEX.md"
+  echo ""
+
+  if [[ "$FAIL_COUNT" -gt 0 ]]; then
+    exit 1
+  fi
+  exit 0
+fi
+
+# =========================================================================
+# Mode dispatch (single mode)
 # =========================================================================
 
 case "$MODE" in
@@ -164,7 +273,7 @@ case "$MODE" in
     TRIAGE_DOC="docs/runbooks/00_EVIDENCE_INDEX.md"
     ;;
   *)
-    die "Unknown mode: '$MODE'. Valid modes: local, staging, fire-drill, connector-market-data, connector-exchange-port (try -h for help)"
+    die "Unknown mode: '$MODE'. Valid modes: local, staging, fire-drill, connector-market-data, connector-exchange-port, all (try -h for help)"
     ;;
 esac
 
