@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
-# ops_fill_triage.sh -- One-command fill triage wrapper (Launch-07 PR2).
+# ops_fill_triage.sh -- Unified ops triage entrypoint (Launch-11 PR1).
 #
-# Single entrypoint for all fill evidence scripts:
-#   local      -> smoke_fill_ingest.sh       (FakePort, no API keys)
-#   staging    -> smoke_fill_ingest_staging.sh (Gate A always; B/C if creds)
-#   fire-drill -> fire_drill_fill_alerts.sh   (deterministic alert input proof)
+# Single entrypoint for fill + connector evidence scripts:
+#   local                  -> smoke_fill_ingest.sh
+#   staging                -> smoke_fill_ingest_staging.sh
+#   fire-drill             -> fire_drill_fill_alerts.sh
+#   connector-market-data  -> fire_drill_connector_market_data.sh
+#   connector-exchange-port -> fire_drill_connector_exchange_port.sh
 #
 # Does NOT invent a new evidence format -- runs the underlying script,
 # surfaces its evidence_dir, and prints next-step pointers.
@@ -14,10 +16,12 @@
 #   bash scripts/ops_fill_triage.sh -h|--help
 #
 # Modes:
-#   local       No API keys needed. Validates metric wiring via FakePort (~5s).
-#   staging     Gate A always; B/C require BINANCE_API_KEY + BINANCE_API_SECRET
-#               + ALLOW_MAINNET_TRADE=1.  (~2 min full, ~10s Gate A only).
-#   fire-drill  No API keys needed. Proves alert inputs are produced (~10s).
+#   local                  No API keys. Validates metric wiring via FakePort (~5s).
+#   staging                Gate A always; B/C require BINANCE_API_KEY +
+#                          BINANCE_API_SECRET + ALLOW_MAINNET_TRADE=1 (~2 min).
+#   fire-drill             No API keys. Proves alert inputs are produced (~10s).
+#   connector-market-data  No API keys. L2 parse, DQ, symbol whitelist (~2s).
+#   connector-exchange-port No API keys. Gate chain, idempotency, retry (~2s).
 #
 # Exit codes:
 #   0  All checks passed
@@ -51,9 +55,11 @@ print_usage() {
 Usage: bash scripts/ops_fill_triage.sh <mode> [options]
 
 Modes:
-  local        Local smoke test (FakePort, no API keys needed)
-  staging      Staging smoke (Gate A always; B/C if creds set)
-  fire-drill   Deterministic alert input proof (no API keys needed)
+  local                   Local smoke test (FakePort, no API keys needed)
+  staging                 Staging smoke (Gate A always; B/C if creds set)
+  fire-drill              Deterministic alert input proof (no API keys needed)
+  connector-market-data   L2 parse, DQ staleness/gaps/outliers, symbol whitelist
+  connector-exchange-port Gate chain, idempotency cache, retry classification
 
 Options:
   -h, --help       Show this help and exit
@@ -63,14 +69,16 @@ Examples:
   bash scripts/ops_fill_triage.sh local
   bash scripts/ops_fill_triage.sh fire-drill
   bash scripts/ops_fill_triage.sh staging
-  bash scripts/ops_fill_triage.sh staging --no-status
+  bash scripts/ops_fill_triage.sh connector-market-data
+  bash scripts/ops_fill_triage.sh connector-exchange-port
+  bash scripts/ops_fill_triage.sh connector-market-data --no-status
 
-Evidence artifacts (staging, fire-drill) are saved under .artifacts/...
-(gitignored). Do not commit.
+No API keys needed for local, fire-drill, or connector modes.
+Evidence artifacts are saved under .artifacts/... (gitignored). Do not commit.
 
 Docs:
-  docs/runbooks/00_OPS_QUICKSTART.md   -- Operator quickstart
-  docs/runbooks/00_EVIDENCE_INDEX.md   -- Evidence artifact index
+  docs/runbooks/00_OPS_QUICKSTART.md      -- Operator quickstart
+  docs/runbooks/00_EVIDENCE_INDEX.md      -- Evidence artifact index
   docs/runbooks/26_FILL_TRACKER_TRIAGE.md -- Fill tracker triage
 USAGE
 }
@@ -129,19 +137,34 @@ case "$MODE" in
     SCRIPT_PATH="$SCRIPT_DIR/smoke_fill_ingest.sh"
     LABEL="Local smoke (FakePort)"
     HAS_ARTIFACTS=0
+    TRIAGE_DOC="docs/runbooks/26_FILL_TRACKER_TRIAGE.md"
     ;;
   staging)
     SCRIPT_PATH="$SCRIPT_DIR/smoke_fill_ingest_staging.sh"
     LABEL="Staging smoke (Gate A always; B/C if creds)"
     HAS_ARTIFACTS=1
+    TRIAGE_DOC="docs/runbooks/26_FILL_TRACKER_TRIAGE.md"
     ;;
   fire-drill)
     SCRIPT_PATH="$SCRIPT_DIR/fire_drill_fill_alerts.sh"
     LABEL="Alert input fire drill"
     HAS_ARTIFACTS=1
+    TRIAGE_DOC="docs/runbooks/26_FILL_TRACKER_TRIAGE.md"
+    ;;
+  connector-market-data)
+    SCRIPT_PATH="$SCRIPT_DIR/fire_drill_connector_market_data.sh"
+    LABEL="Market data connector fire drill"
+    HAS_ARTIFACTS=1
+    TRIAGE_DOC="docs/runbooks/00_EVIDENCE_INDEX.md"
+    ;;
+  connector-exchange-port)
+    SCRIPT_PATH="$SCRIPT_DIR/fire_drill_connector_exchange_port.sh"
+    LABEL="Exchange port boundary fire drill"
+    HAS_ARTIFACTS=1
+    TRIAGE_DOC="docs/runbooks/00_EVIDENCE_INDEX.md"
     ;;
   *)
-    die "Unknown mode: '$MODE'. Valid modes: local, staging, fire-drill (try -h for help)"
+    die "Unknown mode: '$MODE'. Valid modes: local, staging, fire-drill, connector-market-data, connector-exchange-port (try -h for help)"
     ;;
 esac
 
@@ -182,7 +205,7 @@ if [[ "$SCRIPT_RC" -ne 0 ]]; then
   echo "========================================"
   echo ""
   echo "NEXT: check the output above for FAIL lines, then see:"
-  echo "  docs/runbooks/26_FILL_TRACKER_TRIAGE.md"
+  echo "  $TRIAGE_DOC"
   echo "  docs/runbooks/00_OPS_QUICKSTART.md"
   exit 1
 fi
@@ -244,6 +267,16 @@ case "$MODE" in
   fire-drill)
     echo "  - Paste summary.txt + sha256sums.txt into PR body or incident notes"
     echo "  - Full triage: docs/runbooks/26_FILL_TRACKER_TRIAGE.md"
+    ;;
+  connector-market-data)
+    echo "  - Paste summary.txt + sha256sums.txt into PR body or incident notes"
+    echo "  - Exchange port drill: bash scripts/ops_fill_triage.sh connector-exchange-port"
+    echo "  - Full triage: $TRIAGE_DOC"
+    ;;
+  connector-exchange-port)
+    echo "  - Paste summary.txt + sha256sums.txt into PR body or incident notes"
+    echo "  - Market data drill: bash scripts/ops_fill_triage.sh connector-market-data"
+    echo "  - Full triage: $TRIAGE_DOC"
     ;;
 esac
 echo "  - Quickstart: docs/runbooks/00_OPS_QUICKSTART.md"
