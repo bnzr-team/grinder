@@ -86,7 +86,8 @@ if [ -f /tmp/smoke_fill_on.txt ]; then
   # Check health metrics present
   for metric in grinder_fill_ingest_polls_total grinder_fill_ingest_enabled \
                 grinder_fill_ingest_errors_total grinder_fill_cursor_load_total \
-                grinder_fill_cursor_save_total; do
+                grinder_fill_cursor_save_total grinder_fill_cursor_last_save_ts \
+                grinder_fill_cursor_age_seconds; do
     if grep -q "$metric" /tmp/smoke_fill_on.txt; then
       pass "$metric present"
     else

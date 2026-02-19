@@ -1,4 +1,4 @@
-"""Tests for fill health metrics (Launch-06 PR3).
+"""Tests for fill health metrics (Launch-06 PR3, stuck detection PR6).
 
 Covers:
 - FillMetrics health counter methods (inc_ingest_polls, inc_ingest_error, etc.)
@@ -8,11 +8,14 @@ Covers:
 - Cursor metrics wiring in load/save
 - Ingest metrics wiring in parse/ingest
 - Metrics contract satisfaction
+- PR6: cursor_last_save_ts, cursor_age_seconds, rejected_non_monotonic
 """
 
 from __future__ import annotations
 
 import json
+import re
+import time
 from typing import TYPE_CHECKING, Any
 
 from grinder.execution.fill_cursor import FillCursor, load_fill_cursor, save_fill_cursor
@@ -23,7 +26,10 @@ from grinder.observability.fill_metrics import (
     INGEST_ERROR_REASONS,
     FillMetrics,
 )
-from grinder.observability.metrics_contract import REQUIRED_METRICS_PATTERNS
+from grinder.observability.metrics_contract import (
+    FILL_INGEST_SERIES_PATTERNS,
+    REQUIRED_METRICS_PATTERNS,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -122,6 +128,11 @@ class TestFillMetricsHealthCounters:
         m.inc_cursor_save("reconcile", "nope")
         assert m.cursor_saves[("reconcile", "error")] == 1
 
+    def test_set_cursor_last_save_ts(self) -> None:
+        m = FillMetrics()
+        m.set_cursor_last_save_ts("reconcile", 1700000000.0)
+        assert m.cursor_last_save_ts["reconcile"] == 1700000000.0
+
     def test_reset_clears_health_counters(self) -> None:
         m = FillMetrics()
         m.inc_ingest_polls("reconcile")
@@ -129,12 +140,14 @@ class TestFillMetricsHealthCounters:
         m.inc_ingest_error("reconcile", "parse")
         m.inc_cursor_load("reconcile", "ok")
         m.inc_cursor_save("reconcile", "ok")
+        m.set_cursor_last_save_ts("reconcile", 1700000000.0)
         m.reset()
         assert len(m.ingest_polls) == 0
         assert len(m.ingest_enabled) == 0
         assert len(m.ingest_errors) == 0
         assert len(m.cursor_loads) == 0
         assert len(m.cursor_saves) == 0
+        assert len(m.cursor_last_save_ts) == 0
 
 
 # =============================================================================
@@ -195,6 +208,45 @@ class TestFillMetricsPrometheus:
             for line in lines
         )
 
+    def test_cursor_last_save_ts_renders(self) -> None:
+        m = FillMetrics()
+        m.set_cursor_last_save_ts("reconcile", 1700000000.0)
+        lines = m.to_prometheus_lines()
+        assert any(
+            'grinder_fill_cursor_last_save_ts{source="reconcile"} 1700000000.000' in line
+            for line in lines
+        )
+
+    def test_cursor_age_seconds_renders(self) -> None:
+        m = FillMetrics()
+        m.set_cursor_last_save_ts("reconcile", time.time() - 10.0)
+        lines = m.to_prometheus_lines()
+        text = "\n".join(lines)
+        assert "grinder_fill_cursor_age_seconds" in text
+        match = re.search(r'grinder_fill_cursor_age_seconds\{source="reconcile"\} ([\d.]+)', text)
+        assert match is not None
+        age = float(match.group(1))
+        assert 5.0 < age < 30.0  # loose bounds for test timing
+
+    def test_cursor_age_placeholder_when_not_set(self) -> None:
+        m = FillMetrics()
+        lines = m.to_prometheus_lines()
+        text = "\n".join(lines)
+        assert 'grinder_fill_cursor_age_seconds{source="none"} 0' in text
+        assert 'grinder_fill_cursor_last_save_ts{source="none"} 0' in text
+
+    def test_rejected_non_monotonic_in_cursor_results(self) -> None:
+        assert "rejected_non_monotonic" in CURSOR_RESULTS
+
+    def test_no_forbidden_labels_in_new_pr6_metrics(self) -> None:
+        m = FillMetrics()
+        m.set_cursor_last_save_ts("reconcile", 1700000000.0)
+        text = "\n".join(m.to_prometheus_lines())
+        assert "symbol=" not in text
+        assert "order_id=" not in text
+        assert "client_id=" not in text
+        assert "trade_id=" not in text
+
     def test_no_forbidden_labels_in_health_metrics(self) -> None:
         m = FillMetrics()
         m.inc_ingest_polls("reconcile")
@@ -213,7 +265,7 @@ class TestFillMetricsPrometheus:
         assert expected == INGEST_ERROR_REASONS
 
     def test_result_allowlist_exhaustive(self) -> None:
-        expected = {"ok", "error"}
+        expected = {"ok", "error", "rejected_non_monotonic"}
         assert expected == CURSOR_RESULTS
 
 
@@ -329,13 +381,15 @@ class TestIngestMetricsWiring:
 
 class TestFillHealthMetricsContract:
     def test_contract_patterns_satisfied(self) -> None:
-        """All PR3 fill health patterns in metrics_contract are satisfied."""
+        """All fill health patterns in metrics_contract are satisfied."""
         m = FillMetrics()
         m.inc_ingest_polls("reconcile")
         m.set_ingest_enabled("reconcile", True)
         m.inc_ingest_error("reconcile", "parse")
         m.inc_cursor_load("reconcile", "ok")
         m.inc_cursor_save("reconcile", "ok")
+        # PR6: cursor stuck detection metrics
+        m.set_cursor_last_save_ts("reconcile", time.time())
 
         # Also add a fill event so all fill patterns work
         m.record_fill("reconcile", "buy", "taker", 100.0, 0.05)
@@ -346,6 +400,10 @@ class TestFillHealthMetricsContract:
         fill_patterns = [p for p in REQUIRED_METRICS_PATTERNS if "fill" in p.lower()]
         for pattern in fill_patterns:
             assert pattern in text, f"Missing contract pattern: {pattern}"
+
+        # PR6: source="reconcile" series patterns (separated from REQUIRED_METRICS_PATTERNS)
+        for pattern in FILL_INGEST_SERIES_PATTERNS:
+            assert pattern in text, f"Missing ingest series pattern: {pattern}"
 
     def test_full_pipeline_with_health(self) -> None:
         """Full pipeline: ingest with metrics -> push -> contract check."""
@@ -359,6 +417,8 @@ class TestFillHealthMetricsContract:
         ingest_fills(trades, tracker, cursor, fill_metrics=m)
         push_tracker_to_metrics(tracker, m)
         m.inc_cursor_save("reconcile", "ok")
+        # PR6: cursor stuck detection metrics
+        m.set_cursor_last_save_ts("reconcile", time.time())
 
         lines = m.to_prometheus_lines()
         text = "\n".join(lines)
@@ -366,3 +426,7 @@ class TestFillHealthMetricsContract:
         fill_patterns = [p for p in REQUIRED_METRICS_PATTERNS if "fill" in p.lower()]
         for pattern in fill_patterns:
             assert pattern in text, f"Missing contract pattern: {pattern}"
+
+        # PR6: source="reconcile" series patterns
+        for pattern in FILL_INGEST_SERIES_PATTERNS:
+            assert pattern in text, f"Missing ingest series pattern: {pattern}"

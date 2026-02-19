@@ -12,11 +12,15 @@ Health / operational metrics (PR3):
 - `grinder_fill_ingest_enabled{source}` — 1 if ingest is on, 0 otherwise
 - `grinder_fill_ingest_errors_total{source,reason}` — errors (http/parse/cursor/unknown)
 - `grinder_fill_cursor_load_total{source,result}` — cursor load ok/error
-- `grinder_fill_cursor_save_total{source,result}` — cursor save ok/error
+- `grinder_fill_cursor_save_total{source,result}` — cursor save ok/error/rejected_non_monotonic
 
-**Labels**: `source` (reconcile/sim/manual/none), `side` (buy/sell/none), `liquidity` (maker/taker/none), `reason` (http/parse/cursor/unknown), `result` (ok/error).
+Cursor stuck detection (PR6):
+- `grinder_fill_cursor_last_save_ts{source}` — epoch seconds of last successful cursor save
+- `grinder_fill_cursor_age_seconds{source}` — seconds since last save (computed at scrape time)
 
-**Current state (Launch-06 PR3)**: FillTracker is wired into the reconcile loop with health metrics and alert rules. When `FILL_INGEST_ENABLED=1`, each reconcile iteration fetches `userTrades` from Binance, ingests them into FillTracker, and pushes counters to FillMetrics. A persistent cursor file (`FILL_CURSOR_PATH`) prevents re-reading trades after restarts.
+**Labels**: `source` (reconcile/sim/manual/none), `side` (buy/sell/none), `liquidity` (maker/taker/none), `reason` (http/parse/cursor/unknown), `result` (ok/error/rejected_non_monotonic).
+
+**Current state (Launch-06 PR6)**: FillTracker is wired into the reconcile loop with health metrics and alert rules. When `FILL_INGEST_ENABLED=1`, each reconcile iteration fetches `userTrades` from Binance, ingests them into FillTracker, and pushes counters to FillMetrics. A persistent cursor file (`FILL_CURSOR_PATH`) prevents re-reading trades after restarts. The cursor is saved on every successful poll (not just when new trades arrive), keeping `cursor_age_seconds` fresh during quiet markets. A monotonicity guard rejects backward cursor writes using tuple comparison `(last_trade_id, last_ts_ms)`.
 
 ---
 
@@ -70,6 +74,8 @@ These invariants MUST hold for any PR touching fill ingest code:
 | FillCursorSaveErrors | page | `cursor_save{result="error"} > 0` in 10m | Dedup at risk after restart |
 | FillParseErrors | warning | `errors{reason="parse"} > 0` in 10m | Binance schema drift |
 | FillIngestHttpErrors | warning | `errors{reason="http"} > 3` in 10m | Network/API issues |
+| FillCursorStuck | warning | `cursor_age > 1800s` AND `enabled == 1` AND `polls > 0` AND no save errors/rejects in 30m | Cursor not saved for 30+ min despite active polling |
+| FillCursorNonMonotonicRejected | warning | `cursor_save{result="rejected_non_monotonic"} > 0` in 30m | Backward cursor write rejected (data corruption or logic bug) |
 
 ---
 
@@ -219,16 +225,38 @@ When the market is quiet (no new fills), this is **normal and expected**:
 | `grinder_fill_ingest_enabled` | **1** (if ON) | Feature is active |
 | `grinder_fills_total` | **Unchanged** | No new fills to count |
 | `grinder_fill_notional_total` | **Unchanged** | No new notional |
-| `grinder_fill_cursor_save_total` | **Unchanged** | Cursor only saves when new fills arrive |
+| `grinder_fill_cursor_save_total` | **Increases every poll** | Cursor saved every poll (PR6), `updated_at_ms` always fresh |
 | `grinder_fill_cursor_load_total` | **Increments on restart only** | Cursor loaded once at startup |
+| `grinder_fill_cursor_last_save_ts` | **Updates every poll** | Epoch seconds of last save — stays fresh |
+| `grinder_fill_cursor_age_seconds` | **Low** (<30s typical) | Seconds since last save — stays low during quiet markets |
 
 **What pages and what doesn't:**
 
 - **Pages**: No polls while `enabled==1` (FillIngestNoPolls) — loop is stuck or HTTP dead. Cursor save errors (FillCursorSaveErrors) — data loss risk.
-- **Warns**: HTTP errors > 3 (FillIngestHttpErrors) — degraded connectivity. Parse errors (FillParseErrors) — Binance schema drift.
+- **Warns**: HTTP errors > 3 (FillIngestHttpErrors) — degraded connectivity. Parse errors (FillParseErrors) — Binance schema drift. Cursor stuck (FillCursorStuck) — saves not happening. Non-monotonic cursor rejected (FillCursorNonMonotonicRejected) — data corruption.
 - **Does NOT page**: Quiet market (no new fills). Ingest disabled (FillIngestDisabled = warning only).
 
 **Key insight**: Polls growing + fills not growing = quiet market (safe). Polls NOT growing + enabled = 1 = problem (page).
+
+### NoPolls vs QuietMarket vs CursorStuck
+
+| Condition | enabled | polls growing? | cursor_age_seconds | Diagnosis |
+|-----------|:---:|:---:|:---:|:--|
+| Feature OFF | 0 | No | N/A | Normal |
+| NoPolls | 1 | **No** | Growing | Loop stuck — pages |
+| Quiet Market | 1 | Yes | **Low** (<30s) | Normal — cursor saved every poll |
+| CursorStuck | 1 | Yes | **High** (>1800s) | Save failing — warns |
+
+**Note on `cursor_age_seconds == 0` with `enabled == 1`**: This means no successful save/poll has occurred yet (startup state). Check NoPolls and HttpErrors first — the loop may not have completed its first iteration.
+
+### Thresholds
+
+| Metric | Default threshold | Notes |
+|--------|-------------------|-------|
+| FillCursorStuck | `cursor_age > 1800s` (30 min) | Valid when reconcile interval ≤ 5m. For reconcile ≥ 10m, adjust to ≥ 6× interval. |
+| FillCursorNonMonotonicRejected | any `> 0` in 30m | Any backward cursor write is unexpected |
+| FillCursorSaveErrors | any `> 0` in 10m | Pages — disk/permission issue |
+| FillIngestNoPolls | `polls == 0` for 10m | Pages — loop stuck |
 
 ---
 
@@ -255,7 +283,9 @@ grinder_fill_notional_total{source="reconcile",side="buy",liquidity="taker"} 123
 grinder_fill_fees_total{source="reconcile",side="buy",liquidity="taker"} 4.93
 grinder_fill_ingest_polls_total{source="reconcile"} 120
 grinder_fill_ingest_enabled{source="reconcile"} 1
-grinder_fill_cursor_save_total{source="reconcile",result="ok"} 42
+grinder_fill_cursor_save_total{source="reconcile",result="ok"} 120
+grinder_fill_cursor_last_save_ts{source="reconcile"} 1700000120.000
+grinder_fill_cursor_age_seconds{source="reconcile"} 5.123
 ```
 
 ---
@@ -315,6 +345,39 @@ If fills seem to repeat after restart or skip trades:
 1. Check `grinder_fill_cursor_save_total{result="error"}` — if > 0, disk issue.
 2. Check directory exists and is writable: `ls -la $(dirname $FILL_CURSOR_PATH)`
 3. Check disk space: `df -h $(dirname $FILL_CURSOR_PATH)`
+
+### FillCursorStuck
+
+The cursor has not been saved for 30+ minutes despite active polling.
+
+**First check** (before anything else):
+1. `grinder_fill_cursor_save_total{source="reconcile",result="error"}` — if non-zero, that's the root cause (disk/permissions). See "Cursor not writing" above.
+2. `grinder_fill_cursor_save_total{source="reconcile",result="rejected_non_monotonic"}` — if non-zero, the monotonicity guard is rejecting writes. See "FillCursorNonMonotonicRejected" below.
+
+If both are zero (genuine stuck):
+3. Check logs for `FILL_CURSOR` entries: `docker logs grinder --since 30m 2>&1 | grep FILL_CURSOR`
+4. Check cursor file permissions: `ls -la $FILL_CURSOR_PATH`
+5. Check disk space: `df -h $(dirname $FILL_CURSOR_PATH)`
+6. Check if the reconcile loop is reaching the save point: `grinder_fill_ingest_polls_total` should be growing.
+
+**Note**: This alert is suppressed when `cursor_save{result=~"error|rejected_non_monotonic"}` is growing — those have their own alerts (FillCursorSaveErrors, FillCursorNonMonotonicRejected).
+
+### FillCursorNonMonotonicRejected
+
+A cursor write was rejected because the new `(trade_id, ts_ms)` tuple is less than the existing cursor file.
+
+**Cursor monotonicity key**: `(last_trade_id, last_ts_ms)` — lexicographic tuple comparison. We assume `trade_id` does not regress within a single account; the monotonicity guard protects against cursor regression regardless of external ordering guarantees.
+
+Triage:
+1. Check cursor file: `cat $FILL_CURSOR_PATH` — note the current `last_trade_id` and `last_ts_ms`.
+2. Check logs for `FILL_CURSOR_REJECTED_NON_MONOTONIC` — logs include `existing_key` and `new_key` (integer tuples, safe to log).
+3. Possible causes:
+   - **Cursor file manually edited** with a future value
+   - **Clock skew** between processes writing the same cursor file
+   - **Logic bug** in ingest pipeline producing backward trade IDs
+4. To recover: delete the cursor file and restart. This will re-read recent trades (dedup in FillTracker handles duplicates).
+
+**Logging safety**: Extra fields logged are `path` (filename), `existing_key`/`new_key` (integer tuples). No secrets, no file contents, no API keys.
 
 ---
 

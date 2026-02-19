@@ -1,4 +1,4 @@
-"""Fill tracking metrics (Launch-06 PR1, health metrics added in PR3).
+"""Fill tracking metrics (Launch-06 PR1, health metrics PR3, stuck detection PR6).
 
 Provides Prometheus-format counters for fill events:
 - grinder_fills_total{source,side,liquidity}
@@ -12,6 +12,10 @@ Health / operational metrics (PR3):
 - grinder_fill_cursor_load_total{source,result}
 - grinder_fill_cursor_save_total{source,result}
 
+Cursor stuck detection (PR6):
+- grinder_fill_cursor_last_save_ts{source}
+- grinder_fill_cursor_age_seconds{source}
+
 Labels use ``source``, ``side``, ``liquidity``, ``reason``, ``result`` only.
 No ``symbol=``, ``order_id=``, or other high-cardinality labels.
 
@@ -20,6 +24,7 @@ This module has NO imports from execution/ or connectors/.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
 
 # Metric names (stable contract — do not rename without updating metrics_contract.py)
@@ -34,11 +39,15 @@ METRIC_INGEST_ERRORS = "grinder_fill_ingest_errors_total"
 METRIC_CURSOR_LOAD = "grinder_fill_cursor_load_total"
 METRIC_CURSOR_SAVE = "grinder_fill_cursor_save_total"
 
+# Cursor stuck detection (PR6)
+METRIC_CURSOR_LAST_SAVE_TS = "grinder_fill_cursor_last_save_ts"
+METRIC_CURSOR_AGE_SECONDS = "grinder_fill_cursor_age_seconds"
+
 # Allowed reason values for ingest errors (no freeform strings)
 INGEST_ERROR_REASONS: frozenset[str] = frozenset({"http", "parse", "cursor", "unknown"})
 
-# Allowed result values for cursor ops
-CURSOR_RESULTS: frozenset[str] = frozenset({"ok", "error"})
+# Allowed result values for cursor ops (PR6: added rejected_non_monotonic)
+CURSOR_RESULTS: frozenset[str] = frozenset({"ok", "error", "rejected_non_monotonic"})
 
 
 @dataclass
@@ -60,6 +69,9 @@ class FillMetrics:
     # Keyed by (source, result)
     cursor_loads: dict[tuple[str, str], int] = field(default_factory=dict)
     cursor_saves: dict[tuple[str, str], int] = field(default_factory=dict)
+
+    # PR6: Cursor stuck detection — keyed by source, value = epoch seconds
+    cursor_last_save_ts: dict[str, float] = field(default_factory=dict)
 
     def record_fill(
         self,
@@ -103,6 +115,10 @@ class FillMetrics:
             result = "error"
         key = (source, result)
         self.cursor_saves[key] = self.cursor_saves.get(key, 0) + 1
+
+    def set_cursor_last_save_ts(self, source: str, ts: float) -> None:
+        """Set the last successful cursor save timestamp (epoch seconds)."""
+        self.cursor_last_save_ts[source] = ts
 
     def to_prometheus_lines(self) -> list[str]:
         """Render Prometheus text-format lines."""
@@ -153,7 +169,7 @@ class FillMetrics:
         return lines
 
     def _render_health_metrics(self) -> list[str]:  # noqa: PLR0912
-        """Render health / operational metrics (PR3)."""
+        """Render health / operational metrics (PR3, PR6)."""
         lines: list[str] = []
 
         # --- ingest polls ---
@@ -203,6 +219,28 @@ class FillMetrics:
         else:
             lines.append(f'{METRIC_CURSOR_SAVE}{{source="none",result="none"}} 0')
 
+        # --- cursor last save ts (PR6) ---
+        lines.append(
+            f"# HELP {METRIC_CURSOR_LAST_SAVE_TS} Epoch seconds when fill cursor was last saved"
+        )
+        lines.append(f"# TYPE {METRIC_CURSOR_LAST_SAVE_TS} gauge")
+        if self.cursor_last_save_ts:
+            for source, ts in sorted(self.cursor_last_save_ts.items()):
+                lines.append(f'{METRIC_CURSOR_LAST_SAVE_TS}{{source="{source}"}} {ts:.3f}')
+        else:
+            lines.append(f'{METRIC_CURSOR_LAST_SAVE_TS}{{source="none"}} 0')
+
+        # --- cursor age seconds (PR6) ---
+        lines.append(f"# HELP {METRIC_CURSOR_AGE_SECONDS} Seconds since fill cursor was last saved")
+        lines.append(f"# TYPE {METRIC_CURSOR_AGE_SECONDS} gauge")
+        if self.cursor_last_save_ts:
+            now = time.time()
+            for source, ts in sorted(self.cursor_last_save_ts.items()):
+                age = max(0.0, now - ts) if ts > 0 else 0.0
+                lines.append(f'{METRIC_CURSOR_AGE_SECONDS}{{source="{source}"}} {age:.3f}')
+        else:
+            lines.append(f'{METRIC_CURSOR_AGE_SECONDS}{{source="none"}} 0')
+
         return lines
 
     def reset(self) -> None:
@@ -215,6 +253,7 @@ class FillMetrics:
         self.ingest_errors.clear()
         self.cursor_loads.clear()
         self.cursor_saves.clear()
+        self.cursor_last_save_ts.clear()
 
 
 # Global singleton

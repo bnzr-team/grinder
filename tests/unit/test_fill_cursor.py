@@ -6,6 +6,7 @@ import json
 from typing import TYPE_CHECKING
 
 from grinder.execution.fill_cursor import FillCursor, load_fill_cursor, save_fill_cursor
+from grinder.observability.fill_metrics import FillMetrics
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -114,3 +115,84 @@ class TestSaveFillCursor:
         assert loaded.last_trade_id == original.last_trade_id
         assert loaded.last_ts_ms == original.last_ts_ms
         assert loaded.updated_at_ms == 6000
+
+
+class TestCursorMonotonicity:
+    """PR6: Monotonicity guard prevents backward cursor writes."""
+
+    def test_cursor_monotonic_accepts_equal(self, tmp_path: Path) -> None:
+        """Same (trade_id, ts_ms) is allowed (idempotent re-save)."""
+        path = str(tmp_path / "cursor.json")
+        cursor_a = FillCursor(last_trade_id=100, last_ts_ms=1000)
+        save_fill_cursor(path, cursor_a, now_ms=1000)
+
+        cursor_b = FillCursor(last_trade_id=100, last_ts_ms=1000)
+        save_fill_cursor(path, cursor_b, now_ms=2000)
+
+        loaded = load_fill_cursor(path)
+        assert loaded.last_trade_id == 100
+        assert loaded.updated_at_ms == 2000  # updated_at should advance
+
+    def test_cursor_monotonic_accepts_forward(self, tmp_path: Path) -> None:
+        """Higher trade_id is allowed (normal advance)."""
+        path = str(tmp_path / "cursor.json")
+        cursor_a = FillCursor(last_trade_id=100, last_ts_ms=1000)
+        save_fill_cursor(path, cursor_a, now_ms=1000)
+
+        cursor_b = FillCursor(last_trade_id=200, last_ts_ms=2000)
+        save_fill_cursor(path, cursor_b, now_ms=2000)
+
+        loaded = load_fill_cursor(path)
+        assert loaded.last_trade_id == 200
+
+    def test_cursor_monotonic_rejects_backward_no_write(self, tmp_path: Path) -> None:
+        """Lower trade_id is rejected — file keeps original value."""
+        path = str(tmp_path / "cursor.json")
+        m = FillMetrics()
+        cursor_a = FillCursor(last_trade_id=100, last_ts_ms=1000)
+        save_fill_cursor(path, cursor_a, now_ms=1000, fill_metrics=m)
+
+        cursor_b = FillCursor(last_trade_id=50, last_ts_ms=500)
+        save_fill_cursor(path, cursor_b, now_ms=2000, fill_metrics=m)
+
+        loaded = load_fill_cursor(path)
+        assert loaded.last_trade_id == 100  # unchanged
+        assert m.cursor_saves[("reconcile", "rejected_non_monotonic")] == 1
+
+    def test_cursor_monotonic_rejects_backward_ts(self, tmp_path: Path) -> None:
+        """Same trade_id but lower ts_ms is rejected."""
+        path = str(tmp_path / "cursor.json")
+        m = FillMetrics()
+        cursor_a = FillCursor(last_trade_id=100, last_ts_ms=2000)
+        save_fill_cursor(path, cursor_a, now_ms=1000, fill_metrics=m)
+
+        cursor_b = FillCursor(last_trade_id=100, last_ts_ms=1000)
+        save_fill_cursor(path, cursor_b, now_ms=2000, fill_metrics=m)
+
+        loaded = load_fill_cursor(path)
+        assert loaded.last_ts_ms == 2000  # unchanged
+        assert m.cursor_saves[("reconcile", "rejected_non_monotonic")] == 1
+
+    def test_cursor_monotonic_corrupt_existing_allows_write(self, tmp_path: Path) -> None:
+        """Corrupt existing file does not block new save (best-effort recovery)."""
+        path = tmp_path / "cursor.json"
+        path.write_text("NOT VALID JSON")
+        m = FillMetrics()
+
+        cursor = FillCursor(last_trade_id=50, last_ts_ms=500)
+        save_fill_cursor(str(path), cursor, now_ms=1000, fill_metrics=m)
+
+        loaded = load_fill_cursor(str(path))
+        assert loaded.last_trade_id == 50
+        # Corrupt file emits ingest_error{reason="cursor"}
+        assert m.ingest_errors[("reconcile", "cursor")] == 1
+
+    def test_cursor_save_sets_last_save_ts(self, tmp_path: Path) -> None:
+        """Successful save sets cursor_last_save_ts metric."""
+        path = str(tmp_path / "cursor.json")
+        m = FillMetrics()
+        cursor = FillCursor(last_trade_id=1, last_ts_ms=100)
+        save_fill_cursor(path, cursor, now_ms=200, fill_metrics=m)
+
+        assert "reconcile" in m.cursor_last_save_ts
+        assert m.cursor_last_save_ts["reconcile"] > 0
