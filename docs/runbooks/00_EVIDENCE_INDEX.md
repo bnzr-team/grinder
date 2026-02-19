@@ -16,6 +16,8 @@ See also: [Ops Quickstart](00_OPS_QUICKSTART.md) | [Fill Tracker Triage](26_FILL
 | Alert inputs (cursor stuck) | `cursor_save error` counter increments, `cursor_age_seconds` grows over time | `scripts/fire_drill_fill_alerts.sh` | `.artifacts/fill_alert_fire_drill/<ts>/` | `drill_b_metrics_1.txt`, `drill_b_metrics_2.txt`, `drill_b_log.txt`, `cursor_drill_b.json` | `summary.txt` |
 | Kill-switch + enforcement | Kill-switch trips, gauge=1, INCREASE_RISK blocked, CANCEL allowed, idempotent latch | `scripts/fire_drill_risk_killswitch_drawdown.sh` | `.artifacts/risk_fire_drill/<ts>/` | `drill_a_metrics.txt`, `drill_a_log.txt` | `summary.txt` |
 | Drawdown guard | DrawdownGuardV1 blocks INCREASE_RISK in DRAWDOWN, allows REDUCE_RISK/CANCEL, state latched | `scripts/fire_drill_risk_killswitch_drawdown.sh` | `.artifacts/risk_fire_drill/<ts>/` | `drill_b_metrics.txt`, `drill_b_log.txt` | `summary.txt` |
+| Budget per-run cap | Per-run notional cap blocks execution, block reason + metrics correct | `scripts/fire_drill_reconcile_budget_limits.sh` | `.artifacts/budget_fire_drill/<ts>/` | `drill_a_metrics.txt`, `drill_a_log.txt`, `drill_a_state.json` | `summary.txt` |
+| Budget per-day cap | Per-day notional cap blocks across run boundaries, UTC day key, state persisted | `scripts/fire_drill_reconcile_budget_limits.sh` | `.artifacts/budget_fire_drill/<ts>/` | `drill_b_metrics.txt`, `drill_b_log.txt`, `drill_b_state.json` | `summary.txt` |
 
 ---
 
@@ -64,6 +66,20 @@ Gate B/C artifacts only present when `BINANCE_API_KEY` and `BINANCE_API_SECRET` 
   drill_a_log.txt          # Captured stderr (trip, gate, idempotent markers)
   drill_b_metrics.txt      # Full Prometheus text after drawdown trigger
   drill_b_log.txt          # Captured stderr (state transitions, intent decisions)
+  summary.txt              # Copy/paste evidence block with exact metric lines
+  sha256sums.txt           # Full 64-char sha256 of all artifact files
+```
+
+### Budget fire drill (`fire_drill_reconcile_budget_limits.sh`)
+
+```
+.artifacts/budget_fire_drill/<YYYYMMDDTHHMMSS>/
+  drill_a_metrics.txt      # Full Prometheus text after per-run cap block
+  drill_a_log.txt          # Captured stderr (budget checks, block decisions)
+  drill_a_state.json       # BudgetTracker state file (persistence proof)
+  drill_b_metrics.txt      # Full Prometheus text after per-day cap block
+  drill_b_log.txt          # Captured stderr (cross-run blocking, day key)
+  drill_b_state.json       # BudgetTracker state file (cross-run persistence)
   summary.txt              # Copy/paste evidence block with exact metric lines
   sha256sums.txt           # Full 64-char sha256 of all artifact files
 ```
