@@ -37,12 +37,27 @@ These invariants MUST hold for any PR touching fill ingest code:
 
 3. **Broader write-op grep** (for PRs touching REST call sites):
 
+   On PR diff (preferred — catches new write ops introduced by the PR):
+
    ```bash
-   rg -n 'POST\s+/fapi|newOrder|DELETE\s+/fapi|/order' \
-     src/grinder/execution src/grinder/net scripts
+   git diff main...HEAD -- src/grinder scripts | \
+     rg -n '(POST|PUT|DELETE).*/order|newOrder|batchOrders|cancelOrder|cancelReplace'
    ```
 
+   On working tree (belt-and-suspenders — matches all existing write-op sites):
+
+   ```bash
+   rg -n '/fapi/v1/order|newOrder|batchOrders|cancelReplace' \
+     --type py src/grinder/execution src/grinder/net scripts
+   ```
+
+   Expected matches: only in `binance_futures_port.py` (place/cancel/replace methods) and `binance_port.py` (spot). Zero matches in `fill_cursor.py`, `fill_ingest.py`, `fill_metrics.py`.
+
+   Note: `--type py` avoids false positives from docs/comments. For repo-wide check without type filter, add `--glob '!docs/**'`.
+
 4. **No forbidden labels** (`symbol=`, `order_id=`, `client_id=`, `trade_id=`) in fill metrics output.
+
+5. **metrics-out artifact assertion** (automated in `smoke_fill_ingest_staging.sh`): every `--metrics-out` file must contain `grinder_fill_*` lines. Catches the silent regression where only reconcile metrics were written.
 
 ---
 
