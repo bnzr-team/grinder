@@ -19,6 +19,8 @@ See also: [Ops Quickstart](00_OPS_QUICKSTART.md) | [Fill Tracker Triage](26_FILL
 | Budget per-run cap | Per-run notional cap blocks execution, block reason + metrics correct | `scripts/fire_drill_reconcile_budget_limits.sh` | `.artifacts/budget_fire_drill/<ts>/` | `drill_a_metrics.txt`, `drill_a_log.txt`, `drill_a_state.json` | `summary.txt` |
 | Budget per-day cap | Per-day notional cap blocks across run boundaries, UTC day key, state persisted | `scripts/fire_drill_reconcile_budget_limits.sh` | `.artifacts/budget_fire_drill/<ts>/` | `drill_b_metrics.txt`, `drill_b_log.txt`, `drill_b_state.json` | `summary.txt` |
 | Execution intent gates | NOT_ARMED blocks all, kill-switch blocks non-CANCEL, drawdown blocks INCREASE_RISK, all-pass reaches port | `scripts/fire_drill_execution_intents.sh` | `.artifacts/execution_fire_drill/<ts>/` | `drill_a_*.txt`, `drill_b_*.txt`, `drill_c_*.txt`, `drill_d_*.txt` | `summary.txt` |
+| Market data connector | L2 parse validation, DQ staleness/gaps/outliers, symbol whitelist | `scripts/fire_drill_connector_market_data.sh` | `.artifacts/connector_market_data_fire_drill/<ts>/` | `drill_a_*.txt` .. `drill_e_*.txt` | `summary.txt` |
+| Exchange port boundary | Gate chain (5 gates), idempotency cache, retry classification (transient vs fatal) | `scripts/fire_drill_connector_exchange_port.sh` | `.artifacts/connector_exchange_port_fire_drill/<ts>/` | `drill_a_log.txt` .. `drill_f_log.txt`, `drill_e_metrics.txt`, `drill_f_metrics.txt` | `summary.txt` |
 
 ---
 
@@ -101,6 +103,37 @@ Gate B/C artifacts only present when `BINANCE_API_KEY` and `BINANCE_API_SECRET` 
   sha256sums.txt           # Full 64-char sha256 of all artifact files
 ```
 
+### Market data connector fire drill (`fire_drill_connector_market_data.sh`)
+
+```
+.artifacts/connector_market_data_fire_drill/<YYYYMMDDTHHMMSS>/
+  drill_a_log.txt          # L2ParseError rejects malformed payloads
+  drill_b_log.txt          # DQ staleness detection (stale_total counter)
+  drill_b_metrics.txt      # Prometheus text (stale counter)
+  drill_c_log.txt          # Symbol whitelist filtering
+  drill_d_log.txt          # Gap detection + outlier detection
+  drill_d_metrics.txt      # Prometheus text (gap + outlier counters)
+  drill_e_log.txt          # Happy path: clean DQ + valid L2 parse
+  summary.txt              # Copy/paste evidence block
+  sha256sums.txt           # Full 64-char sha256 of all artifact files
+```
+
+### Exchange port boundary fire drill (`fire_drill_connector_exchange_port.sh`)
+
+```
+.artifacts/connector_exchange_port_fire_drill/<YYYYMMDDTHHMMSS>/
+  drill_a_log.txt          # NOT_ARMED blocks all (gate 1, 0 port calls)
+  drill_b_log.txt          # Kill-switch blocks PLACE, allows CANCEL (gate 3)
+  drill_c_log.txt          # Drawdown blocks INCREASE_RISK, CANCEL+NOOP safe (gate 5)
+  drill_d_log.txt          # Symbol whitelist blocks, retry counters = 0 (gate 4)
+  drill_e_log.txt          # Idempotency cache prevents duplicate port calls
+  drill_e_metrics.txt      # Prometheus text (idempotency hits/misses)
+  drill_f_log.txt          # Retry classification: transient vs fatal
+  drill_f_metrics.txt      # Prometheus text (retry counters)
+  summary.txt              # Copy/paste evidence block with code_path markers
+  sha256sums.txt           # Full 64-char sha256 of all artifact files
+```
+
 ---
 
 ## Notes
@@ -112,4 +145,5 @@ Gate B/C artifacts only present when `BINANCE_API_KEY` and `BINANCE_API_SECRET` 
 - **Fill triage wrapper**: `bash scripts/ops_fill_triage.sh <mode>` runs the right fill script, surfaces `evidence_dir`, and prints next-step pointers.
 - **Risk triage wrapper**: `bash scripts/ops_risk_triage.sh <mode>` runs the right risk script (`killswitch-drawdown` or `budget-limits`).
 - **Execution triage wrapper**: `bash scripts/ops_exec_triage.sh <mode>` runs the execution intent fire drill (`exec-fire-drill`).
+- **Connector triage wrapper**: `bash scripts/ops_connector_triage.sh <mode>` runs connector fire drills (`market-data` or `exchange-port`).
 - See [Ops Quickstart](00_OPS_QUICKSTART.md) for one-command examples.
