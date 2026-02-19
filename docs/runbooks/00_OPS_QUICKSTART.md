@@ -48,6 +48,22 @@ bash scripts/ops_risk_triage.sh budget-limits        # budget enforcement proof
 bash scripts/ops_risk_triage.sh -h                   # help
 ```
 
+### Execution triage (one command)
+
+```bash
+bash scripts/ops_exec_triage.sh <mode>
+```
+
+| Mode | What it runs | API keys | Runtime |
+|------|-------------|----------|---------|
+| `exec-fire-drill` | `fire_drill_execution_intents.sh` | No | ~2s |
+
+```bash
+# Examples
+bash scripts/ops_exec_triage.sh exec-fire-drill  # execution gate chain proof
+bash scripts/ops_exec_triage.sh -h               # help
+```
+
 ---
 
 ## What to run first (without wrapper)
@@ -81,6 +97,7 @@ All evidence scripts write to `.artifacts/.../<timestamp>/`:
 .artifacts/fill_alert_fire_drill/<YYYYMMDDTHHMMSS>/  # fill alert fire drill
 .artifacts/risk_fire_drill/<YYYYMMDDTHHMMSS>/        # kill-switch + drawdown drill
 .artifacts/budget_fire_drill/<YYYYMMDDTHHMMSS>/      # budget limits drill
+.artifacts/execution_fire_drill/<YYYYMMDDTHHMMSS>/  # execution intent drill
 ```
 
 The `.artifacts/` directory is **gitignored**. Do not commit evidence files.
@@ -187,5 +204,6 @@ bash scripts/<script_name>.sh
 | Kill-switch and drawdown | [04_KILL_SWITCH.md](04_KILL_SWITCH.md) |
 | Active remediation and budget limits | [12_ACTIVE_REMEDIATION.md](12_ACTIVE_REMEDIATION.md) |
 | Evidence artifact index | [00_EVIDENCE_INDEX.md](00_EVIDENCE_INDEX.md) |
+| Execution intent gate chain | Fire drill only (no dedicated runbook yet) |
 | General alert response | [06_ALERT_RESPONSE.md](06_ALERT_RESPONSE.md) |
 | Health checks | [02_HEALTH_TRIAGE.md](02_HEALTH_TRIAGE.md) |

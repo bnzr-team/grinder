@@ -18,6 +18,7 @@ See also: [Ops Quickstart](00_OPS_QUICKSTART.md) | [Fill Tracker Triage](26_FILL
 | Drawdown guard | DrawdownGuardV1 blocks INCREASE_RISK in DRAWDOWN, allows REDUCE_RISK/CANCEL, state latched | `scripts/fire_drill_risk_killswitch_drawdown.sh` | `.artifacts/risk_fire_drill/<ts>/` | `drill_b_metrics.txt`, `drill_b_log.txt` | `summary.txt` |
 | Budget per-run cap | Per-run notional cap blocks execution, block reason + metrics correct | `scripts/fire_drill_reconcile_budget_limits.sh` | `.artifacts/budget_fire_drill/<ts>/` | `drill_a_metrics.txt`, `drill_a_log.txt`, `drill_a_state.json` | `summary.txt` |
 | Budget per-day cap | Per-day notional cap blocks across run boundaries, UTC day key, state persisted | `scripts/fire_drill_reconcile_budget_limits.sh` | `.artifacts/budget_fire_drill/<ts>/` | `drill_b_metrics.txt`, `drill_b_log.txt`, `drill_b_state.json` | `summary.txt` |
+| Execution intent gates | NOT_ARMED blocks all, kill-switch blocks non-CANCEL, drawdown blocks INCREASE_RISK, all-pass reaches port | `scripts/fire_drill_execution_intents.sh` | `.artifacts/execution_fire_drill/<ts>/` | `drill_a_*.txt`, `drill_b_*.txt`, `drill_c_*.txt`, `drill_d_*.txt` | `summary.txt` |
 
 ---
 
@@ -84,6 +85,22 @@ Gate B/C artifacts only present when `BINANCE_API_KEY` and `BINANCE_API_SECRET` 
   sha256sums.txt           # Full 64-char sha256 of all artifact files
 ```
 
+### Execution fire drill (`fire_drill_execution_intents.sh`)
+
+```
+.artifacts/execution_fire_drill/<YYYYMMDDTHHMMSS>/
+  drill_a_metrics.txt      # Prometheus text (NOT_ARMED state)
+  drill_a_log.txt          # Captured stderr (all 4 action types blocked)
+  drill_b_metrics.txt      # Prometheus text (kill-switch ON)
+  drill_b_log.txt          # Captured stderr (PLACE/REPLACE blocked, CANCEL through)
+  drill_c_metrics.txt      # Prometheus text (drawdown active)
+  drill_c_log.txt          # Captured stderr (intent blocking + classify_intent proof)
+  drill_d_metrics.txt      # Prometheus text (clean state, all gates pass)
+  drill_d_log.txt          # Captured stderr (port calls recorded)
+  summary.txt              # Copy/paste evidence block with gate decisions
+  sha256sums.txt           # Full 64-char sha256 of all artifact files
+```
+
 ---
 
 ## Notes
@@ -94,4 +111,5 @@ Gate B/C artifacts only present when `BINANCE_API_KEY` and `BINANCE_API_SECRET` 
 - All scripts exit non-zero on any failure.
 - **Fill triage wrapper**: `bash scripts/ops_fill_triage.sh <mode>` runs the right fill script, surfaces `evidence_dir`, and prints next-step pointers.
 - **Risk triage wrapper**: `bash scripts/ops_risk_triage.sh <mode>` runs the right risk script (`killswitch-drawdown` or `budget-limits`).
+- **Execution triage wrapper**: `bash scripts/ops_exec_triage.sh <mode>` runs the execution intent fire drill (`exec-fire-drill`).
 - See [Ops Quickstart](00_OPS_QUICKSTART.md) for one-command examples.
