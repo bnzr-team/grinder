@@ -465,7 +465,7 @@ No API keys needed. No environment variables required. Takes ~10 seconds (6s of 
 |--------|---------|-----------------|
 | `scripts/smoke_fill_ingest.sh` | Local CI smoke (FakePort) — validates metric wiring | No |
 | `scripts/smoke_fill_ingest_staging.sh` | Staging dry-run — validates real Binance reads + cursor persistence | Yes |
-| `scripts/fire_drill_fill_alerts.sh` | Deterministic alert input proof — triggers non-monotonic rejection + cursor stuck | No |
+| `scripts/fire_drill_fill_alerts.sh` | Deterministic alert input proof -- triggers non-monotonic rejection + cursor stuck | No |
 
 All scripts print PASS/FAIL and exit non-zero on failure.
 

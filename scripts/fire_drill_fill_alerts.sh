@@ -100,11 +100,15 @@ metric_value() {
 
 # Generate sha256sums.txt (stable order, excludes itself).
 write_sha256sums() {
+  local sha_cmd="sha256sum"
+  if ! command -v sha256sum >/dev/null 2>&1; then
+    sha_cmd="shasum -a 256"
+  fi
   (
     cd "$EVIDENCE_DIR"
     find . -maxdepth 1 -type f ! -name 'sha256sums.txt' -print0 \
       | sort -z \
-      | xargs -0 sha256sum
+      | xargs -0 $sha_cmd
   ) > "$EVIDENCE_DIR/sha256sums.txt"
 }
 
