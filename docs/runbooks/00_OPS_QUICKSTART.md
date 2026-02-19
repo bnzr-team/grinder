@@ -64,6 +64,24 @@ bash scripts/ops_exec_triage.sh exec-fire-drill  # execution gate chain proof
 bash scripts/ops_exec_triage.sh -h               # help
 ```
 
+### Connector triage (one command)
+
+```bash
+bash scripts/ops_connector_triage.sh <mode>
+```
+
+| Mode | What it runs | API keys | Runtime |
+|------|-------------|----------|---------|
+| `market-data` | `fire_drill_connector_market_data.sh` | No | ~2s |
+| `exchange-port` | `fire_drill_connector_exchange_port.sh` | No | ~2s |
+
+```bash
+# Examples
+bash scripts/ops_connector_triage.sh market-data    # L2 parse, DQ, whitelist proof
+bash scripts/ops_connector_triage.sh exchange-port  # gate chain, idempotency, retry proof
+bash scripts/ops_connector_triage.sh -h             # help
+```
+
 ---
 
 ## What to run first (without wrapper)
@@ -97,7 +115,9 @@ All evidence scripts write to `.artifacts/.../<timestamp>/`:
 .artifacts/fill_alert_fire_drill/<YYYYMMDDTHHMMSS>/  # fill alert fire drill
 .artifacts/risk_fire_drill/<YYYYMMDDTHHMMSS>/        # kill-switch + drawdown drill
 .artifacts/budget_fire_drill/<YYYYMMDDTHHMMSS>/      # budget limits drill
-.artifacts/execution_fire_drill/<YYYYMMDDTHHMMSS>/  # execution intent drill
+.artifacts/execution_fire_drill/<YYYYMMDDTHHMMSS>/              # execution intent drill
+.artifacts/connector_market_data_fire_drill/<YYYYMMDDTHHMMSS>/  # market data connector drill
+.artifacts/connector_exchange_port_fire_drill/<YYYYMMDDTHHMMSS>/ # exchange port boundary drill
 ```
 
 The `.artifacts/` directory is **gitignored**. Do not commit evidence files.
@@ -205,5 +225,7 @@ bash scripts/<script_name>.sh
 | Active remediation and budget limits | [12_ACTIVE_REMEDIATION.md](12_ACTIVE_REMEDIATION.md) |
 | Evidence artifact index | [00_EVIDENCE_INDEX.md](00_EVIDENCE_INDEX.md) |
 | Execution intent gate chain | Fire drill only (no dedicated runbook yet) |
+| Market data connector | Fire drill: `ops_connector_triage.sh market-data` |
+| Exchange port boundary | Fire drill: `ops_connector_triage.sh exchange-port` |
 | General alert response | [06_ALERT_RESPONSE.md](06_ALERT_RESPONSE.md) |
 | Health checks | [02_HEALTH_TRIAGE.md](02_HEALTH_TRIAGE.md) |
