@@ -369,6 +369,10 @@ See ADR-066.
 - End-to-end smoke: start -> /healthz + /metrics -> stop; kill-switch verified.
 - Operator runbooks: start/stop/triage + incident checklist.
 
+### Post-launch
+
+After Launch-12, execution moves to: **[docs/POST_LAUNCH_ROADMAP.md](POST_LAUNCH_ROADMAP.md)** (P1 Hardening Pack + P2 Target State backlog).
+
 ---
 
 ## 6) LC-Series Index
