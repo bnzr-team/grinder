@@ -41,27 +41,36 @@
 
 > **SSOT:** `docs/08_STATE_MACHINE.md` (Sec 8.9-8.14)
 
+**Status:** ✅ COMPLETE (main @ `7793045`)
+
 ### Problem
 We have regime classifier + scattered safety gates, but no centralized lifecycle FSM:
 INIT → READY → DEGRADED → EMERGENCY, with explicit transitions, reasons, and ops actions.
 
-### Deliverables
-- `FsmState` enum and `FsmEvent` / `FsmReason` contracts.
-- `OrchestratorFSM` owning transitions and emitting:
-  - metrics: current_state gauge, transitions_total{from,to,reason}
-  - structured logs: state transitions w/ reason + evidence ref
-- Integration point(s): Live loop / reconcile loop / ops triage output.
+### Delivered
 
-### Acceptance Criteria (MUST)
-- Deterministic transition unit tests with a transition table fixture.
-- No "silent" transitions: every transition emits **log + metric**.
-- Ops output shows current state and last transition reason.
-- Emergency state forces safe behavior (e.g., block INCREASE_RISK actions), consistent with existing gates.
+- FSM tick wired into `LiveEngineV0.process_snapshot()` **before** action processing (Gate 6 sees current state)
+- FSM metrics exported:
+  - one-hot current state gauge
+  - state duration gauge
+  - transitions counter (from/to/reason)
+  - blocked intents counter (state/intent)
+- Gate 6 enforcement: intents blocked by FSM state return `FSM_STATE_BLOCKED`
+- Operator override:
+  - `GRINDER_OPERATOR_OVERRIDE` (normalized via `strip().upper()`)
+  - documented runbook: `docs/runbooks/27_FSM_OPERATOR_OVERRIDE.md`
+- Deterministic evidence artifacts on transitions (safe-by-default):
+  - enable with `GRINDER_FSM_EVIDENCE`
+  - `.sha256` is `sha256sum -c` compatible
 
-### Suggested PR breakdown
-- PR1: FSM contracts + pure transition logic + tests (table-driven)
-- PR2: wire into runtime (LiveEngine / loops) + metrics/logging
-- PR3: ops docs + runbook additions + fire drill (FSM-specific)
+### PR chain
+
+- PR0 (#211) — Spec/ADR (SSOT wiring)
+- PR1 (#213) — Pure FSM core + 74 deterministic tests (merged @ `897ca8b`)
+- PR2 (#214) — Driver + metrics + Gate 6 (merged @ `89e329a`)
+- PR3 (#215) — Real loop wiring + runtime signals (merged @ `232d07b`)
+- PR4 (#216) — Operator override normalization + runbook (merged @ `6c37baf`)
+- PR5 (#217) — Deterministic evidence artifacts (merged @ `7793045`)
 
 ---
 
@@ -160,7 +169,7 @@ FillTracker exists, but we lack end-to-end "truth": position truth + round-trip 
 ## 4) PR count expectations (so we don't get lost)
 
 - P1 Hardening Pack:
-  - Launch-13: 2–3 PR
+  - Launch-13: 6 PR (PR0–PR5, shipped)
   - Launch-14: 2–3 PR
   - Launch-15: 2–3 PR
   - **Expected total: 6–9 PR** (strict) or **9–12 PR** (full drills/docs)
