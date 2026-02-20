@@ -175,6 +175,17 @@ REQUIRED_METRICS_PATTERNS = [
     "# HELP grinder_fill_cursor_age_seconds",
     "# TYPE grinder_fill_cursor_age_seconds",
     "grinder_fill_cursor_age_seconds{source=",
+    # Launch-13: FSM metrics
+    "# HELP grinder_fsm_current_state",
+    "# TYPE grinder_fsm_current_state",
+    "grinder_fsm_current_state{state=",
+    "# HELP grinder_fsm_state_duration_seconds",
+    "# TYPE grinder_fsm_state_duration_seconds",
+    "grinder_fsm_state_duration_seconds",
+    "# HELP grinder_fsm_transitions_total",
+    "# TYPE grinder_fsm_transitions_total",
+    "# HELP grinder_fsm_action_blocked_total",
+    "# TYPE grinder_fsm_action_blocked_total",
 ]
 
 # PR6: Concrete series patterns requiring fill ingest to be running.

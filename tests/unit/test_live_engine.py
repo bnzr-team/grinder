@@ -44,7 +44,7 @@ from grinder.connectors.errors import (
 from grinder.connectors.live_connector import SafeMode
 from grinder.connectors.retries import RetryPolicy
 from grinder.contracts import Snapshot
-from grinder.core import OrderSide
+from grinder.core import OrderSide, SystemState
 from grinder.execution.idempotent_port import IdempotentExchangePort
 from grinder.execution.port import NoOpExchangePort
 from grinder.execution.types import ActionType, ExecutionAction
@@ -55,6 +55,9 @@ from grinder.live import (
     LiveEngineV0,
     classify_intent,
 )
+from grinder.live.fsm_driver import FsmDriver
+from grinder.live.fsm_metrics import reset_fsm_metrics
+from grinder.live.fsm_orchestrator import FsmConfig, OrchestratorFSM
 from grinder.risk.drawdown_guard_v1 import (
     DrawdownGuardV1,
     DrawdownGuardV1Config,
@@ -589,3 +592,64 @@ class TestIntentClassification:
         """NOOP action → CANCEL intent (safe)."""
         noop_action = ExecutionAction(action_type=ActionType.NOOP)
         assert classify_intent(noop_action) == RiskIntent.CANCEL
+
+
+# --- E) FSM State Gate Tests (Launch-13) ---
+
+
+class TestFsmStateGate:
+    """Tests for Gate 6: FSM state-based intent blocking."""
+
+    def setup_method(self) -> None:
+        reset_fsm_metrics()
+
+    def test_fsm_paused_blocks_increase_risk(
+        self,
+        mock_paper_engine: MagicMock,
+        tracking_port: MagicMock,
+        sample_snapshot: Snapshot,
+        place_action: ExecutionAction,
+    ) -> None:
+        """FSM in PAUSED → INCREASE_RISK blocked with FSM_STATE_BLOCKED."""
+        mock_paper_engine.process_snapshot.return_value = MagicMock(actions=[place_action])
+
+        fsm = OrchestratorFSM(state=SystemState.PAUSED, config=FsmConfig())
+        driver = FsmDriver(fsm)
+
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        engine = LiveEngineV0(mock_paper_engine, tracking_port, config, fsm_driver=driver)
+
+        output = engine.process_snapshot(sample_snapshot)
+
+        assert len(output.live_actions) == 1
+        assert output.live_actions[0].status == LiveActionStatus.BLOCKED
+        assert output.live_actions[0].block_reason == BlockReason.FSM_STATE_BLOCKED
+        assert output.live_actions[0].intent == RiskIntent.INCREASE_RISK
+
+        # CRITICAL: 0 port calls
+        assert len(tracking_port.calls) == 0
+
+    def test_fsm_paused_allows_cancel(
+        self,
+        mock_paper_engine: MagicMock,
+        tracking_port: MagicMock,
+        sample_snapshot: Snapshot,
+        cancel_action: ExecutionAction,
+    ) -> None:
+        """FSM in PAUSED → CANCEL allowed (reduce-risk intents pass Gate 6)."""
+        mock_paper_engine.process_snapshot.return_value = MagicMock(actions=[cancel_action])
+
+        fsm = OrchestratorFSM(state=SystemState.PAUSED, config=FsmConfig())
+        driver = FsmDriver(fsm)
+
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        engine = LiveEngineV0(mock_paper_engine, tracking_port, config, fsm_driver=driver)
+
+        output = engine.process_snapshot(sample_snapshot)
+
+        assert len(output.live_actions) == 1
+        assert output.live_actions[0].status == LiveActionStatus.EXECUTED
+        assert output.live_actions[0].intent == RiskIntent.CANCEL
+
+        # Port was called
+        assert len(tracking_port.calls) == 1

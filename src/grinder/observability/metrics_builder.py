@@ -19,6 +19,7 @@ from grinder.connectors.metrics import get_connector_metrics
 from grinder.data.quality_metrics import get_data_quality_metrics
 from grinder.gating import get_gating_metrics
 from grinder.ha.role import HARole, get_ha_state
+from grinder.live.fsm_metrics import get_fsm_metrics
 from grinder.ml.metrics import ml_metrics_to_prometheus_lines
 from grinder.observability.fill_metrics import get_fill_metrics
 from grinder.observability.latency_metrics import get_http_metrics
@@ -108,6 +109,9 @@ class MetricsBuilder:
 
         # Fill tracking metrics (Launch-06)
         lines.extend(self._build_fill_metrics())
+
+        # FSM metrics (Launch-13)
+        lines.extend(self._build_fsm_metrics())
 
         return "\n".join(lines)
 
@@ -234,6 +238,11 @@ class MetricsBuilder:
         """Build fill tracking metrics (Launch-06)."""
         fill_metrics = get_fill_metrics()
         return fill_metrics.to_prometheus_lines()
+
+    def _build_fsm_metrics(self) -> list[str]:
+        """Build FSM state machine metrics (Launch-13)."""
+        fsm_metrics = get_fsm_metrics()
+        return fsm_metrics.to_prometheus_lines()
 
 
 class _BuilderHolder:

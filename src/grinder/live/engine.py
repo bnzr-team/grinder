@@ -51,6 +51,7 @@ if TYPE_CHECKING:
     from grinder.contracts import Snapshot
     from grinder.execution.port import ExchangePort
     from grinder.live.config import LiveEngineConfig
+    from grinder.live.fsm_driver import FsmDriver
     from grinder.paper.engine import PaperEngine
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,7 @@ class BlockReason(Enum):
     CIRCUIT_BREAKER_OPEN = "CIRCUIT_BREAKER_OPEN"
     MAX_RETRIES_EXCEEDED = "MAX_RETRIES_EXCEEDED"
     NON_RETRYABLE_ERROR = "NON_RETRYABLE_ERROR"
+    FSM_STATE_BLOCKED = "FSM_STATE_BLOCKED"
 
 
 class LiveActionStatus(Enum):
@@ -196,6 +198,7 @@ class LiveEngineV0:
         config: LiveEngineConfig,
         drawdown_guard: DrawdownGuardV1 | None = None,
         retry_policy: RetryPolicy | None = None,
+        fsm_driver: FsmDriver | None = None,
     ) -> None:
         """Initialize LiveEngineV0.
 
@@ -205,12 +208,14 @@ class LiveEngineV0:
             config: Engine configuration (arming, mode, kill-switch)
             drawdown_guard: Optional drawdown guard for intent blocking
             retry_policy: Optional retry policy for transient errors
+            fsm_driver: Optional FSM driver for state-based intent gating (Launch-13)
         """
         self._paper_engine = paper_engine
         self._exchange_port = exchange_port
         self._config = config
         self._drawdown_guard = drawdown_guard
         self._retry_policy = retry_policy or RetryPolicy(max_attempts=3)
+        self._fsm_driver = fsm_driver
 
     @property
     def config(self) -> LiveEngineConfig:
@@ -264,7 +269,7 @@ class LiveEngineV0:
             kill_switch_active=self._config.kill_switch_active,
         )
 
-    def _process_action(self, action: ExecutionAction, ts: int) -> LiveAction:
+    def _process_action(self, action: ExecutionAction, ts: int) -> LiveAction:  # noqa: PLR0911
         """Process single action through safety gates and execute.
 
         Args:
@@ -343,6 +348,15 @@ class LiveEngineV0:
                     block_reason=BlockReason.DRAWDOWN_BLOCKED,
                     intent=intent,
                 )
+
+        # Gate 6: FSM state permission (Launch-13)
+        if self._fsm_driver is not None and not self._fsm_driver.check_intent(intent):
+            return LiveAction(
+                action=action,
+                status=LiveActionStatus.BLOCKED,
+                block_reason=BlockReason.FSM_STATE_BLOCKED,
+                intent=intent,
+            )
 
         # All gates passed - execute action
         return self._execute_action(action, ts, intent)
