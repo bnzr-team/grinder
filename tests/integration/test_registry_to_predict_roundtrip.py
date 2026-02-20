@@ -16,7 +16,7 @@ from grinder.ml.onnx.registry import ModelRegistry, Stage
 
 # Skip if onnxruntime not available
 try:
-    import onnxruntime  # type: ignore  # noqa: F401
+    import onnxruntime  # noqa: F401
 
     ONNX_AVAILABLE = True
 except ImportError:
