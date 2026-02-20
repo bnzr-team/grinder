@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from decimal import ROUND_DOWN, Decimal
-from enum import Enum
+from enum import StrEnum
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -34,7 +34,7 @@ QTY_EPS_STEPS_DEFAULT = 1
 # ---------------------------------------------------------------------------
 
 
-class RouterDecision(str, Enum):
+class RouterDecision(StrEnum):
     """Router decision outcome (SSOT §14.4)."""
 
     NOOP = "NOOP"
