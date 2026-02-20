@@ -110,3 +110,64 @@ If Gate 6 blocks an intent due to FSM state:
 - Recovery from PAUSED requires cooldown elapsed + no active pause triggers.
 - Recovery from EMERGENCY requires `position_reduced=True` + no active emergency triggers.
 - See `docs/08_STATE_MACHINE.md` Sec 8.10 for the full state diagram.
+
+## Evidence artifacts
+
+When enabled, every FSM transition writes a deterministic evidence bundle (`.txt` + `.sha256`).
+
+### Enable
+
+```bash
+export GRINDER_FSM_EVIDENCE=1
+# Optional: set output directory (default: ./artifacts)
+export GRINDER_ARTIFACT_DIR=/path/to/artifacts
+```
+
+Evidence files appear under `${GRINDER_ARTIFACT_DIR:-artifacts}/fsm/`:
+
+```
+fsm/
+  fsm_transition_1706000000_ACTIVE_EMERGENCY.txt
+  fsm_transition_1706000000_ACTIVE_EMERGENCY.sha256
+```
+
+### Verify integrity
+
+```bash
+cd ${GRINDER_ARTIFACT_DIR:-artifacts}/fsm
+# Verify a specific artifact:
+sha256sum fsm_transition_*.txt | diff - fsm_transition_*.sha256
+```
+
+### Disable
+
+```bash
+unset GRINDER_FSM_EVIDENCE
+# or:
+export GRINDER_FSM_EVIDENCE=0
+```
+
+Truthy values: `1`, `true`, `yes`, `on` (case-insensitive, whitespace-trimmed).
+Falsey values: `0`, `false`, `no`, `off`, empty, unset.
+Unknown values default to disabled (safe).
+
+### Format
+
+Each `.txt` file contains a canonical text block:
+
+```
+artifact_version=fsm_evidence_v1
+ts_ms=1706000000
+from_state=ACTIVE
+to_state=EMERGENCY
+reason=KILL_SWITCH
+signals:
+  drawdown_breached=False
+  feed_stale=False
+  kill_switch_active=True
+  operator_override=None
+  position_reduced=False
+  toxicity_level=LOW
+```
+
+Signals are sorted by key name. Format is deterministic: same event always produces identical output.

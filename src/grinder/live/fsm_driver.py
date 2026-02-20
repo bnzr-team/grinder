@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING
 
+from grinder.live.fsm_evidence import maybe_emit_transition_evidence
 from grinder.live.fsm_metrics import get_fsm_metrics
 from grinder.live.fsm_orchestrator import (
     OrchestratorFSM,
@@ -136,6 +137,8 @@ class FsmDriver:
             )
             # Emit transition metric
             get_fsm_metrics().record_transition(event)
+            # Emit evidence artifact (safe: no-op if env disabled, warns on IO error)
+            maybe_emit_transition_evidence(event, inputs)
             # Update clock
             self._last_state_change_ms = ts_ms
 
