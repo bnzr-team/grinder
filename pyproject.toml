@@ -200,6 +200,8 @@ module = [
     "skl2onnx.*",  # M8-03b: skl2onnx has no py.typed
     "onnx",  # M8-03b: optional ML dep
     "onnx.*",  # M8-03b: optional ML dep
+    "onnxruntime",  # optional ML dep (no py.typed)
+    "onnxruntime.*",  # optional ML dep (no py.typed)
     "pyarrow",  # M8-04b: pyarrow has no py.typed
     "pyarrow.*",  # M8-04b: pyarrow has no py.typed
 ]

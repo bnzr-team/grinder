@@ -33,7 +33,7 @@ except ImportError:
     SKLEARN_AVAILABLE = False
 
 try:
-    import onnxruntime  # type: ignore  # noqa: F401
+    import onnxruntime  # noqa: F401
 
     ONNX_AVAILABLE = True
 except ImportError:
