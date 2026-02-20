@@ -1,0 +1,297 @@
+{
+  "schema_version": 1,
+  "generated_at_utc": "2026-02-19T23:57:58Z",
+  "sources": [
+    {
+      "type": "markdown",
+      "path": "docs/runbooks/00_EVIDENCE_INDEX.md"
+    },
+    {
+      "type": "git",
+      "sha": "6c6477136f2550ed463fb4e6de741eb367bd4b0c"
+    }
+  ],
+  "entries": [
+    {
+      "id": "fill_wiring_local",
+      "title": "Fill wiring (local)",
+      "run_via": [
+        "bash scripts/ops_fill_triage.sh local",
+        "bash scripts/smoke_fill_ingest.sh"
+      ],
+      "mode": "local",
+      "evidence_dir_pattern": null,
+      "required_files": [],
+      "optional_files": [],
+      "doc_refs": [
+        {
+          "path": "docs/runbooks/00_EVIDENCE_INDEX.md",
+          "anchor": "local-smoke-smoke_fill_ingestsh"
+        }
+      ]
+    },
+    {
+      "id": "staging_enablement",
+      "title": "Staging enablement",
+      "run_via": [
+        "bash scripts/ops_fill_triage.sh staging",
+        "bash scripts/smoke_fill_ingest_staging.sh"
+      ],
+      "mode": "staging",
+      "evidence_dir_pattern": ".artifacts/fill_ingest_staging/<YYYYMMDDTHHMMSS>",
+      "required_files": [
+        "gate_a_metrics.txt"
+      ],
+      "optional_files": [
+        "gate_b_metrics.txt",
+        "gate_c_metrics.txt",
+        "cursor_after_run1.json",
+        "cursor_before_restart.json",
+        "cursor_after_run2.json"
+      ],
+      "doc_refs": [
+        {
+          "path": "docs/runbooks/00_EVIDENCE_INDEX.md",
+          "anchor": "staging-smoke-smoke_fill_ingest_stagingsh"
+        }
+      ]
+    },
+    {
+      "id": "alert_inputs_non_monotonic",
+      "title": "Alert inputs (non-monotonic rejection)",
+      "run_via": [
+        "bash scripts/ops_fill_triage.sh fire-drill",
+        "bash scripts/fire_drill_fill_alerts.sh"
+      ],
+      "mode": "fire-drill",
+      "evidence_dir_pattern": ".artifacts/fill_alert_fire_drill/<YYYYMMDDTHHMMSS>",
+      "required_files": [
+        "summary.txt",
+        "sha256sums.txt",
+        "drill_a_metrics.txt",
+        "drill_a_log.txt"
+      ],
+      "optional_files": [
+        "cursor_before_drill_a.json",
+        "cursor_after_drill_a.json",
+        "cursor_drill_a.json"
+      ],
+      "doc_refs": [
+        {
+          "path": "docs/runbooks/00_EVIDENCE_INDEX.md",
+          "anchor": "fire-drill-fire_drill_fill_alertssh"
+        }
+      ]
+    },
+    {
+      "id": "alert_inputs_cursor_stuck",
+      "title": "Alert inputs (cursor stuck)",
+      "run_via": [
+        "bash scripts/ops_fill_triage.sh fire-drill",
+        "bash scripts/fire_drill_fill_alerts.sh"
+      ],
+      "mode": "fire-drill",
+      "evidence_dir_pattern": ".artifacts/fill_alert_fire_drill/<YYYYMMDDTHHMMSS>",
+      "required_files": [
+        "summary.txt",
+        "sha256sums.txt",
+        "drill_b_metrics_1.txt",
+        "drill_b_metrics_2.txt",
+        "drill_b_log.txt"
+      ],
+      "optional_files": [
+        "cursor_drill_b.json"
+      ],
+      "doc_refs": [
+        {
+          "path": "docs/runbooks/00_EVIDENCE_INDEX.md",
+          "anchor": "fire-drill-fire_drill_fill_alertssh"
+        }
+      ]
+    },
+    {
+      "id": "killswitch_enforcement",
+      "title": "Kill-switch + enforcement",
+      "run_via": [
+        "bash scripts/ops_risk_triage.sh killswitch-drawdown",
+        "bash scripts/fire_drill_risk_killswitch_drawdown.sh"
+      ],
+      "mode": "killswitch-drawdown",
+      "evidence_dir_pattern": ".artifacts/risk_fire_drill/<YYYYMMDDTHHMMSS>",
+      "required_files": [
+        "summary.txt",
+        "sha256sums.txt",
+        "drill_a_metrics.txt",
+        "drill_a_log.txt"
+      ],
+      "optional_files": [],
+      "doc_refs": [
+        {
+          "path": "docs/runbooks/00_EVIDENCE_INDEX.md",
+          "anchor": "risk-fire-drill-fire_drill_risk_killswitch_drawdownsh"
+        }
+      ]
+    },
+    {
+      "id": "drawdown_guard",
+      "title": "Drawdown guard",
+      "run_via": [
+        "bash scripts/ops_risk_triage.sh killswitch-drawdown",
+        "bash scripts/fire_drill_risk_killswitch_drawdown.sh"
+      ],
+      "mode": "killswitch-drawdown",
+      "evidence_dir_pattern": ".artifacts/risk_fire_drill/<YYYYMMDDTHHMMSS>",
+      "required_files": [
+        "summary.txt",
+        "sha256sums.txt",
+        "drill_b_metrics.txt",
+        "drill_b_log.txt"
+      ],
+      "optional_files": [],
+      "doc_refs": [
+        {
+          "path": "docs/runbooks/00_EVIDENCE_INDEX.md",
+          "anchor": "risk-fire-drill-fire_drill_risk_killswitch_drawdownsh"
+        }
+      ]
+    },
+    {
+      "id": "budget_per_run_cap",
+      "title": "Budget per-run cap",
+      "run_via": [
+        "bash scripts/ops_risk_triage.sh budget-limits",
+        "bash scripts/fire_drill_reconcile_budget_limits.sh"
+      ],
+      "mode": "budget-limits",
+      "evidence_dir_pattern": ".artifacts/budget_fire_drill/<YYYYMMDDTHHMMSS>",
+      "required_files": [
+        "summary.txt",
+        "sha256sums.txt",
+        "drill_a_metrics.txt",
+        "drill_a_log.txt",
+        "drill_a_state.json"
+      ],
+      "optional_files": [],
+      "doc_refs": [
+        {
+          "path": "docs/runbooks/00_EVIDENCE_INDEX.md",
+          "anchor": "budget-fire-drill-fire_drill_reconcile_budget_limitssh"
+        }
+      ]
+    },
+    {
+      "id": "budget_per_day_cap",
+      "title": "Budget per-day cap",
+      "run_via": [
+        "bash scripts/ops_risk_triage.sh budget-limits",
+        "bash scripts/fire_drill_reconcile_budget_limits.sh"
+      ],
+      "mode": "budget-limits",
+      "evidence_dir_pattern": ".artifacts/budget_fire_drill/<YYYYMMDDTHHMMSS>",
+      "required_files": [
+        "summary.txt",
+        "sha256sums.txt",
+        "drill_b_metrics.txt",
+        "drill_b_log.txt",
+        "drill_b_state.json"
+      ],
+      "optional_files": [],
+      "doc_refs": [
+        {
+          "path": "docs/runbooks/00_EVIDENCE_INDEX.md",
+          "anchor": "budget-fire-drill-fire_drill_reconcile_budget_limitssh"
+        }
+      ]
+    },
+    {
+      "id": "execution_intent_gates",
+      "title": "Execution intent gates",
+      "run_via": [
+        "bash scripts/ops_exec_triage.sh exec-fire-drill",
+        "bash scripts/fire_drill_execution_intents.sh"
+      ],
+      "mode": "exec-fire-drill",
+      "evidence_dir_pattern": ".artifacts/execution_fire_drill/<YYYYMMDDTHHMMSS>",
+      "required_files": [
+        "summary.txt",
+        "sha256sums.txt"
+      ],
+      "optional_files": [
+        "drill_a_metrics.txt",
+        "drill_a_log.txt",
+        "drill_b_metrics.txt",
+        "drill_b_log.txt",
+        "drill_c_metrics.txt",
+        "drill_c_log.txt",
+        "drill_d_metrics.txt",
+        "drill_d_log.txt"
+      ],
+      "doc_refs": [
+        {
+          "path": "docs/runbooks/00_EVIDENCE_INDEX.md",
+          "anchor": "execution-fire-drill-fire_drill_execution_intentssh"
+        }
+      ]
+    },
+    {
+      "id": "connector_market_data",
+      "title": "Market data connector",
+      "run_via": [
+        "bash scripts/ops_fill_triage.sh connector-market-data",
+        "bash scripts/fire_drill_connector_market_data.sh"
+      ],
+      "mode": "connector-market-data",
+      "evidence_dir_pattern": ".artifacts/connector_market_data_fire_drill/<YYYYMMDDTHHMMSS>",
+      "required_files": [
+        "summary.txt",
+        "sha256sums.txt"
+      ],
+      "optional_files": [
+        "drill_a_log.txt",
+        "drill_b_log.txt",
+        "drill_b_metrics.txt",
+        "drill_c_log.txt",
+        "drill_d_log.txt",
+        "drill_d_metrics.txt",
+        "drill_e_log.txt",
+        "drill_e_metrics.txt"
+      ],
+      "doc_refs": [
+        {
+          "path": "docs/runbooks/00_EVIDENCE_INDEX.md",
+          "anchor": "market-data-connector-fire-drill"
+        }
+      ]
+    },
+    {
+      "id": "connector_exchange_port",
+      "title": "Exchange port boundary",
+      "run_via": [
+        "bash scripts/ops_fill_triage.sh connector-exchange-port",
+        "bash scripts/fire_drill_connector_exchange_port.sh"
+      ],
+      "mode": "connector-exchange-port",
+      "evidence_dir_pattern": ".artifacts/connector_exchange_port_fire_drill/<YYYYMMDDTHHMMSS>",
+      "required_files": [
+        "summary.txt",
+        "sha256sums.txt"
+      ],
+      "optional_files": [
+        "drill_a_log.txt",
+        "drill_b_log.txt",
+        "drill_c_log.txt",
+        "drill_d_log.txt",
+        "drill_e_log.txt",
+        "drill_e_metrics.txt",
+        "drill_f_log.txt",
+        "drill_f_metrics.txt"
+      ],
+      "doc_refs": [
+        {
+          "path": "docs/runbooks/00_EVIDENCE_INDEX.md",
+          "anchor": "exchange-port-boundary-fire-drill"
+        }
+      ]
+    }
+  ]
+}
