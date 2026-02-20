@@ -161,6 +161,18 @@ Gate B/C artifacts only present when `BINANCE_API_KEY` and `BINANCE_API_SECRET` 
 
 ---
 
+## CI artifact
+
+Every CI run (push to main + PRs) uploads `docs/runbooks/00_EVIDENCE_INDEX.json` as the `evidence-index-json` artifact.
+
+To download from a specific run:
+```bash
+gh run download <run_id> -n evidence-index-json
+cat 00_EVIDENCE_INDEX.json | jq '.entries[] | select(.mode=="connector-market-data")'
+```
+
+---
+
 ## Notes
 
 - `.artifacts/` is gitignored. Do not commit evidence files.
