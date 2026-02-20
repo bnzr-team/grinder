@@ -40,3 +40,10 @@ jobs:
 
       - name: Backtest replay
         run: python -m scripts.run_replay --fixture tests/fixtures/sample_day/ -v
+
+      - name: Upload evidence index
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evidence-index-json
+          path: docs/runbooks/00_EVIDENCE_INDEX.json
