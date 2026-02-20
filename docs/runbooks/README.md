@@ -31,6 +31,7 @@ Operational runbooks for GRINDER trading system.
 | [24_LATENCY_RETRY_TRIAGE](24_LATENCY_RETRY_TRIAGE.md) | HTTP latency/retry alerts and triage (Launch-05) |
 | [25_LATENCY_RETRY_ENABLEMENT_CEREMONY](25_LATENCY_RETRY_ENABLEMENT_CEREMONY.md) | Latency/retry enablement ceremony (Launch-05b) |
 | [26_FILL_TRACKER_TRIAGE](26_FILL_TRACKER_TRIAGE.md) | Fill tracker metrics triage (Launch-06) |
+| [27_FSM_OPERATOR_OVERRIDE](27_FSM_OPERATOR_OVERRIDE.md) | FSM operator override: PAUSE/EMERGENCY via env var (Launch-13) |
 
 ## Quick Reference
 

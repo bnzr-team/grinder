@@ -915,3 +915,122 @@ class TestFsmLoopWiring:
         # duration = (5000 - 1000) / 1000.0 = 4.0s
         # Would be wildly different if time.time() were used
         assert metrics.state_duration_s == pytest.approx(4.0)
+
+    def test_override_normalizes_whitespace_and_case_pause(
+        self,
+        mock_paper_engine: MagicMock,
+        tracking_port: MagicMock,
+        place_action: ExecutionAction,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """' pause ' (whitespace + lowercase) → normalized to PAUSE → Gate 6 blocks."""
+        mock_paper_engine.process_snapshot.return_value = MagicMock(actions=[place_action])
+        monkeypatch.setenv("GRINDER_OPERATOR_OVERRIDE", " pause ")
+
+        fsm = OrchestratorFSM(state=SystemState.ACTIVE, state_enter_ts=1000)
+        driver = FsmDriver(fsm)
+
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        engine = LiveEngineV0(
+            mock_paper_engine,
+            tracking_port,
+            config,
+            fsm_driver=driver,
+        )
+
+        snapshot = Snapshot(
+            ts=2000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50001"),
+            bid_qty=Decimal("1"),
+            ask_qty=Decimal("1"),
+            last_price=Decimal("50000.5"),
+            last_qty=Decimal("0.5"),
+        )
+        output = engine.process_snapshot(snapshot)
+
+        assert driver.state == SystemState.PAUSED
+        assert output.live_actions[0].status == LiveActionStatus.BLOCKED
+        assert output.live_actions[0].block_reason == BlockReason.FSM_STATE_BLOCKED
+
+    def test_override_normalizes_whitespace_and_case_emergency(
+        self,
+        mock_paper_engine: MagicMock,
+        tracking_port: MagicMock,
+        place_action: ExecutionAction,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """' emergency ' (whitespace + lowercase) → normalized to EMERGENCY → blocks."""
+        mock_paper_engine.process_snapshot.return_value = MagicMock(actions=[place_action])
+        monkeypatch.setenv("GRINDER_OPERATOR_OVERRIDE", " emergency ")
+
+        fsm = OrchestratorFSM(state=SystemState.ACTIVE, state_enter_ts=1000)
+        driver = FsmDriver(fsm)
+
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        engine = LiveEngineV0(
+            mock_paper_engine,
+            tracking_port,
+            config,
+            fsm_driver=driver,
+        )
+
+        snapshot = Snapshot(
+            ts=2000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50001"),
+            bid_qty=Decimal("1"),
+            ask_qty=Decimal("1"),
+            last_price=Decimal("50000.5"),
+            last_qty=Decimal("0.5"),
+        )
+        output = engine.process_snapshot(snapshot)
+
+        assert driver.state == SystemState.EMERGENCY
+        assert output.live_actions[0].status == LiveActionStatus.BLOCKED
+
+    def test_override_whitespace_only_treated_as_unset(
+        self,
+        mock_paper_engine: MagicMock,
+        tracking_port: MagicMock,
+        place_action: ExecutionAction,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """'   ' (whitespace only) → treated as unset, no warning, FSM stays ACTIVE."""
+        mock_paper_engine.process_snapshot.return_value = MagicMock(actions=[place_action])
+        monkeypatch.setenv("GRINDER_OPERATOR_OVERRIDE", "   ")
+
+        fsm = OrchestratorFSM(state=SystemState.ACTIVE, state_enter_ts=1000)
+        driver = FsmDriver(fsm)
+
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        engine = LiveEngineV0(
+            mock_paper_engine,
+            tracking_port,
+            config,
+            fsm_driver=driver,
+        )
+
+        snapshot = Snapshot(
+            ts=2000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50001"),
+            bid_qty=Decimal("1"),
+            ask_qty=Decimal("1"),
+            last_price=Decimal("50000.5"),
+            last_qty=Decimal("0.5"),
+        )
+
+        with caplog.at_level(logging.WARNING, logger="grinder.live.engine"):
+            output = engine.process_snapshot(snapshot)
+
+        # No warning (whitespace = unset, not invalid)
+        assert not any("GRINDER_OPERATOR_OVERRIDE" in r.message for r in caplog.records)
+        # FSM stays ACTIVE, PLACE goes through
+        assert driver.state == SystemState.ACTIVE
+        assert output.live_actions[0].status == LiveActionStatus.EXECUTED
+        assert len(tracking_port.calls) == 1
