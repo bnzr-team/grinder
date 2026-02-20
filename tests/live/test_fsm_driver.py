@@ -11,10 +11,16 @@ Validates:
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 from grinder.core import SystemState
 from grinder.live.fsm_driver import VALID_OVERRIDES, VALID_TOX_LEVELS, FsmDriver, build_inputs
+from grinder.live.fsm_evidence import ENV_ARTIFACT_DIR, ENV_ENABLE
 from grinder.live.fsm_metrics import get_fsm_metrics, reset_fsm_metrics
 from grinder.live.fsm_orchestrator import FsmConfig, OrchestratorFSM, TransitionReason
 from grinder.risk.drawdown_guard_v1 import OrderIntent
@@ -347,3 +353,82 @@ class TestDriverState:
             operator_override=None,
         )
         assert driver.state == SystemState.READY
+
+
+# ===========================================================================
+# 6. Evidence artifacts via FsmDriver.step()
+# ===========================================================================
+
+
+class TestDriverEvidence:
+    """FsmDriver.step() writes evidence on transition when env enabled."""
+
+    def setup_method(self) -> None:
+        reset_fsm_metrics()
+
+    def test_evidence_written_on_transition_when_enabled(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv(ENV_ENABLE, "1")
+        monkeypatch.setenv(ENV_ARTIFACT_DIR, str(tmp_path))
+
+        driver = _make_driver(state=SystemState.ACTIVE, enter_ts=_BASE_TS)
+        # kill switch -> EMERGENCY transition
+        driver.step(
+            ts_ms=_BASE_TS,
+            kill_switch_active=True,
+            drawdown_breached=False,
+            feed_stale=False,
+            toxicity_level="LOW",
+            position_reduced=False,
+            operator_override=None,
+        )
+
+        fsm_dir = tmp_path / "fsm"
+        txt_files = list(fsm_dir.glob("*.txt"))
+        sha_files = list(fsm_dir.glob("*.sha256"))
+        assert len(txt_files) == 1
+        assert len(sha_files) == 1
+        assert "ACTIVE" in txt_files[0].name
+        assert "EMERGENCY" in txt_files[0].name
+
+    def test_no_evidence_when_disabled(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.delenv(ENV_ENABLE, raising=False)
+        monkeypatch.setenv(ENV_ARTIFACT_DIR, str(tmp_path))
+
+        driver = _make_driver(state=SystemState.ACTIVE, enter_ts=_BASE_TS)
+        driver.step(
+            ts_ms=_BASE_TS,
+            kill_switch_active=True,
+            drawdown_breached=False,
+            feed_stale=False,
+            toxicity_level="LOW",
+            position_reduced=False,
+            operator_override=None,
+        )
+
+        fsm_dir = tmp_path / "fsm"
+        assert not fsm_dir.exists() or list(fsm_dir.glob("*")) == []
+
+    def test_no_evidence_when_no_transition(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setenv(ENV_ENABLE, "1")
+        monkeypatch.setenv(ENV_ARTIFACT_DIR, str(tmp_path))
+
+        driver = _make_driver(state=SystemState.ACTIVE, enter_ts=_BASE_TS)
+        # No transition: ACTIVE stays ACTIVE with safe signals
+        driver.step(
+            ts_ms=_BASE_TS,
+            kill_switch_active=False,
+            drawdown_breached=False,
+            feed_stale=False,
+            toxicity_level="LOW",
+            position_reduced=False,
+            operator_override=None,
+        )
+
+        fsm_dir = tmp_path / "fsm"
+        assert not fsm_dir.exists() or list(fsm_dir.glob("*")) == []
