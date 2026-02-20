@@ -1300,7 +1300,13 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
 - [DONE] Staging dry-run validation (Launch-06 PR4): Staging smoke script (3-gate: OFF/ON/restart-persistence) for real Binance reads. RB26 expanded with safety invariants, quiet market semantics, companion scripts. Zero src/ changes.
 - [DONE] Artifact assertions + write-op grep hardening (Launch-06 PR5): metrics-out artifact must contain grinder_fill_* lines (automated). RB26 write-op grep expanded with diff-level + repo-level patterns. Zero src/ changes.
 - [DONE] Cursor stuck detection + monotonicity (Launch-06 PR6): `cursor_last_save_ts` / `cursor_age_seconds` gauges for stuck detection. Monotonicity guard rejects backward cursor writes using tuple `(trade_id, ts_ms)`. Cursor saved every poll (not just on new trades) — prevents false-positive FillCursorStuck in quiet markets. 2 new alerts (FillCursorStuck, FillCursorNonMonotonicRejected). RB26 updated with NoPolls/QuietMarket/CursorStuck triage table + thresholds. 8 contract patterns. Zero write-op changes.
-- Launch-13 (P1): Centralized FSM Orchestrator (spec: `docs/08_STATE_MACHINE.md`, Sec 8.9-8.14).
+- [DONE] Launch-13 (P1): Centralized FSM Orchestrator — COMPLETE (main @ `7793045`).
+  - PR0 (#211) — Spec/ADR (SSOT wiring)
+  - PR1 (#213) — Pure FSM core + 74 deterministic tests (merged @ `897ca8b`)
+  - PR2 (#214) — Driver + metrics + Gate 6 (merged @ `89e329a`)
+  - PR3 (#215) — Real loop wiring + runtime signals (merged @ `232d07b`)
+  - PR4 (#216) — Operator override normalization + runbook (merged @ `6c37baf`)
+  - PR5 (#217) — Deterministic evidence artifacts (merged @ `7793045`)
 - Expand tests to >50% coverage.
 - Adaptive Controller v1 (EMA-based adaptive step, trend detection, DRAWDOWN mode).
 - ~~Live Connector v1~~ [DONE] Done (LC-21: stream_ticks wired to BinanceWsConnector).
