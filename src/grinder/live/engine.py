@@ -285,14 +285,22 @@ class LiveEngineV0:
         """
         assert self._fsm_driver is not None  # caller guards
 
-        # Signal: operator override from env var
-        raw_override = os.environ.get("GRINDER_OPERATOR_OVERRIDE") or None
-        if raw_override is not None and raw_override not in {"PAUSE", "EMERGENCY"}:
-            logger.warning(
-                "Invalid GRINDER_OPERATOR_OVERRIDE=%r, treating as None",
-                raw_override,
-            )
-            raw_override = None
+        # Signal: operator override from env var (normalize: strip + upper)
+        raw = os.environ.get("GRINDER_OPERATOR_OVERRIDE")
+        override: str | None = None
+        if raw is not None:
+            norm = raw.strip().upper()
+            if norm == "":
+                override = None
+            elif norm in {"PAUSE", "EMERGENCY"}:
+                override = norm
+            else:
+                logger.warning(
+                    "Invalid GRINDER_OPERATOR_OVERRIDE=%r (normalized=%r), treating as None",
+                    raw,
+                    norm,
+                )
+                override = None
 
         self._fsm_driver.step(
             ts_ms=ts_ms,
@@ -303,7 +311,7 @@ class LiveEngineV0:
             feed_stale=False,  # TODO: wire from DataConnector staleness
             toxicity_level="LOW",  # TODO: wire from ToxicityGate
             position_reduced=False,  # TODO: wire from position reducer
-            operator_override=raw_override,
+            operator_override=override,
         )
 
     def _process_action(self, action: ExecutionAction, ts: int) -> LiveAction:  # noqa: PLR0911
