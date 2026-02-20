@@ -39,6 +39,8 @@
 
 ## Launch-13: State Machine Orchestrator (FSM)
 
+> **SSOT:** `docs/08_STATE_MACHINE.md` (Sec 8.9-8.14)
+
 ### Problem
 We have regime classifier + scattered safety gates, but no centralized lifecycle FSM:
 INIT → READY → DEGRADED → EMERGENCY, with explicit transitions, reasons, and ops actions.
