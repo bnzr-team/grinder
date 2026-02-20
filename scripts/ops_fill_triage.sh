@@ -175,6 +175,7 @@ if [[ "$MODE" == "all" ]]; then
       echo "  FAILED: $SUB_MODE (exit code $SUB_RC)"
       echo "  elapsed: ${SUB_ELAPSED}s"
       echo "========================================"
+      echo "EVIDENCE_REF mode=$SUB_MODE status=failed reason=exit_code_$SUB_RC"
       FAIL_COUNT=$((FAIL_COUNT + 1))
       FAILED_MODES+=("$SUB_MODE")
       EVIDENCE_DIRS+=("FAILED")
@@ -187,6 +188,11 @@ if [[ "$MODE" == "all" ]]; then
         echo "  evidence_dir: $SUB_EVIDENCE"
       fi
       echo "========================================"
+      if [[ -n "$SUB_EVIDENCE" ]] && [[ "$SUB_EVIDENCE" != "UNKNOWN" ]]; then
+        echo "EVIDENCE_REF mode=$SUB_MODE evidence_dir=$SUB_EVIDENCE summary=$SUB_EVIDENCE/summary.txt sha256sums=$SUB_EVIDENCE/sha256sums.txt"
+      else
+        echo "EVIDENCE_REF mode=$SUB_MODE status=passed evidence_dir=unknown"
+      fi
       PASS_COUNT=$((PASS_COUNT + 1))
       EVIDENCE_DIRS+=("${SUB_EVIDENCE:-UNKNOWN}")
     fi
@@ -313,6 +319,14 @@ if [[ "$SCRIPT_RC" -ne 0 ]]; then
   echo "  elapsed: ${ELAPSED}s"
   echo "========================================"
   echo ""
+  # EVIDENCE_REF (machine-readable, always emitted).
+  FAIL_EVIDENCE="$(extract_evidence_dir "$SCRIPT_OUTPUT")"
+  if [[ -n "$FAIL_EVIDENCE" ]]; then
+    echo "EVIDENCE_REF mode=$MODE status=failed reason=exit_code_$SCRIPT_RC evidence_dir=$FAIL_EVIDENCE"
+  else
+    echo "EVIDENCE_REF mode=$MODE status=failed reason=exit_code_$SCRIPT_RC"
+  fi
+  echo ""
   echo "NEXT: check the output above for FAIL lines, then see:"
   echo "  $TRIAGE_DOC"
   echo "  docs/runbooks/00_OPS_QUICKSTART.md"
@@ -334,6 +348,16 @@ if [[ "$HAS_ARTIFACTS" -eq 1 ]]; then
 fi
 
 echo "========================================"
+echo ""
+
+# EVIDENCE_REF (machine-readable, always emitted).
+if [[ "$HAS_ARTIFACTS" -eq 1 ]] && [[ -n "${EVIDENCE_DIR:-}" ]] && [[ "$EVIDENCE_DIR" != "UNKNOWN" ]]; then
+  echo "EVIDENCE_REF mode=$MODE evidence_dir=$EVIDENCE_DIR summary=$EVIDENCE_DIR/summary.txt sha256sums=$EVIDENCE_DIR/sha256sums.txt"
+elif [[ "$HAS_ARTIFACTS" -eq 1 ]]; then
+  echo "EVIDENCE_REF mode=$MODE status=passed evidence_dir=unknown"
+else
+  echo "EVIDENCE_REF mode=$MODE status=passed"
+fi
 echo ""
 
 # Git status guardrail (for modes that produce artifacts).
