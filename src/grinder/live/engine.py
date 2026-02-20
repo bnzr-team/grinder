@@ -30,6 +30,7 @@ See: ADR-036 for design decisions
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -247,6 +248,10 @@ class LiveEngineV0:
         # Step 1: Get paper engine decisions
         paper_output = self._paper_engine.process_snapshot(snapshot)
 
+        # FSM tick: update state before action processing (Launch-13 PR3)
+        if self._fsm_driver is not None:
+            self._tick_fsm(snapshot.ts)
+
         # Step 2: Process actions
         live_actions: list[LiveAction] = []
         raw_actions = paper_output.actions if hasattr(paper_output, "actions") else []
@@ -267,6 +272,38 @@ class LiveEngineV0:
             armed=self._config.armed,
             mode=self._config.mode,
             kill_switch_active=self._config.kill_switch_active,
+        )
+
+    def _tick_fsm(self, ts_ms: int) -> None:
+        """Tick FSM driver with current runtime signals.
+
+        Reads kill_switch, drawdown from existing guards.
+        operator_override from GRINDER_OPERATOR_OVERRIDE env var.
+        feed_stale and toxicity_level pinned to safe defaults.
+
+        Uses snapshot clock (ts_ms) for deterministic duration tracking.
+        """
+        assert self._fsm_driver is not None  # caller guards
+
+        # Signal: operator override from env var
+        raw_override = os.environ.get("GRINDER_OPERATOR_OVERRIDE") or None
+        if raw_override is not None and raw_override not in {"PAUSE", "EMERGENCY"}:
+            logger.warning(
+                "Invalid GRINDER_OPERATOR_OVERRIDE=%r, treating as None",
+                raw_override,
+            )
+            raw_override = None
+
+        self._fsm_driver.step(
+            ts_ms=ts_ms,
+            kill_switch_active=self._config.kill_switch_active,
+            drawdown_breached=(
+                self._drawdown_guard.is_drawdown if self._drawdown_guard is not None else False
+            ),
+            feed_stale=False,  # TODO: wire from DataConnector staleness
+            toxicity_level="LOW",  # TODO: wire from ToxicityGate
+            position_reduced=False,  # TODO: wire from position reducer
+            operator_override=raw_override,
         )
 
     def _process_action(self, action: ExecutionAction, ts: int) -> LiveAction:  # noqa: PLR0911

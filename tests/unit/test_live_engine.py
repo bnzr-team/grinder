@@ -26,6 +26,7 @@ See ADR-036 for design decisions.
 
 from __future__ import annotations
 
+import logging
 from decimal import Decimal
 from typing import Any
 from unittest.mock import MagicMock
@@ -56,7 +57,7 @@ from grinder.live import (
     classify_intent,
 )
 from grinder.live.fsm_driver import FsmDriver
-from grinder.live.fsm_metrics import reset_fsm_metrics
+from grinder.live.fsm_metrics import get_fsm_metrics, reset_fsm_metrics
 from grinder.live.fsm_orchestrator import FsmConfig, OrchestratorFSM
 from grinder.risk.drawdown_guard_v1 import (
     DrawdownGuardV1,
@@ -613,7 +614,9 @@ class TestFsmStateGate:
         """FSM in PAUSED → INCREASE_RISK blocked with FSM_STATE_BLOCKED."""
         mock_paper_engine.process_snapshot.return_value = MagicMock(actions=[place_action])
 
-        fsm = OrchestratorFSM(state=SystemState.PAUSED, config=FsmConfig())
+        # state_enter_ts matches sample_snapshot.ts so cooldown hasn't elapsed
+        # (prevents PAUSED→ACTIVE recovery during tick)
+        fsm = OrchestratorFSM(state=SystemState.PAUSED, state_enter_ts=1000000, config=FsmConfig())
         driver = FsmDriver(fsm)
 
         config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
@@ -639,7 +642,8 @@ class TestFsmStateGate:
         """FSM in PAUSED → CANCEL allowed (reduce-risk intents pass Gate 6)."""
         mock_paper_engine.process_snapshot.return_value = MagicMock(actions=[cancel_action])
 
-        fsm = OrchestratorFSM(state=SystemState.PAUSED, config=FsmConfig())
+        # state_enter_ts matches sample_snapshot.ts so cooldown hasn't elapsed
+        fsm = OrchestratorFSM(state=SystemState.PAUSED, state_enter_ts=1000000, config=FsmConfig())
         driver = FsmDriver(fsm)
 
         config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
@@ -653,3 +657,261 @@ class TestFsmStateGate:
 
         # Port was called
         assert len(tracking_port.calls) == 1
+
+
+# --- F) FSM Loop Wiring Tests (Launch-13 PR3) ---
+
+
+class TestFsmLoopWiring:
+    """Tests for FSM tick wiring in process_snapshot.
+
+    PR3 proves: FsmDriver.step() is called from the real loop, driven by
+    runtime signals (kill switch, drawdown, operator override env var),
+    and the engine write-path blocks appropriately when state changes.
+    """
+
+    def setup_method(self) -> None:
+        reset_fsm_metrics()
+
+    @pytest.fixture(autouse=True)
+    def _clean_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Ensure GRINDER_OPERATOR_OVERRIDE is unset for every test."""
+        monkeypatch.delenv("GRINDER_OPERATOR_OVERRIDE", raising=False)
+
+    def test_kill_switch_triggers_emergency_transition(
+        self,
+        mock_paper_engine: MagicMock,
+        tracking_port: MagicMock,
+    ) -> None:
+        """kill_switch_active=True → FSM ACTIVE→EMERGENCY transition."""
+        mock_paper_engine.process_snapshot.return_value = MagicMock(actions=[])
+
+        fsm = OrchestratorFSM(state=SystemState.ACTIVE, state_enter_ts=1000)
+        driver = FsmDriver(fsm)
+
+        config = LiveEngineConfig(
+            armed=True,
+            mode=SafeMode.LIVE_TRADE,
+            kill_switch_active=True,
+        )
+        engine = LiveEngineV0(
+            mock_paper_engine,
+            tracking_port,
+            config,
+            fsm_driver=driver,
+        )
+
+        snapshot = Snapshot(
+            ts=2000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50001"),
+            bid_qty=Decimal("1"),
+            ask_qty=Decimal("1"),
+            last_price=Decimal("50000.5"),
+            last_qty=Decimal("0.5"),
+        )
+        engine.process_snapshot(snapshot)
+
+        assert driver.state == SystemState.EMERGENCY
+        metrics = get_fsm_metrics()
+        assert ("ACTIVE", "EMERGENCY", "KILL_SWITCH") in metrics.transitions
+
+    def test_operator_override_pause_blocks_via_gate6(
+        self,
+        mock_paper_engine: MagicMock,
+        tracking_port: MagicMock,
+        place_action: ExecutionAction,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """GRINDER_OPERATOR_OVERRIDE=PAUSE → ACTIVE→PAUSED → PLACE blocked by Gate 6.
+
+        This also proves tick-before-gate ordering: the FSM transitions in
+        the same snapshot that contains the PLACE action, and Gate 6 sees
+        the new state (PAUSED) which blocks INCREASE_RISK.
+        """
+        mock_paper_engine.process_snapshot.return_value = MagicMock(actions=[place_action])
+        monkeypatch.setenv("GRINDER_OPERATOR_OVERRIDE", "PAUSE")
+
+        fsm = OrchestratorFSM(state=SystemState.ACTIVE, state_enter_ts=1000)
+        driver = FsmDriver(fsm)
+
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        engine = LiveEngineV0(
+            mock_paper_engine,
+            tracking_port,
+            config,
+            fsm_driver=driver,
+        )
+
+        snapshot = Snapshot(
+            ts=2000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50001"),
+            bid_qty=Decimal("1"),
+            ask_qty=Decimal("1"),
+            last_price=Decimal("50000.5"),
+            last_qty=Decimal("0.5"),
+        )
+        output = engine.process_snapshot(snapshot)
+
+        # FSM transitioned to PAUSED
+        assert driver.state == SystemState.PAUSED
+        # PLACE blocked by Gate 6 (not Gate 3 — kill switch is off)
+        assert output.live_actions[0].status == LiveActionStatus.BLOCKED
+        assert output.live_actions[0].block_reason == BlockReason.FSM_STATE_BLOCKED
+        # 0 port calls
+        assert len(tracking_port.calls) == 0
+
+    def test_invalid_operator_override_warns_and_still_ticks(
+        self,
+        mock_paper_engine: MagicMock,
+        tracking_port: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Invalid GRINDER_OPERATOR_OVERRIDE → warning + tick still runs."""
+        mock_paper_engine.process_snapshot.return_value = MagicMock(actions=[])
+        monkeypatch.setenv("GRINDER_OPERATOR_OVERRIDE", "INVALID_VALUE")
+
+        fsm = OrchestratorFSM(state=SystemState.ACTIVE, state_enter_ts=1000)
+        driver = FsmDriver(fsm)
+
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        engine = LiveEngineV0(
+            mock_paper_engine,
+            tracking_port,
+            config,
+            fsm_driver=driver,
+        )
+
+        snapshot = Snapshot(
+            ts=2000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50001"),
+            bid_qty=Decimal("1"),
+            ask_qty=Decimal("1"),
+            last_price=Decimal("50000.5"),
+            last_qty=Decimal("0.5"),
+        )
+
+        with caplog.at_level(logging.WARNING, logger="grinder.live.engine"):
+            engine.process_snapshot(snapshot)
+
+        # Warning was logged
+        assert any("GRINDER_OPERATOR_OVERRIDE" in r.message for r in caplog.records)
+        # FSM still ticked (state gauge updated, stays ACTIVE since override=None)
+        assert driver.state == SystemState.ACTIVE
+        metrics = get_fsm_metrics()
+        assert metrics._current_state == SystemState.ACTIVE
+
+    def test_drawdown_breached_triggers_emergency(
+        self,
+        mock_paper_engine: MagicMock,
+        tracking_port: MagicMock,
+    ) -> None:
+        """DrawdownGuardV1 in DRAWDOWN → drawdown_breached=True → FSM ACTIVE→EMERGENCY."""
+        mock_paper_engine.process_snapshot.return_value = MagicMock(actions=[])
+
+        guard = DrawdownGuardV1(
+            config=DrawdownGuardV1Config(portfolio_dd_limit=Decimal("0.10")),
+        )
+        guard.update(
+            equity_current=Decimal("80000"),
+            equity_start=Decimal("100000"),
+            symbol_losses={},
+        )
+        assert guard.is_drawdown
+
+        fsm = OrchestratorFSM(state=SystemState.ACTIVE, state_enter_ts=1000)
+        driver = FsmDriver(fsm)
+
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        engine = LiveEngineV0(
+            mock_paper_engine,
+            tracking_port,
+            config,
+            drawdown_guard=guard,
+            fsm_driver=driver,
+        )
+
+        snapshot = Snapshot(
+            ts=2000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50001"),
+            bid_qty=Decimal("1"),
+            ask_qty=Decimal("1"),
+            last_price=Decimal("50000.5"),
+            last_qty=Decimal("0.5"),
+        )
+        engine.process_snapshot(snapshot)
+
+        assert driver.state == SystemState.EMERGENCY
+        metrics = get_fsm_metrics()
+        assert ("ACTIVE", "EMERGENCY", "DD_BREACH") in metrics.transitions
+
+    def test_safe_defaults_keep_fsm_active(
+        self,
+        mock_paper_engine: MagicMock,
+        tracking_port: MagicMock,
+        sample_snapshot: Snapshot,
+        place_action: ExecutionAction,
+    ) -> None:
+        """No active signals → FSM stays ACTIVE → PLACE passes Gate 6."""
+        mock_paper_engine.process_snapshot.return_value = MagicMock(actions=[place_action])
+
+        fsm = OrchestratorFSM(state=SystemState.ACTIVE, state_enter_ts=1000)
+        driver = FsmDriver(fsm)
+
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        engine = LiveEngineV0(
+            mock_paper_engine,
+            tracking_port,
+            config,
+            fsm_driver=driver,
+        )
+
+        output = engine.process_snapshot(sample_snapshot)
+
+        assert driver.state == SystemState.ACTIVE
+        assert output.live_actions[0].status == LiveActionStatus.EXECUTED
+        assert len(tracking_port.calls) == 1
+
+    def test_snapshot_ts_used_for_fsm_clock(
+        self,
+        mock_paper_engine: MagicMock,
+        tracking_port: MagicMock,
+    ) -> None:
+        """Duration gauge uses snapshot.ts (not wall clock) for determinism."""
+        mock_paper_engine.process_snapshot.return_value = MagicMock(actions=[])
+
+        fsm = OrchestratorFSM(state=SystemState.ACTIVE, state_enter_ts=1000)
+        driver = FsmDriver(fsm)
+
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        engine = LiveEngineV0(
+            mock_paper_engine,
+            tracking_port,
+            config,
+            fsm_driver=driver,
+        )
+
+        snapshot = Snapshot(
+            ts=5000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50001"),
+            bid_qty=Decimal("1"),
+            ask_qty=Decimal("1"),
+            last_price=Decimal("50000.5"),
+            last_qty=Decimal("0.5"),
+        )
+        engine.process_snapshot(snapshot)
+
+        metrics = get_fsm_metrics()
+        # duration = (5000 - 1000) / 1000.0 = 4.0s
+        # Would be wildly different if time.time() were used
+        assert metrics.state_duration_s == pytest.approx(4.0)
