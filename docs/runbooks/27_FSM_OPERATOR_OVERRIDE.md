@@ -135,8 +135,8 @@ fsm/
 
 ```bash
 cd ${GRINDER_ARTIFACT_DIR:-artifacts}/fsm
-# Verify a specific artifact:
-sha256sum fsm_transition_*.txt | diff - fsm_transition_*.sha256
+# Verify all artifacts:
+sha256sum -c fsm_transition_*.sha256
 ```
 
 ### Disable

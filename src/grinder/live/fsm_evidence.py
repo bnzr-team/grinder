@@ -129,7 +129,7 @@ def write_fsm_evidence_atomic(
     digest = compute_sha256_hex(text)
 
     _atomic_write_text(txt_path, text)
-    _atomic_write_text(sha_path, digest + "\n")
+    _atomic_write_text(sha_path, f"{digest}  {txt_path.name}\n")
 
     return txt_path, sha_path
 

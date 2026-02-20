@@ -214,7 +214,8 @@ class TestWriteEvidenceAtomic:
 
         txt = txt_path.read_text(encoding="utf-8")
         sha = sha_path.read_text(encoding="utf-8")
-        assert sha == compute_sha256_hex(txt) + "\n"
+        digest = compute_sha256_hex(txt)
+        assert sha == f"{digest}  {txt_path.name}\n"
 
     def test_filename_contains_ts_and_states(self, tmp_path: Path) -> None:
         event = _mk_event(ts_ms=12345)
