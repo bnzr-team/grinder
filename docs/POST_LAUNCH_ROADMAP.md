@@ -76,6 +76,10 @@ INIT → READY → DEGRADED → EMERGENCY, with explicit transitions, reasons, a
 
 ## Launch-14: SmartOrderRouter (amend vs cancel-replace)
 
+> **SSOT:** `docs/14_SMART_ORDER_ROUTER_SPEC.md` (decision matrix + invariants + PR plan)
+
+**Status:** IN PROGRESS (PR0: spec)
+
 ### Problem
 We mostly do "cancel / place" patterns. Need router to decide:
 - amend existing order vs cancel-replace vs noop

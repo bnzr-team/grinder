@@ -1307,6 +1307,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - PR3 (#215) — Real loop wiring + runtime signals (merged @ `232d07b`)
   - PR4 (#216) — Operator override normalization + runbook (merged @ `6c37baf`)
   - PR5 (#217) — Deterministic evidence artifacts (merged @ `7793045`)
+- Next: Launch-14 PR0 — SmartOrderRouter spec + decision matrix (amend vs cancel-replace). SSOT: `docs/14_SMART_ORDER_ROUTER_SPEC.md`.
 - Expand tests to >50% coverage.
 - Adaptive Controller v1 (EMA-based adaptive step, trend detection, DRAWDOWN mode).
 - ~~Live Connector v1~~ [DONE] Done (LC-21: stream_ticks wired to BinanceWsConnector).
