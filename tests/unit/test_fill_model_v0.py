@@ -201,9 +201,7 @@ class TestNoSklearnImport:
     """REQ-003: fill_model_v0.py has zero sklearn/numpy/scipy imports."""
 
     def test_no_ml_deps_imported(self) -> None:
-        source = pathlib.Path(
-            _fill_model_v0_mod.__file__
-        ).read_text()
+        source = pathlib.Path(_fill_model_v0_mod.__file__).read_text()
         for dep in ("sklearn", "numpy", "scipy", "pandas"):
             assert f"import {dep}" not in source
 
