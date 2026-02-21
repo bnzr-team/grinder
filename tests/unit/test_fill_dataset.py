@@ -31,17 +31,6 @@ from grinder.paper.fills import Fill
 if TYPE_CHECKING:
     from pathlib import Path
 
-try:
-    import pyarrow as _pa  # noqa: F401
-
-    _has_pyarrow = True
-except ImportError:
-    _has_pyarrow = False
-
-_requires_pyarrow = pytest.mark.skipif(
-    not _has_pyarrow,
-    reason="pyarrow not installed (pip install grinder[ml])",
-)
 
 # --- Helpers ---------------------------------------------------------------
 
@@ -373,7 +362,6 @@ def _make_sample_rows() -> list[FillOutcomeRow]:
     return rows
 
 
-@_requires_pyarrow
 class TestManifestSchema:
     """REQ-005: Manifest contains required fields."""
 
@@ -394,7 +382,6 @@ class TestManifestSchema:
         assert manifest["columns"] == list(FILL_OUTCOME_COLUMNS)
 
 
-@_requires_pyarrow
 class TestArtifactIntegrity:
     """REQ-007: SHA256 in manifest matches actual data.parquet."""
 
@@ -417,7 +404,6 @@ class TestArtifactIntegrity:
         assert manifest["sha256"]["data.parquet"] == actual
 
 
-@_requires_pyarrow
 class TestCliBuildFromFixture:
     """REQ-006: CLI script builds from fixture."""
 
@@ -469,7 +455,6 @@ class TestCliBuildFromFixture:
         assert (dataset_dir / "manifest.json").exists()
 
 
-@_requires_pyarrow
 class TestDeterminismRebuild:
     """REQ-008: Rebuild from same input produces identical sha256."""
 
@@ -495,7 +480,6 @@ class TestDeterminismRebuild:
         assert m1 == m2
 
 
-@_requires_pyarrow
 class TestEmptyDataset:
     """Edge case: empty fill list produces valid empty dataset."""
 
@@ -510,7 +494,6 @@ class TestEmptyDataset:
         assert (dataset_dir / "data.parquet").exists()
 
 
-@_requires_pyarrow
 class TestForceOverwrite:
     """Force flag allows overwriting existing dataset."""
 

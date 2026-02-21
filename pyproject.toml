@@ -91,6 +91,7 @@ dev = [
     "types-PyYAML>=6.0,<7.0",
     "ruff>=0.2,<1.0",
     "pre-commit>=3.6,<4.0",
+    "pyarrow>=15.0,<20.0",  # Track-C: fill_dataset tests need parquet I/O
 ]
 all = [
     "grinder[ml,backtest,dev]",
