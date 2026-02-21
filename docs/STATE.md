@@ -1307,7 +1307,12 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - PR3 (#215) — Real loop wiring + runtime signals (merged @ `232d07b`)
   - PR4 (#216) — Operator override normalization + runbook (merged @ `6c37baf`)
   - PR5 (#217) — Deterministic evidence artifacts (merged @ `7793045`)
-- Next: Launch-14 PR0 — SmartOrderRouter spec + decision matrix (amend vs cancel-replace). SSOT: `docs/14_SMART_ORDER_ROUTER_SPEC.md`.
+- [DONE] Launch-14 (P1): SmartOrderRouter (existing=None scope) — COMPLETE (main @ `e5b177c`).
+  - PR0 (#219) — Spec/decision matrix + invariants (merged @ `8ff7339`)
+  - PR1 (#220) — Router core + table-driven tests (merged @ `d98008d`)
+  - PR2 (#221) — LiveEngine wiring + SOR metrics (merged @ `045e5c7`)
+  - PR3 (#222) — Fire drill + evidence + runbook (merged @ `e5b177c`)
+  - Note: AMEND deferred (requires order state tracking, not in scope for existing=None).
 - Expand tests to >50% coverage.
 - Adaptive Controller v1 (EMA-based adaptive step, trend detection, DRAWDOWN mode).
 - ~~Live Connector v1~~ [DONE] Done (LC-21: stream_ticks wired to BinanceWsConnector).
