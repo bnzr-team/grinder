@@ -1318,6 +1318,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - PR1 (#225) — Core contracts + render + metrics (merged @ `754da32`)
   - PR2 (#226) — Port wiring + syncer + mismatch detection + evidence (merged @ `1e64c24`)
   - PR3 (#227) — Fire drill + evidence + runbook + ops entrypoint (merged @ `ac3cc36`)
+- [DONE] P2 triage PR1: alert coverage for Launch-13/14/15 metrics + runbook wiring. 7 alert rules (FsmBadStateTooLong, FsmActionBlockedSpike, SorBlockedSpike, SorNoopSpike, AccountSyncStale, AccountSyncErrors, AccountSyncMismatchSpike) + triage wiring in RB02. Zero src/ changes.
 - Expand tests to >50% coverage.
 - Adaptive Controller v1 (EMA-based adaptive step, trend detection, DRAWDOWN mode).
 - ~~Live Connector v1~~ [DONE] Done (LC-21: stream_ticks wired to BinanceWsConnector).

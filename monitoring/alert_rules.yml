@@ -1,4 +1,4 @@
-# GRINDER Alert Rules v4
+# GRINDER Alert Rules v5
 # Based on metrics from src/grinder/observability/metrics_builder.py
 #
 # Available metrics:
@@ -52,6 +52,22 @@
 #   - grinder_fill_ingest_errors_total{source,reason} (counter): ingest errors by reason
 #   - grinder_fill_cursor_load_total{source,result} (counter): cursor load attempts
 #   - grinder_fill_cursor_save_total{source,result} (counter): cursor save attempts
+#
+# FSM metrics (Launch-13):
+#   - grinder_fsm_current_state{state} (gauge): one-hot current FSM state
+#   - grinder_fsm_state_duration_seconds (gauge): time in current state
+#   - grinder_fsm_transitions_total{from_state,to_state,reason} (counter): state transitions
+#   - grinder_fsm_action_blocked_total{state,intent} (counter): actions blocked by FSM
+#
+# SOR metrics (Launch-14):
+#   - grinder_router_decision_total{decision,reason} (counter): router decisions
+#   - grinder_router_amend_savings_total (counter): amend savings
+#
+# AccountSync metrics (Launch-15):
+#   - grinder_account_sync_last_ts (gauge): unix ms of last successful sync
+#   - grinder_account_sync_age_seconds (gauge): seconds since last sync
+#   - grinder_account_sync_errors_total{reason} (counter): sync errors
+#   - grinder_account_sync_mismatches_total{rule} (counter): sync mismatches
 
 groups:
   - name: grinder_availability
@@ -562,3 +578,109 @@ groups:
           summary: "Cursor writes rejected (non-monotonic)"
           description: "Cursor save was rejected because the new (trade_id, ts_ms) tuple is less than the existing file. This may indicate data corruption or a logic bug."
           runbook_url: "docs/runbooks/26_FILL_TRACKER_TRIAGE.md#fillcursornonmonotonicrejected"
+
+  # Launch-13: FSM Orchestrator Alerts
+  # Metrics from src/grinder/live/fsm_metrics.py.
+  # Labels: state=, intent=, from_state=, to_state=, reason= only.
+  # Safe-by-default: metrics emit zero-value baselines when FSM inactive.
+  - name: grinder_fsm
+    rules:
+      # Warning: FSM stuck in bad state (DEGRADED/EMERGENCY/PAUSED) for >2min
+      - alert: FsmBadStateTooLong
+        expr: |
+          (grinder_fsm_current_state{state=~"DEGRADED|EMERGENCY|PAUSED"} == 1)
+          and
+          (grinder_fsm_state_duration_seconds > 120)
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "FSM stuck in {{ $labels.state }} for >2 minutes"
+          description: "FSM has been in {{ $labels.state }} state for {{ $value | printf \"%.0f\" }}s. Check operator override or underlying trigger (kill-switch, feed stale, drawdown)."
+          runbook_url: "docs/runbooks/27_FSM_OPERATOR_OVERRIDE.md#fsmbadstatetoolong"
+
+      # Warning: FSM blocking actions (intents rejected by permission matrix)
+      - alert: FsmActionBlockedSpike
+        expr: |
+          sum(increase(grinder_fsm_action_blocked_total[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "FSM blocking intents"
+          description: "FSM permission matrix has blocked {{ $value | printf \"%.0f\" }} intents in 5 minutes. Check current FSM state and whether operator override is needed."
+          runbook_url: "docs/runbooks/27_FSM_OPERATOR_OVERRIDE.md#fsmactionblockedspike"
+
+  # Launch-14: Smart Order Router Alerts
+  # Metrics from src/grinder/execution/sor_metrics.py.
+  # Labels: decision=, reason= only.
+  - name: grinder_sor
+    rules:
+      # Warning: SOR blocking orders (BLOCK decisions)
+      - alert: SorBlockedSpike
+        expr: |
+          sum(increase(grinder_router_decision_total{decision="BLOCK"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "SOR blocking orders"
+          description: "SOR has issued {{ $value | printf \"%.0f\" }} BLOCK decisions in 5 minutes. Orders are being rejected by the router."
+          runbook_url: "docs/runbooks/28_SOR_FIRE_DRILL.md#sorblockedspike"
+
+      # Info: SOR NOOP decisions (no action needed, but worth monitoring)
+      - alert: SorNoopSpike
+        expr: |
+          sum(increase(grinder_router_decision_total{decision="NOOP"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: info
+        annotations:
+          summary: "SOR NOOP decisions detected"
+          description: "SOR has issued {{ $value | printf \"%.0f\" }} NOOP decisions in 5 minutes. Orders are being skipped (already in desired state)."
+          runbook_url: "docs/runbooks/28_SOR_FIRE_DRILL.md#sornoopspike"
+
+  # Launch-15: AccountSync Alerts
+  # Metrics from src/grinder/account/metrics.py.
+  # Labels: reason=, rule= only.
+  # Safe-by-default: AccountSyncStale guarded by last_ts > 0 (inactive = no alert).
+  - name: grinder_account_sync
+    rules:
+      # Warning: Account sync data is stale (enabled but not refreshing)
+      # Guard: last_ts > 0 ensures alert only fires when sync has been active.
+      - alert: AccountSyncStale
+        expr: |
+          grinder_account_sync_last_ts > 0
+          and
+          grinder_account_sync_age_seconds > 120
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Account sync stale (age {{ $value | printf \"%.0f\" }}s)"
+          description: "Account sync data is {{ $value | printf \"%.0f\" }}s old (threshold: 120s). Positions and open orders may be outdated."
+          runbook_url: "docs/runbooks/29_ACCOUNT_SYNC.md#accountsyncstale"
+
+      # Warning: Account sync errors (HTTP, auth, parse failures)
+      - alert: AccountSyncErrors
+        expr: |
+          sum(increase(grinder_account_sync_errors_total{reason!="none"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Account sync errors detected"
+          description: "{{ $value | printf \"%.0f\" }} account sync errors in 5 minutes. Check API connectivity and credentials."
+          runbook_url: "docs/runbooks/29_ACCOUNT_SYNC.md#accountsyncerrors"
+
+      # Warning: Account sync mismatches (position/order discrepancies)
+      - alert: AccountSyncMismatchSpike
+        expr: |
+          sum(increase(grinder_account_sync_mismatches_total{rule!="none"}[5m])) > 0
+        for: 3m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Account sync mismatches detected"
+          description: "{{ $value | printf \"%.0f\" }} account sync mismatches in 5 minutes. Expected vs observed state diverged."
+          runbook_url: "docs/runbooks/30_ACCOUNT_SYNC_FIRE_DRILL.md#accountsyncmismatchspike"
