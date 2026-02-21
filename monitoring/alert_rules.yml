@@ -172,6 +172,27 @@ groups:
           summary: "Kill-switch trip detected"
           description: "Kill-switch trip count increased in the last 5 minutes."
 
+      # Warning: Consecutive loss guard tripped (Track C, PR-C3)
+      - alert: ConsecutiveLossTrip
+        expr: increase(grinder_risk_consecutive_loss_trips_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Consecutive loss limit tripped"
+          description: "Consecutive loss guard triggered. Count reached threshold. System should be PAUSED."
+          runbook_url: "docs/runbooks/02_HEALTH_TRIAGE.md#consecutive-loss-trip"
+
+      # Info: Consecutive losses accumulating
+      - alert: ConsecutiveLossesHigh
+        expr: grinder_risk_consecutive_losses >= 3
+        for: 1m
+        labels:
+          severity: info
+        annotations:
+          summary: "Consecutive losses accumulating"
+          description: "Current consecutive loss count is {{ $value }}. Monitor for potential trip."
+
   - name: grinder_reconcile
     rules:
       # Warning: ReconcileLoop stopped running

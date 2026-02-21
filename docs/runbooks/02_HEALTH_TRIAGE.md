@@ -156,6 +156,28 @@ curl -fsS http://localhost:9090/metrics | grep grinder_router_decision_total
 curl -fsS http://localhost:9090/metrics | grep grinder_account_sync
 ```
 
+### Consecutive Loss Alerts (Track C, PR-C3)
+
+| Alert | Severity | Action |
+|-------|----------|--------|
+| `ConsecutiveLossTrip` | warning | Consecutive loss limit tripped — system should transition to PAUSED. Check recent trades for pattern (regime shift, liquidity change). Reset via operator procedure after investigation. |
+| `ConsecutiveLossesHigh` | info | Consecutive losses accumulating (count >= 3). Monitor — may trip soon. Check current positions and market conditions. |
+
+**What to check:**
+1. Gauge value: `grinder_risk_consecutive_losses` — current streak count.
+2. Trip counter: `increase(grinder_risk_consecutive_loss_trips_total[5m])` — recent trips.
+3. Recent roundtrips: review last N trades for systematic issue vs. noise.
+
+**How to reset/unblock:**
+- The guard resets automatically on a win or breakeven roundtrip.
+- If the system is PAUSED due to consecutive losses, the operator can resume via FSM operator override after investigation.
+- On process restart, the guard state resets to zero.
+
+**Quick check:**
+```bash
+curl -fsS http://localhost:9090/metrics | grep grinder_risk_consecutive_loss
+```
+
 ### Observability Quick Check
 
 Single command to grep all Launch-13/14/15 metrics at once (no Prometheus needed):
