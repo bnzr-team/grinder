@@ -3804,3 +3804,43 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
 
 - **Consequences:** PR-C3 (consecutive loss limit) can consume model predictions. No new deps (pyarrow already in `[dev]`/`[ml]`; core module is pure Python). `docs/GAPS.md` fill probability row updated PLANNED → PARTIAL.
 - **Alternatives:** "Use sklearn logistic regression" — rejected for v0 because it adds heavy dependency and makes core untestable without `[ml]` extras. "Train on pnl_bps as feature" — rejected due to label leakage (pnl_bps is outcome data, not entry-side).
+
+## ADR-070 -- Consecutive loss guard v1 (Track C, PR-C3)
+
+- **Date:** 2026-02-21
+- **Status:** accepted
+- **Context:** P2 backlog gap "Consecutive loss limit" in `docs/GAPS.md`. No implementation existed. The risk module has `DrawdownGuardV1` (equity-based) and `KillSwitch` (emergency latch), but nothing tracks consecutive losing roundtrips. A streak of losses may indicate regime shift, adverse selection, or execution issues — warrants automatic pause for investigation.
+- **Decision:** New module `src/grinder/risk/consecutive_loss_guard.py` with:
+  - `ConsecutiveLossGuard` class: pure-logic state machine, no I/O, no metrics emission.
+  - `ConsecutiveLossConfig` (frozen dataclass): `enabled`, `threshold` (int >= 1), `action` (PAUSE/DEGRADED).
+  - `ConsecutiveLossState` (frozen dataclass): `count`, `tripped`, `last_row_id`, `last_ts_ms`.
+  - `update(outcome, *, row_id, ts_ms) -> bool`: returns True on first trip.
+  - `reset()`: clears count and tripped.
+
+- **Outcome classification:**
+
+  | Outcome | Guard action | Rationale |
+  |---------|-------------|-----------|
+  | `"loss"` | count++ | Adverse event; streak extends |
+  | `"win"` | count = 0, tripped = False | Streak broken; reset |
+  | `"breakeven"` | count = 0, tripped = False | Not a loss; streak broken |
+  | unknown | no-op | Defensive; don't crash on unexpected values |
+
+- **FSM wiring (minimal for v1):**
+  - Guard is pure logic; caller sets `operator_override="PAUSE"` when tripped.
+  - Leverages existing FSM `OPERATOR_PAUSE` transition. No new FSM states or fields.
+  - Safe-by-default: `enabled=False` means zero effect on trading.
+
+- **Determinism:** Same sequence of `update()` calls → same state. No timestamps in logic (ts_ms is metadata only). No floats. Frozen dataclass state.
+
+- **Out of scope (deferred to PR-C3b):**
+  - Live pipeline wiring (RoundtripTracker → guard in reconcile loop).
+  - Metrics emission: `grinder_risk_consecutive_losses` (gauge), `grinder_risk_consecutive_loss_trips_total` (counter).
+  - Alert rules: `ConsecutiveLossTrip`, `ConsecutiveLossesHigh`.
+  - Runbook and observability panel sections.
+  - Persistent state across restarts (count resets on restart).
+  - Per-symbol tracking (v1 tracks global streak only).
+  - Integration with FillModelV0 predictions.
+
+- **Consequences:** Risk module now has three guards: DrawdownGuardV1 (equity), KillSwitch (emergency), ConsecutiveLossGuard (loss streaks). This PR ships the library only (pure logic + tests). Wiring, metrics, alerts, and runbook are deferred to PR-C3b to avoid SSOT breach (alerts implying active protection when no wiring exists). `docs/GAPS.md` consecutive loss row updated PLANNED → PARTIAL.
+- **Alternatives:** "Wire directly into FSM as new OrchestratorInputs field" — rejected for v1 to avoid modifying FSM contract + all callers. `operator_override="PAUSE"` achieves the same effect with zero FSM changes. "Auto-reset after cooldown" — rejected because loss streaks warrant human investigation before resuming.
