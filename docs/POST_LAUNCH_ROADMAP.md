@@ -111,7 +111,13 @@ based on risk, tick/step constraints, exchange rules, and idempotency/retry beha
 
 > **SSOT:** `docs/15_ACCOUNT_SYNC_SPEC.md` (data contracts + invariants + PR plan)
 
-**Status:** IN PROGRESS (PR0: spec, PR1: contracts+render+metrics, PR2: syncer+evidence, PR3: fire drill+ops)
+**Status:** DONE (main @ `ac3cc36`)
+
+### PR chain
+- PR0 (#224) — Spec/SSOT (merged @ `05662a6`)
+- PR1 (#225) — Core contracts + render + metrics (merged @ `754da32`)
+- PR2 (#226) — Port wiring + syncer + mismatch detection + evidence (merged @ `1e64c24`)
+- PR3 (#227) — Fire drill + evidence + runbook + ops entrypoint (merged @ `ac3cc36`)
 
 ### Problem
 The system operates "blind" with respect to exchange state:
@@ -129,12 +135,12 @@ The system operates "blind" with respect to exchange state:
 - Feature flag: `account_sync_enabled` (default OFF), `GRINDER_ACCOUNT_SYNC_ENABLED` env var.
 
 ### Acceptance Criteria (MUST)
-- Deterministic fixtures for sync decisions (no flakiness).
-- Sync is read-only (no exchange writes). Remediation deferred to P2.
-- Evidence artifacts produced for mismatch events (summary + sha256sums) and surfaced via `EVIDENCE_REF`.
-- Round-trip equality: `snapshot == load(render(snapshot))`.
-- Canonical ordering: positions by `(symbol, side)`, orders by `(symbol, side, order_type, price, qty, order_id)`.
-- Ops triage includes account sync evidence mode.
+- [x] Deterministic fixtures for sync decisions (no flakiness).
+- [x] Sync is read-only (no exchange writes). Remediation deferred to P2.
+- [x] Evidence artifacts produced for mismatch events (summary + sha256sums) and surfaced via `EVIDENCE_REF`.
+- [x] Round-trip equality: `snapshot == load(render(snapshot))`.
+- [x] Canonical ordering: positions by `(symbol, side)`, orders by `(symbol, side, order_type, price, qty, order_id)`.
+- [x] Ops triage includes account sync evidence mode (`account-sync-drill`).
 
 ### PR breakdown
 - PR0 — Spec/SSOT (`docs/15_ACCOUNT_SYNC_SPEC.md`)
@@ -145,12 +151,12 @@ The system operates "blind" with respect to exchange state:
 ---
 
 ### P1 Definition of Done (Pack-level)
-- All 3 Launches (13/14/15) merged to main.
-- CI green on all PRs (required checks).
-- Post-merge sanity scripts exist and pass (or are folded into existing ops triage).
-- Runbooks updated:
+- [x] All 3 Launches (13/14/15) merged to main.
+- [x] CI green on all PRs (required checks).
+- [x] Post-merge sanity scripts exist and pass (or are folded into existing ops triage).
+- [x] Runbooks updated:
   - "what to run", "what evidence to paste", "how to respond"
-- Evidence:
+- [x] Evidence:
   - artifacts are produced where relevant
   - `EVIDENCE_REF` lines are present and greppable for any incident-relevant mode
 
