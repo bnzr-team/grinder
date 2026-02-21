@@ -3694,3 +3694,19 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
   - Callers must NOT define their own truthy/falsey sets -- use `env_parse` functions.
 - **Consequences:** Invalid env values are now visible (either crash or warning log). Future env flags get consistent parsing for free. Migration of remaining non-triage call sites is P2.
 - **Alternatives:** "strict=False default" -- rejected because it perpetuates silent misconfiguration; better to be loud-by-default and opt into leniency explicitly.
+
+## ADR-068 -- Fill outcome dataset v1 (Track C, PR-C1)
+
+- **Date:** 2026-02-21
+- **Status:** accepted
+- **Context:** P2 backlog items #4 (fill probability model) and #6 (consecutive loss limit) both depend on a structured dataset of completed fill roundtrips. No such dataset exists; fills are tracked in-memory by FillTracker but never persisted as roundtrip outcomes.
+- **Decision:** New module `src/grinder/ml/fill_dataset.py` with:
+  - `FillOutcomeRow` frozen dataclass (21 fields: identification, entry, exit, PnL, context, metadata).
+  - `RoundtripTracker` that groups fills by (symbol, direction), emits a row when position transitions from non-zero back to zero.
+  - `build_fill_dataset_v1()` writes `data.parquet` + `manifest.json` with deterministic settings (`write_statistics=False`, `compression="snappy"`).
+  - Deterministic `row_id` = `sha1(symbol|direction|entry_ts|exit_ts|entry_price|exit_price|qty)`.
+  - CLI: `scripts/build_fill_dataset_v1.py --fixture <path> --out-dir <path>`.
+  - Artifact: `ml/datasets/fill_outcomes/v1/manifest.json` + `data.parquet`.
+  - Manifest schema: `fill_outcomes_v1` (distinct from Feature Store v1 `feature_order_hash` schema).
+- **Consequences:** PR-C2 (fill probability model) and PR-C3 (consecutive loss limit) have a stable SSOT to build on. pyarrow is required (`grinder[ml]` extra). Dataset is paper-fill only for now; live fills deferred.
+- **Alternatives:** "Reuse Feature Store v1 manifest" -- rejected because fill outcomes have different column semantics (no feature_order, no labels). "Store as CSV" -- rejected because parquet provides type safety, compression, and columnar access.
