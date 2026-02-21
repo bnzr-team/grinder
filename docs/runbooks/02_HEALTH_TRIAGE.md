@@ -116,6 +116,48 @@ If kill-switch is triggered, see [04_KILL_SWITCH.md](04_KILL_SWITCH.md).
 
 ---
 
+## Launch-13/14/15 Alert Response
+
+### FSM Alerts (Launch-13)
+
+| Alert | Severity | Action |
+|-------|----------|--------|
+| `FsmBadStateTooLong` | warning | FSM stuck in DEGRADED/EMERGENCY/PAUSED >2min. Check underlying trigger: kill-switch (`grinder_kill_switch_triggered`), feed stale, drawdown. See [27_FSM_OPERATOR_OVERRIDE.md](27_FSM_OPERATOR_OVERRIDE.md). |
+| `FsmActionBlockedSpike` | warning | Intents blocked by FSM permission matrix. Check current state (`grinder_fsm_current_state`), consider operator override if state is incorrect. See [27_FSM_OPERATOR_OVERRIDE.md](27_FSM_OPERATOR_OVERRIDE.md). |
+
+**Quick check:**
+```bash
+curl -fsS http://localhost:9090/metrics | grep grinder_fsm_current_state
+curl -fsS http://localhost:9090/metrics | grep grinder_fsm_action_blocked_total
+```
+
+### SOR Alerts (Launch-14)
+
+| Alert | Severity | Action |
+|-------|----------|--------|
+| `SorBlockedSpike` | warning | Orders rejected by router. Check block reasons: `grinder_router_decision_total{decision="BLOCK"}`. Run fire drill: `bash scripts/ops_fill_triage.sh sor-fire-drill`. See [28_SOR_FIRE_DRILL.md](28_SOR_FIRE_DRILL.md). |
+| `SorNoopSpike` | info | Orders skipped (already in desired state). Normal during low-activity periods. Investigate if sustained. See [28_SOR_FIRE_DRILL.md](28_SOR_FIRE_DRILL.md). |
+
+**Quick check:**
+```bash
+curl -fsS http://localhost:9090/metrics | grep grinder_router_decision_total
+```
+
+### AccountSync Alerts (Launch-15)
+
+| Alert | Severity | Action |
+|-------|----------|--------|
+| `AccountSyncStale` | warning | Sync data >120s old. Check API connectivity, credentials, and `GRINDER_ACCOUNT_SYNC_ENABLED=1`. See [29_ACCOUNT_SYNC.md](29_ACCOUNT_SYNC.md). |
+| `AccountSyncErrors` | warning | HTTP/auth/parse failures during sync. Check Binance API status, API key validity. See [29_ACCOUNT_SYNC.md](29_ACCOUNT_SYNC.md). |
+| `AccountSyncMismatchSpike` | warning | Expected vs observed state diverged. Run fire drill: `bash scripts/ops_fill_triage.sh account-sync-drill`. See [30_ACCOUNT_SYNC_FIRE_DRILL.md](30_ACCOUNT_SYNC_FIRE_DRILL.md). |
+
+**Quick check:**
+```bash
+curl -fsS http://localhost:9090/metrics | grep grinder_account_sync
+```
+
+---
+
 ## Common Issues
 
 | Symptom | Likely Cause | Action |

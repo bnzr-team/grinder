@@ -15,6 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import yaml
 from scripts.verify_alert_rules import main, validate
 
 # ---------------------------------------------------------------------------
@@ -275,3 +276,56 @@ class TestRealAlertRules:
         if not real_path.exists():
             pytest.skip("monitoring/alert_rules.yml not found")
         assert main([str(real_path)]) == 0
+
+
+# ---------------------------------------------------------------------------
+# Alert name presence tests (snapshot protection)
+# ---------------------------------------------------------------------------
+
+
+def _load_alert_names() -> set[str]:
+    """Load all alert names from the real alert_rules.yml."""
+    real_path = Path("monitoring/alert_rules.yml")
+    if not real_path.exists():
+        pytest.skip("monitoring/alert_rules.yml not found")
+    data = yaml.safe_load(real_path.read_text())
+    names: set[str] = set()
+    for group in data.get("groups", []):
+        for rule in group.get("rules", []):
+            name = rule.get("alert", "")
+            if name:
+                names.add(name)
+    return names
+
+
+class TestFsmAlertNamesPresent:
+    """Launch-13: FSM alert names must exist in alert_rules.yml."""
+
+    def test_fsm_bad_state_too_long(self) -> None:
+        assert "FsmBadStateTooLong" in _load_alert_names()
+
+    def test_fsm_action_blocked_spike(self) -> None:
+        assert "FsmActionBlockedSpike" in _load_alert_names()
+
+
+class TestSorAlertNamesPresent:
+    """Launch-14: SOR alert names must exist in alert_rules.yml."""
+
+    def test_sor_blocked_spike(self) -> None:
+        assert "SorBlockedSpike" in _load_alert_names()
+
+    def test_sor_noop_spike(self) -> None:
+        assert "SorNoopSpike" in _load_alert_names()
+
+
+class TestAccountSyncAlertNamesPresent:
+    """Launch-15: AccountSync alert names must exist in alert_rules.yml."""
+
+    def test_account_sync_stale(self) -> None:
+        assert "AccountSyncStale" in _load_alert_names()
+
+    def test_account_sync_errors(self) -> None:
+        assert "AccountSyncErrors" in _load_alert_names()
+
+    def test_account_sync_mismatch_spike(self) -> None:
+        assert "AccountSyncMismatchSpike" in _load_alert_names()
