@@ -114,6 +114,72 @@ The GRINDER Overview dashboard includes:
 7. **Blocked by Reason** — Table of blocks by gate and reason
 8. **Allowed by Gate** — Table of allows by gate
 
+## Launch-13/14/15 Quick Panels
+
+Recommended PromQL queries for monitoring the P1 hardening pack subsystems.
+These are not auto-provisioned in Grafana yet — use them in Prometheus UI
+(`http://localhost:9091`) or paste into custom Grafana panels.
+
+### FSM (Launch-13)
+
+Metrics from `src/grinder/live/fsm_metrics.py`.
+
+| Panel | PromQL | Type | Notes |
+|-------|--------|------|-------|
+| Current state | `grinder_fsm_current_state` | Gauge (per-state) | `{state="ACTIVE"}=1` means healthy; `{state="DEGRADED\|EMERGENCY\|PAUSED"}=1` needs attention |
+| State duration | `grinder_fsm_state_duration_seconds` | Gauge | >120s in bad state fires `FsmBadStateTooLong` alert |
+| Transitions | `sum by (from_state,to_state,reason) (increase(grinder_fsm_transitions_total[5m]))` | Counter | Spike = state churn; check reasons |
+| Blocked intents | `sum(increase(grinder_fsm_action_blocked_total[5m]))` | Counter | >0 fires `FsmActionBlockedSpike` alert |
+
+**Drilldowns:** Break by `state=` and `intent=` labels on `grinder_fsm_action_blocked_total`.
+
+**What good looks like:** `grinder_fsm_current_state{state="ACTIVE"}=1`, duration stable, zero blocked intents.
+
+**What bad looks like:** State stuck in DEGRADED >2min, blocked intents climbing.
+
+**Next step:** [27_FSM_OPERATOR_OVERRIDE.md](runbooks/27_FSM_OPERATOR_OVERRIDE.md)
+
+### SOR (Launch-14)
+
+Metrics from `src/grinder/execution/sor_metrics.py`.
+
+| Panel | PromQL | Type | Notes |
+|-------|--------|------|-------|
+| Decisions by type | `sum by (decision,reason) (increase(grinder_router_decision_total[5m]))` | Counter | Normal mix: PLACE + AMEND + CANCEL; watch BLOCK/NOOP ratio |
+| Blocked orders | `increase(grinder_router_decision_total{decision="BLOCK"}[5m])` | Counter | >0 fires `SorBlockedSpike` alert; check `reason` label |
+| NOOP orders | `increase(grinder_router_decision_total{decision="NOOP"}[5m])` | Counter | >0 fires `SorNoopSpike` (info); normal during low-activity |
+| Amend savings | `grinder_router_amend_savings_total` | Counter | Higher = more order amendments saved vs cancel+place pairs |
+
+**Drilldowns:** Break by `decision=` and `reason=` labels on `grinder_router_decision_total`.
+
+**What good looks like:** Mix of PLACE/AMEND/CANCEL decisions, zero BLOCKs, low NOOPs.
+
+**What bad looks like:** Sustained BLOCKs (router rejecting orders), or 100% NOOP (nothing to do).
+
+**Next step:** `bash scripts/ops_fill_triage.sh sor-fire-drill` or [28_SOR_FIRE_DRILL.md](runbooks/28_SOR_FIRE_DRILL.md)
+
+### AccountSync (Launch-15)
+
+Metrics from `src/grinder/account/metrics.py`.
+
+| Panel | PromQL | Type | Notes |
+|-------|--------|------|-------|
+| Sync age | `grinder_account_sync_age_seconds` | Gauge | >120s fires `AccountSyncStale` (if `last_ts > 0`) |
+| Last sync timestamp | `grinder_account_sync_last_ts` | Gauge | 0 = never synced (feature disabled or just started) |
+| Errors by reason | `sum by (reason) (increase(grinder_account_sync_errors_total[5m]))` | Counter | >0 fires `AccountSyncErrors`; check `reason` label |
+| Mismatches by rule | `sum by (rule) (increase(grinder_account_sync_mismatches_total[5m]))` | Counter | >0 fires `AccountSyncMismatchSpike` |
+| Position count | `grinder_account_sync_positions_count` | Gauge | Sanity: expected number of open positions |
+| Open orders count | `grinder_account_sync_open_orders_count` | Gauge | Sanity: expected number of open orders |
+| Pending notional | `grinder_account_sync_pending_notional` | Gauge | Total notional of open orders; watch for unexpected jumps |
+
+**Drilldowns:** Break by `reason=` on errors, `rule=` on mismatches.
+
+**What good looks like:** `age_seconds < 30`, zero errors, zero mismatches, position/order counts match expectations.
+
+**What bad looks like:** `age_seconds` climbing (stale sync), errors by `http`/`auth`/`parse` reasons, mismatch spike.
+
+**Next step:** `bash scripts/ops_fill_triage.sh account-sync-drill` or [29_ACCOUNT_SYNC.md](runbooks/29_ACCOUNT_SYNC.md)
+
 ## File Structure
 
 ```

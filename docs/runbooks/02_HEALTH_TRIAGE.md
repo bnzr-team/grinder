@@ -156,6 +156,23 @@ curl -fsS http://localhost:9090/metrics | grep grinder_router_decision_total
 curl -fsS http://localhost:9090/metrics | grep grinder_account_sync
 ```
 
+### Observability Quick Check
+
+Single command to grep all Launch-13/14/15 metrics at once (no Prometheus needed):
+
+```bash
+curl -fsS http://localhost:9090/metrics | grep -E \
+  "grinder_fsm_current_state|grinder_fsm_state_duration|grinder_fsm_action_blocked|grinder_router_decision_total|grinder_account_sync_age|grinder_account_sync_errors|grinder_account_sync_mismatches"
+```
+
+If you have Prometheus running, paste these PromQL queries for a full picture:
+
+- FSM state: `grinder_fsm_current_state`
+- SOR decisions: `sum by (decision,reason) (increase(grinder_router_decision_total[5m]))`
+- Sync freshness: `grinder_account_sync_age_seconds`
+
+For detailed panel definitions and drilldowns, see [OBSERVABILITY_STACK.md -- Launch-13/14/15 Quick Panels](../OBSERVABILITY_STACK.md#launch-131415-quick-panels).
+
 ---
 
 ## Common Issues
