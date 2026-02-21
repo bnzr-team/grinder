@@ -49,6 +49,13 @@ GET /metrics:
         - grinder_reconcile_budget_notional_used_day (gauge, LC-18)
         - grinder_reconcile_budget_calls_remaining_day (gauge, LC-18)
         - grinder_reconcile_budget_notional_remaining_day (gauge, LC-18)
+        - grinder_account_sync_last_ts (gauge, Launch-15)
+        - grinder_account_sync_age_seconds (gauge, Launch-15)
+        - grinder_account_sync_errors_total (counter, Launch-15)
+        - grinder_account_sync_mismatches_total (counter, Launch-15)
+        - grinder_account_sync_positions_count (gauge, Launch-15)
+        - grinder_account_sync_open_orders_count (gauge, Launch-15)
+        - grinder_account_sync_pending_notional (gauge, Launch-15)
 """
 
 from __future__ import annotations

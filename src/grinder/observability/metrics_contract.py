@@ -193,6 +193,28 @@ REQUIRED_METRICS_PATTERNS = [
     "# HELP grinder_router_amend_savings_total",
     "# TYPE grinder_router_amend_savings_total",
     "grinder_router_amend_savings_total",
+    # Launch-15: Account sync metrics
+    "# HELP grinder_account_sync_last_ts",
+    "# TYPE grinder_account_sync_last_ts",
+    "grinder_account_sync_last_ts",
+    "# HELP grinder_account_sync_age_seconds",
+    "# TYPE grinder_account_sync_age_seconds",
+    "grinder_account_sync_age_seconds",
+    "# HELP grinder_account_sync_errors_total",
+    "# TYPE grinder_account_sync_errors_total",
+    "grinder_account_sync_errors_total{reason=",
+    "# HELP grinder_account_sync_mismatches_total",
+    "# TYPE grinder_account_sync_mismatches_total",
+    "grinder_account_sync_mismatches_total{rule=",
+    "# HELP grinder_account_sync_positions_count",
+    "# TYPE grinder_account_sync_positions_count",
+    "grinder_account_sync_positions_count",
+    "# HELP grinder_account_sync_open_orders_count",
+    "# TYPE grinder_account_sync_open_orders_count",
+    "grinder_account_sync_open_orders_count",
+    "# HELP grinder_account_sync_pending_notional",
+    "# TYPE grinder_account_sync_pending_notional",
+    "grinder_account_sync_pending_notional",
 ]
 
 # PR6: Concrete series patterns requiring fill ingest to be running.
