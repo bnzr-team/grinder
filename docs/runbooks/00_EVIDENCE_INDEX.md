@@ -24,6 +24,7 @@ See also: [Ops Quickstart](00_OPS_QUICKSTART.md) | [Fill Tracker Triage](26_FILL
 | Market data connector | L2 parse validation, DQ staleness/gaps/outliers, symbol whitelist | `scripts/ops_fill_triage.sh connector-market-data` | `.artifacts/connector_market_data_fire_drill/<ts>/` | `drill_a_*.txt` .. `drill_e_*.txt` | `summary.txt` + `sha256sums.txt` |
 | Exchange port boundary | Gate chain (5 gates), idempotency cache, retry classification (transient vs fatal) | `scripts/ops_fill_triage.sh connector-exchange-port` | `.artifacts/connector_exchange_port_fire_drill/<ts>/` | `drill_a_log.txt` .. `drill_f_log.txt`, `drill_e_metrics.txt`, `drill_f_metrics.txt` | `summary.txt` + `sha256sums.txt` |
 | SOR fire drill | Router decisions (CANCEL_REPLACE/BLOCK/NOOP), metrics wiring, contract smoke | `scripts/ops_fill_triage.sh sor-fire-drill` | `.artifacts/sor_fire_drill/<ts>/` | `drill_a_*.txt` .. `drill_d_*.txt` | `summary.txt` + `sha256sums.txt` |
+| Account sync evidence | Positions + open orders snapshot, mismatch detection, metrics | `GRINDER_ACCOUNT_SYNC_EVIDENCE=1` (env-gated) | `.artifacts/account_sync/<ts>/` | `account_snapshot.json`, `positions.json`, `open_orders.json`, `mismatches.json` | `summary.txt` + `sha256sums.txt` |
 
 ---
 
@@ -186,6 +187,23 @@ Artifact root can be overridden via `GRINDER_ARTIFACT_DIR` (default: `.artifacts
   drill_d_metrics.txt      # Full MetricsBuilder output (contract smoke)
   summary.txt              # Copy/paste evidence block
   sha256sums.txt           # Full 64-char sha256 of all artifact files
+```
+
+### Account sync evidence
+
+**Enablement**: `GRINDER_ACCOUNT_SYNC_EVIDENCE=1` (env-gated, off by default)
+
+Evidence is written automatically during live sync cycles when the env var is set.
+See [Account Sync runbook](29_ACCOUNT_SYNC.md) for full details.
+
+```
+.artifacts/account_sync/<YYYYMMDDTHHMMSSZ>/
+  account_snapshot.json     # Full AccountSnapshot (canonical JSON)
+  positions.json            # Positions only
+  open_orders.json          # Open orders only
+  mismatches.json           # Detected mismatches (empty array if clean)
+  summary.txt               # Human-readable evidence block
+  sha256sums.txt            # sha256 of all artifact files
 ```
 
 ---

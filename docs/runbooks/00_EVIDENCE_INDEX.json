@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at_utc": "2026-02-21T01:22:36Z",
+  "generated_at_utc": "2026-02-21T03:55:48Z",
   "sources": [
     {
       "type": "markdown",
@@ -8,7 +8,7 @@
     },
     {
       "type": "git",
-      "sha": "045e5c7b04b36b4970084ac3a5ece625fefe83cc"
+      "sha": "754da32bef9074078773ce1254730fb1fa5a32c3"
     }
   ],
   "entries": [
@@ -319,6 +319,35 @@
         {
           "path": "docs/runbooks/00_EVIDENCE_INDEX.md",
           "anchor": "sor-fire-drill-fire_drill_sorsh"
+        }
+      ]
+    },
+    {
+      "id": "account_sync",
+      "title": "Account sync evidence",
+      "run_via": [
+        "GRINDER_ACCOUNT_SYNC_EVIDENCE=1 python3 -m grinder ..."
+      ],
+      "mode": "account-sync",
+      "evidence_dir_pattern": ".artifacts/account_sync/<YYYYMMDDTHHMMSSZ>",
+      "required_files": [
+        "summary.txt",
+        "sha256sums.txt"
+      ],
+      "optional_files": [
+        "account_snapshot.json",
+        "positions.json",
+        "open_orders.json",
+        "mismatches.json"
+      ],
+      "doc_refs": [
+        {
+          "path": "docs/runbooks/00_EVIDENCE_INDEX.md",
+          "anchor": "account-sync-evidence"
+        },
+        {
+          "path": "docs/runbooks/29_ACCOUNT_SYNC.md",
+          "anchor": "3-evidence-artifacts"
         }
       ]
     }

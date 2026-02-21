@@ -25,6 +25,7 @@ class LiveEngineConfig:
         kill_switch_active: If True, blocks PLACE/REPLACE but allows CANCEL.
         symbol_whitelist: Symbols allowed to trade. Empty = all allowed.
         sor_enabled: SmartOrderRouter feature flag. False by default (safe-by-default).
+        account_sync_enabled: AccountSyncer feature flag. False by default (Launch-15).
     """
 
     armed: bool = False
@@ -32,6 +33,7 @@ class LiveEngineConfig:
     kill_switch_active: bool = False
     symbol_whitelist: list[str] = field(default_factory=list)
     sor_enabled: bool = False
+    account_sync_enabled: bool = False
 
     def is_symbol_allowed(self, symbol: str) -> bool:
         """Check if symbol is in whitelist (empty = all allowed)."""

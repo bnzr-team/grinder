@@ -51,6 +51,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
     from decimal import Decimal
 
+    from grinder.account.contracts import AccountSnapshot, PositionSnap
     from grinder.connectors.circuit_breaker import CircuitBreaker
     from grinder.connectors.idempotency import IdempotencyStore
     from grinder.core import OrderSide
@@ -410,6 +411,14 @@ class IdempotentExchangePort:
     def fetch_open_orders(self, symbol: str) -> list[OrderRecord]:
         """Fetch open orders (passthrough, no idempotency needed for reads)."""
         return self.inner.fetch_open_orders(symbol)
+
+    def fetch_positions(self) -> list[PositionSnap]:
+        """Fetch positions (passthrough, no idempotency needed for reads)."""
+        return self.inner.fetch_positions()
+
+    def fetch_account_snapshot(self) -> AccountSnapshot:
+        """Fetch account snapshot (passthrough, no idempotency needed for reads)."""
+        return self.inner.fetch_account_snapshot()
 
     def reset(self) -> None:
         """Reset inner port and stats (for testing)."""

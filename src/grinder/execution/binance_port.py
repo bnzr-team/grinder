@@ -59,7 +59,7 @@ import time
 import urllib.parse
 from dataclasses import dataclass, field
 from decimal import Decimal
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from grinder.connectors.errors import (
     ConnectorNonRetryableError,
@@ -73,6 +73,9 @@ from grinder.reconcile.identity import (
     generate_client_order_id,
     get_default_identity_config,
 )
+
+if TYPE_CHECKING:
+    from grinder.account.contracts import AccountSnapshot, PositionSnap
 
 # --- HTTP Client Protocol ---
 
@@ -699,6 +702,16 @@ class BinanceExchangePort:
             )
 
         return orders
+
+    def fetch_positions(self) -> list[PositionSnap]:
+        """Fetch positions from Binance (Launch-15 stub -- not yet implemented)."""
+        msg = "BinanceExchangePort.fetch_positions() not yet implemented (Launch-15 PR3+)"
+        raise NotImplementedError(msg)
+
+    def fetch_account_snapshot(self) -> AccountSnapshot:
+        """Fetch account snapshot from Binance (Launch-15 stub -- not yet implemented)."""
+        msg = "BinanceExchangePort.fetch_account_snapshot() not yet implemented (Launch-15 PR3+)"
+        raise NotImplementedError(msg)
 
     def reset(self) -> None:
         """Reset internal state (for testing and new runs)."""

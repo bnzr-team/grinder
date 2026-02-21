@@ -9,6 +9,7 @@ from __future__ import annotations
 from decimal import Decimal  # noqa: TC003 - used at runtime in Protocol impl
 from typing import Protocol
 
+from grinder.account.contracts import AccountSnapshot, PositionSnap
 from grinder.core import OrderSide, OrderState
 from grinder.execution.types import OrderRecord
 
@@ -83,6 +84,21 @@ class ExchangePort(Protocol):
 
         Returns:
             List of open order records
+        """
+        ...
+
+    def fetch_positions(self) -> list[PositionSnap]:
+        """Fetch all current positions from the exchange (Launch-15).
+
+        Returns:
+            List of position snapshots.
+        """
+        ...
+
+    def fetch_account_snapshot(self) -> AccountSnapshot:
+        """Fetch full account snapshot (positions + open orders) (Launch-15).
+
+        This is the preferred method for sync -- single consistent read.
         """
         ...
 
@@ -198,6 +214,14 @@ class NoOpExchangePort:
             if order.symbol == symbol
             and order.state in (OrderState.OPEN, OrderState.PARTIALLY_FILLED)
         ]
+
+    def fetch_positions(self) -> list[PositionSnap]:
+        """Fetch positions (stub - returns empty list)."""
+        return []
+
+    def fetch_account_snapshot(self) -> AccountSnapshot:
+        """Fetch account snapshot (stub - returns empty snapshot)."""
+        return AccountSnapshot(positions=(), open_orders=(), ts=0, source="stub")
 
     def reset(self) -> None:
         """Reset all state (for testing)."""
