@@ -17,6 +17,7 @@ from decimal import Decimal
 
 from grinder.connectors.metrics import get_connector_metrics
 from grinder.data.quality_metrics import get_data_quality_metrics
+from grinder.execution.sor_metrics import get_sor_metrics
 from grinder.gating import get_gating_metrics
 from grinder.ha.role import HARole, get_ha_state
 from grinder.live.fsm_metrics import get_fsm_metrics
@@ -112,6 +113,9 @@ class MetricsBuilder:
 
         # FSM metrics (Launch-13)
         lines.extend(self._build_fsm_metrics())
+
+        # SOR metrics (Launch-14)
+        lines.extend(self._build_sor_metrics())
 
         return "\n".join(lines)
 
@@ -243,6 +247,11 @@ class MetricsBuilder:
         """Build FSM state machine metrics (Launch-13)."""
         fsm_metrics = get_fsm_metrics()
         return fsm_metrics.to_prometheus_lines()
+
+    def _build_sor_metrics(self) -> list[str]:
+        """Build SmartOrderRouter metrics (Launch-14)."""
+        sor_metrics = get_sor_metrics()
+        return sor_metrics.to_prometheus_lines()
 
 
 class _BuilderHolder:

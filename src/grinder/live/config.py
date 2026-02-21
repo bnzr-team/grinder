@@ -24,12 +24,14 @@ class LiveEngineConfig:
         mode: SafeMode from underlying port. Determines what operations are allowed.
         kill_switch_active: If True, blocks PLACE/REPLACE but allows CANCEL.
         symbol_whitelist: Symbols allowed to trade. Empty = all allowed.
+        sor_enabled: SmartOrderRouter feature flag. False by default (safe-by-default).
     """
 
     armed: bool = False
     mode: SafeMode = SafeMode.READ_ONLY
     kill_switch_active: bool = False
     symbol_whitelist: list[str] = field(default_factory=list)
+    sor_enabled: bool = False
 
     def is_symbol_allowed(self, symbol: str) -> bool:
         """Check if symbol is in whitelist (empty = all allowed)."""
