@@ -30,7 +30,6 @@ See: ADR-036 for design decisions
 from __future__ import annotations
 
 import logging
-import os
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -45,6 +44,7 @@ from grinder.connectors.errors import (
 )
 from grinder.connectors.live_connector import SafeMode
 from grinder.connectors.retries import RetryPolicy, is_retryable
+from grinder.env_parse import parse_bool, parse_enum
 from grinder.execution.smart_order_router import (
     ExchangeFilters,
     MarketSnapshot,
@@ -238,12 +238,12 @@ class LiveEngineV0:
         self._exchange_filters = exchange_filters
         self._account_syncer = account_syncer
         self._last_snapshot: Snapshot | None = None
-        # Read GRINDER_SOR_ENABLED once at init (truthy: 1/true/yes/on)
-        raw_sor = os.environ.get("GRINDER_SOR_ENABLED", "")
-        self._sor_env_override = raw_sor.strip().lower() in {"1", "true", "yes", "on"}
+        # Read GRINDER_SOR_ENABLED once at init (via env_parse SSOT)
+        self._sor_env_override = parse_bool("GRINDER_SOR_ENABLED", default=False, strict=False)
         # Read GRINDER_ACCOUNT_SYNC_ENABLED once at init (Launch-15)
-        raw_sync = os.environ.get("GRINDER_ACCOUNT_SYNC_ENABLED", "")
-        self._account_sync_env_override = raw_sync.strip().lower() in {"1", "true", "yes", "on"}
+        self._account_sync_env_override = parse_bool(
+            "GRINDER_ACCOUNT_SYNC_ENABLED", default=False, strict=False
+        )
 
     @property
     def config(self) -> LiveEngineConfig:
@@ -319,22 +319,13 @@ class LiveEngineV0:
         """
         assert self._fsm_driver is not None  # caller guards
 
-        # Signal: operator override from env var (normalize: strip + upper)
-        raw = os.environ.get("GRINDER_OPERATOR_OVERRIDE")
-        override: str | None = None
-        if raw is not None:
-            norm = raw.strip().upper()
-            if norm == "":
-                override = None
-            elif norm in {"PAUSE", "EMERGENCY"}:
-                override = norm
-            else:
-                logger.warning(
-                    "Invalid GRINDER_OPERATOR_OVERRIDE=%r (normalized=%r), treating as None",
-                    raw,
-                    norm,
-                )
-                override = None
+        # Signal: operator override from env var (via env_parse SSOT)
+        override = parse_enum(
+            "GRINDER_OPERATOR_OVERRIDE",
+            allowed={"PAUSE", "EMERGENCY"},
+            default=None,
+            strict=False,
+        )
 
         self._fsm_driver.step(
             ts_ms=ts_ms,

@@ -1319,6 +1319,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - PR2 (#226) — Port wiring + syncer + mismatch detection + evidence (merged @ `1e64c24`)
   - PR3 (#227) — Fire drill + evidence + runbook + ops entrypoint (merged @ `ac3cc36`)
 - [DONE] P2 triage PR1: alert coverage for Launch-13/14/15 metrics + runbook wiring. 7 alert rules (FsmBadStateTooLong, FsmActionBlockedSpike, SorBlockedSpike, SorNoopSpike, AccountSyncStale, AccountSyncErrors, AccountSyncMismatchSpike) + triage wiring in RB02. Zero src/ changes.
+- [DONE] P2 triage PR3: env parsing unified. New `src/grinder/env_parse.py` SSOT with parse_bool/parse_int/parse_csv/parse_enum. Migrated 5 triage-flow call sites (fsm_evidence, account evidence, live engine SOR/sync/override, reconcile_loop). strict=True raises ConfigError, strict=False warns+default.
 - Expand tests to >50% coverage.
 - Adaptive Controller v1 (EMA-based adaptive step, trend detection, DRAWDOWN mode).
 - ~~Live Connector v1~~ [DONE] Done (LC-21: stream_ticks wired to BinanceWsConnector).
