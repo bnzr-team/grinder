@@ -43,10 +43,10 @@ REQUIRED_METRICS_PATTERNS = [
     # PR-C3b: Consecutive loss guard
     "# HELP grinder_risk_consecutive_losses",
     "# TYPE grinder_risk_consecutive_losses",
-    "grinder_risk_consecutive_losses",
+    "grinder_risk_consecutive_losses",  # max across all symbol guards (PR-C3c)
     "# HELP grinder_risk_consecutive_loss_trips_total",
     "# TYPE grinder_risk_consecutive_loss_trips_total",
-    "grinder_risk_consecutive_loss_trips_total",
+    "grinder_risk_consecutive_loss_trips_total",  # sum across all symbol guards (PR-C3c)
     # HA metrics
     "# HELP grinder_ha_role",
     "# TYPE grinder_ha_role",

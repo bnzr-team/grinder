@@ -61,6 +61,10 @@ Environment Variables:
     HTTP_DEADLINE_<OP>_MS         Per-op deadline override (e.g. HTTP_DEADLINE_CANCEL_ORDER_MS=400)
     FILL_CURSOR_PATH              Path to persist fill cursor (default: None = in-memory only)
     FILL_INGEST_ENABLED           "1" to enable fill ingestion from userTrades (default: off)
+    GRINDER_CONSEC_LOSS_ENABLED   "1" to enable consecutive loss guard (default: off)
+    GRINDER_CONSEC_LOSS_THRESHOLD Consecutive loss threshold before PAUSE (default: 5, min: 1)
+    GRINDER_CONSEC_LOSS_STATE_PATH Path to persist guard state (default: None = in-memory only)
+    GRINDER_CONSEC_LOSS_EVIDENCE  "1" to write evidence artifacts on trip (default: off)
 
 See ADR-052 for LC-18 design decisions.
 """
@@ -801,12 +805,14 @@ def main() -> int:  # noqa: PLR0915, PLR0912
     else:
         logger.info("Fill ingestion DISABLED (set FILL_INGEST_ENABLED=1 to enable)")
 
-    # --- Consecutive loss guard setup (PR-C3b) ---
+    # --- Consecutive loss guard setup (PR-C3b, per-symbol + persistence PR-C3c) ---
     consec_loss_service = ConsecutiveLossService()
     if consec_loss_service.enabled:
         logger.info(
-            "Consecutive loss guard ENABLED (threshold=%d)",
+            "Consecutive loss guard ENABLED (threshold=%d, state_path=%s, symbols=%d)",
             consec_loss_service.guard.config.threshold,
+            consec_loss_service._state_path or "none",
+            len(consec_loss_service._guards),
         )
     else:
         logger.info("Consecutive loss guard DISABLED")
@@ -872,6 +878,8 @@ def main() -> int:  # noqa: PLR0915, PLR0912
         consec_loss_service.process_trades(all_trades)
         losses, trips = consec_loss_service.get_metrics_state()
         set_consecutive_loss_metrics(losses, trips)
+        # PR-C3c: Persist guard state after every poll
+        consec_loss_service.save_state_if_dirty()
         # PR6: save cursor on every successful poll (not just count > 0).
         # updated_at_ms gets now_ms, keeping cursor file fresh during quiet
         # markets.  This prevents FillCursorStuck false-positives.

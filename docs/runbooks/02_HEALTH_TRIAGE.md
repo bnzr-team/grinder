@@ -156,7 +156,7 @@ curl -fsS http://localhost:9090/metrics | grep grinder_router_decision_total
 curl -fsS http://localhost:9090/metrics | grep grinder_account_sync
 ```
 
-### Consecutive Loss Guard (PR-C3b)
+### Consecutive Loss Guard (PR-C3b/C3c)
 
 | Alert | Severity | Action |
 |-------|----------|--------|
@@ -175,11 +175,22 @@ curl -fsS http://localhost:9090/metrics | grep grinder_risk_consecutive
 | `GRINDER_CONSEC_LOSS_ENABLED` | `false` | Enable guard |
 | `GRINDER_CONSEC_LOSS_THRESHOLD` | `5` | Consecutive losses before trip |
 | `GRINDER_CONSEC_LOSS_EVIDENCE` | `false` | Write evidence artifacts on trip |
+| `GRINDER_CONSEC_LOSS_STATE_PATH` | none | Path to persist guard state (JSON + sha256 sidecar) |
+
+**State file (PR-C3c):**
+- Format: `consecutive_loss_state_v1` JSON + `.sha256` sidecar.
+- Contains per-symbol guard states, `last_trade_id` cursor, cumulative `trip_count`.
+- Inspect: `cat $GRINDER_CONSEC_LOSS_STATE_PATH | python3 -m json.tool`
+- Reset guard: delete state file and restart (`rm $GRINDER_CONSEC_LOSS_STATE_PATH*`).
+- Per-symbol attribution: check evidence artifacts in `$GRINDER_ARTIFACT_DIR/risk/` for symbol-level detail.
+
+**Limitation (PR-C3c):** RoundtripTracker is NOT persisted. On restart, in-flight (unclosed) roundtrips are lost. Guard state and dedup cursor are persisted. Look for `CONSEC_LOSS_TRACKER_NOT_RESTORED` in logs after restart.
 
 **Recovery:**
-1. Investigate: are losses real? Check `grinder_risk_consecutive_losses` count.
+1. Investigate: are losses real? Check `grinder_risk_consecutive_losses` count (= max across all symbols).
 2. If false positive: clear override, restart, adjust threshold.
 3. If real: keep PAUSE, investigate strategy.
+4. To fully reset: delete state file (`rm $GRINDER_CONSEC_LOSS_STATE_PATH*`) + restart.
 
 **Scope:** Wired only in `scripts/run_live_reconcile.py`. Other entrypoints do not activate this guard.
 

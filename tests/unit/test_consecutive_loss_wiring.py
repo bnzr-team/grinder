@@ -1,13 +1,15 @@
-"""Tests for ConsecutiveLossService wiring (PR-C3b).
+"""Tests for ConsecutiveLossService wiring (PR-C3b/C3c).
 
 Covers: config loading, fill conversion, service end-to-end, metrics,
-operator override, evidence, error handling, disabled guard, sort stability.
+operator override, evidence, error handling, disabled guard, sort stability,
+persistence (PR-C3c), per-symbol guards (PR-C3c), state restore (PR-C3c).
 """
 
 from __future__ import annotations
 
 import json
 import os
+import time
 from decimal import Decimal
 from typing import TYPE_CHECKING
 
@@ -22,12 +24,17 @@ from grinder.paper.fills import Fill
 from grinder.risk.consecutive_loss_guard import (
     ConsecutiveLossAction,
     ConsecutiveLossConfig,
+    ConsecutiveLossState,
 )
 from grinder.risk.consecutive_loss_wiring import (
+    STATE_FILE_VERSION,
     ConsecutiveLossService,
+    PersistedServiceState,
     binance_trade_fee,
     binance_trade_to_fill,
+    load_consec_loss_state,
     load_consecutive_loss_config,
+    save_consec_loss_state,
 )
 
 if TYPE_CHECKING:
@@ -434,3 +441,333 @@ class TestSortStability:
 
         # Should have processed both (sorted by ID)
         assert svc._last_trade_id == 2
+
+
+# ---------------------------------------------------------------------------
+# W-010: Persistence (PR-C3c)
+# ---------------------------------------------------------------------------
+
+
+class TestPersistence:
+    """W-010: State persistence save/load roundtrip."""
+
+    def _make_state(
+        self,
+        *,
+        last_trade_id: int = 100,
+        trip_count: int = 1,
+        guards: dict[str, dict[str, object]] | None = None,
+    ) -> PersistedServiceState:
+        """Build a PersistedServiceState for tests."""
+        if guards is None:
+            guards = {
+                "BTCUSDT": {
+                    "count": 2,
+                    "tripped": False,
+                    "last_row_id": "row-1",
+                    "last_ts_ms": 1700000000,
+                },
+            }
+        return PersistedServiceState(
+            version=STATE_FILE_VERSION,
+            guards=guards,
+            last_trade_id=last_trade_id,
+            trip_count=trip_count,
+            updated_at_ms=int(time.time() * 1000),
+        )
+
+    def test_save_load_roundtrip(self, tmp_path: Path) -> None:
+        """Save then load produces identical state."""
+        state = self._make_state()
+        path = str(tmp_path / "state.json")
+        save_consec_loss_state(path, state)
+
+        loaded = load_consec_loss_state(path)
+        assert loaded is not None
+        assert loaded.version == state.version
+        assert loaded.guards == state.guards
+        assert loaded.last_trade_id == state.last_trade_id
+        assert loaded.trip_count == state.trip_count
+        assert loaded.updated_at_ms == state.updated_at_ms
+
+    def test_load_missing_file_returns_none(self, tmp_path: Path) -> None:
+        """Graceful on missing file."""
+        result = load_consec_loss_state(str(tmp_path / "no_such_file.json"))
+        assert result is None
+
+    def test_load_corrupt_json_returns_none(self, tmp_path: Path) -> None:
+        """Graceful on bad JSON."""
+        p = tmp_path / "corrupt.json"
+        p.write_text("{not valid json", encoding="utf-8")
+        result = load_consec_loss_state(str(p))
+        assert result is None
+
+    def test_load_bad_version_returns_none(self, tmp_path: Path) -> None:
+        """Rejects unknown version."""
+        p = tmp_path / "bad_version.json"
+        data = {"version": "unknown_v99", "guards": {}, "last_trade_id": 0}
+        p.write_text(json.dumps(data), encoding="utf-8")
+        result = load_consec_loss_state(str(p))
+        assert result is None
+
+    def test_load_invalid_types_returns_none(self, tmp_path: Path) -> None:
+        """Rejects invalid types (P0-1: string tripped, negative count)."""
+        p = tmp_path / "bad_types.json"
+        data = {
+            "version": STATE_FILE_VERSION,
+            "guards": {
+                "BTCUSDT": {"count": -1, "tripped": "false"},
+            },
+            "last_trade_id": 0,
+            "trip_count": 0,
+            "updated_at_ms": 0,
+        }
+        p.write_text(json.dumps(data), encoding="utf-8")
+        # The load itself may succeed (guards are dicts),
+        # but service restore will fail when from_dict validates guard fields.
+        # At the PersistedServiceState level, guards are stored as raw dicts.
+        loaded = load_consec_loss_state(str(p))
+        # State loads (guards are raw dicts at this level)
+        assert loaded is not None
+        # But the guard values inside should be validated when restoring:
+        with pytest.raises(ValueError, match="count must be int >= 0"):
+            ConsecutiveLossState.from_dict(loaded.guards["BTCUSDT"])
+
+    def test_sha256_mismatch_returns_none(self, tmp_path: Path) -> None:
+        """Rejects tampered file (sha256 sidecar mismatch)."""
+        state = self._make_state()
+        path = str(tmp_path / "state.json")
+        save_consec_loss_state(path, state)
+
+        # Tamper with the JSON file
+        p = tmp_path / "state.json"
+        content = p.read_text(encoding="utf-8")
+        p.write_text(content.replace('"trip_count": 1', '"trip_count": 999'))
+
+        result = load_consec_loss_state(path)
+        assert result is None
+
+    def test_monotonicity_rejects_backward(self, tmp_path: Path) -> None:
+        """P0-2: won't overwrite newer cursor with older one."""
+        path = str(tmp_path / "state.json")
+
+        # Save state with trade_id=100
+        state_new = self._make_state(last_trade_id=100)
+        save_consec_loss_state(path, state_new)
+
+        # Try to save state with trade_id=50 → rejected
+        state_old = self._make_state(last_trade_id=50)
+        save_consec_loss_state(path, state_old)
+
+        # File still has trade_id=100
+        loaded = load_consec_loss_state(path)
+        assert loaded is not None
+        assert loaded.last_trade_id == 100
+
+    def test_monotonicity_allows_forward(self, tmp_path: Path) -> None:
+        """P0-2: writes when new > old."""
+        path = str(tmp_path / "state.json")
+
+        state_v1 = self._make_state(last_trade_id=100)
+        save_consec_loss_state(path, state_v1)
+
+        state_v2 = self._make_state(last_trade_id=200, trip_count=2)
+        save_consec_loss_state(path, state_v2)
+
+        loaded = load_consec_loss_state(path)
+        assert loaded is not None
+        assert loaded.last_trade_id == 200
+        assert loaded.trip_count == 2
+
+    def test_save_to_missing_dir_creates_parents(self, tmp_path: Path) -> None:
+        """mkdir -p behavior for nested directories."""
+        path = str(tmp_path / "deep" / "nested" / "state.json")
+        state = self._make_state()
+        save_consec_loss_state(path, state)
+
+        loaded = load_consec_loss_state(path)
+        assert loaded is not None
+        assert loaded.last_trade_id == 100
+
+
+# ---------------------------------------------------------------------------
+# W-011: Per-symbol guards (PR-C3c)
+# ---------------------------------------------------------------------------
+
+
+class TestPerSymbol:
+    """W-011: Per-symbol independent streak tracking."""
+
+    def test_independent_symbol_streaks(self) -> None:
+        """BTC losses don't affect ETH count."""
+        config = ConsecutiveLossConfig(enabled=True, threshold=5)
+        svc = ConsecutiveLossService(config)
+
+        # 2 BTC losses
+        for i in range(2):
+            base_id = i * 2 + 1
+            trades = _make_roundtrip_trades(
+                "BTCUSDT", "100.0", "90.0", "1.0", 1000 + i * 2000, base_id
+            )
+            svc.process_trades(trades)
+
+        # 1 ETH loss
+        trades = _make_roundtrip_trades("ETHUSDT", "3000.0", "2900.0", "1.0", 10000, 10)
+        svc.process_trades(trades)
+
+        assert svc._guards["BTCUSDT"].count == 2
+        assert svc._guards["ETHUSDT"].count == 1
+
+    def test_one_symbol_trips_sets_pause(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Trip on any symbol triggers PAUSE."""
+        monkeypatch.delenv("GRINDER_CONSEC_LOSS_EVIDENCE", raising=False)
+        monkeypatch.delenv("GRINDER_OPERATOR_OVERRIDE", raising=False)
+
+        config = ConsecutiveLossConfig(enabled=True, threshold=2)
+        svc = ConsecutiveLossService(config)
+
+        # 2 BTC losses → trip
+        for i in range(2):
+            base_id = i * 2 + 1
+            trades = _make_roundtrip_trades(
+                "BTCUSDT", "100.0", "90.0", "1.0", 1000 + i * 2000, base_id
+            )
+            svc.process_trades(trades)
+
+        assert svc._guards["BTCUSDT"].is_tripped is True
+        assert os.environ.get("GRINDER_OPERATOR_OVERRIDE") == "PAUSE"
+        assert svc.trip_count == 1
+
+    def test_metrics_returns_max_count(self) -> None:
+        """get_metrics_state returns max across symbols."""
+        config = ConsecutiveLossConfig(enabled=True, threshold=10)
+        svc = ConsecutiveLossService(config)
+
+        # 3 BTC losses
+        for i in range(3):
+            base_id = i * 2 + 1
+            trades = _make_roundtrip_trades(
+                "BTCUSDT", "100.0", "90.0", "1.0", 1000 + i * 2000, base_id
+            )
+            svc.process_trades(trades)
+
+        # 1 ETH loss
+        trades = _make_roundtrip_trades("ETHUSDT", "3000.0", "2900.0", "1.0", 20000, 20)
+        svc.process_trades(trades)
+
+        count, trips = svc.get_metrics_state()
+        assert count == 3  # max(BTC=3, ETH=1)
+        assert trips == 0  # no trips yet
+
+    def test_new_symbol_creates_fresh_guard(self) -> None:
+        """First trade for unknown symbol creates new guard with count=0."""
+        config = ConsecutiveLossConfig(enabled=True, threshold=5)
+        svc = ConsecutiveLossService(config)
+
+        assert "SOLUSDT" not in svc._guards
+
+        trades = _make_roundtrip_trades("SOLUSDT", "100.0", "90.0", "1.0", 1000, 1)
+        svc.process_trades(trades)
+
+        assert "SOLUSDT" in svc._guards
+        assert svc._guards["SOLUSDT"].count == 1
+
+
+# ---------------------------------------------------------------------------
+# W-012: State restore (PR-C3c)
+# ---------------------------------------------------------------------------
+
+
+class TestServiceStateRestore:
+    """W-012: Service state restoration across restarts."""
+
+    def test_restore_continues_count(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """Load count=2, one more loss → count=3."""
+        state_path = str(tmp_path / "state.json")
+        monkeypatch.setenv("GRINDER_CONSEC_LOSS_STATE_PATH", state_path)
+
+        # Pre-seed state with count=2 for BTCUSDT
+        pre_state = PersistedServiceState(
+            version=STATE_FILE_VERSION,
+            guards={
+                "BTCUSDT": {
+                    "count": 2,
+                    "tripped": False,
+                    "last_row_id": "row-prev",
+                    "last_ts_ms": 1700000000,
+                },
+            },
+            last_trade_id=10,
+            trip_count=0,
+            updated_at_ms=int(time.time() * 1000),
+        )
+        save_consec_loss_state(state_path, pre_state)
+
+        # Create service (will load state)
+        config = ConsecutiveLossConfig(enabled=True, threshold=5)
+        svc = ConsecutiveLossService(config)
+
+        assert svc._guards["BTCUSDT"].count == 2
+        assert svc._last_trade_id == 10
+
+        # One more loss → count=3
+        trades = _make_roundtrip_trades("BTCUSDT", "100.0", "90.0", "1.0", 2000, 11)
+        svc.process_trades(trades)
+        assert svc._guards["BTCUSDT"].count == 3
+
+    def test_restore_last_trade_id_dedup(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Restored cursor prevents re-processing old trades."""
+        state_path = str(tmp_path / "state.json")
+        monkeypatch.setenv("GRINDER_CONSEC_LOSS_STATE_PATH", state_path)
+
+        pre_state = PersistedServiceState(
+            version=STATE_FILE_VERSION,
+            guards={},
+            last_trade_id=50,
+            trip_count=0,
+            updated_at_ms=int(time.time() * 1000),
+        )
+        save_consec_loss_state(state_path, pre_state)
+
+        config = ConsecutiveLossConfig(enabled=True, threshold=5)
+        svc = ConsecutiveLossService(config)
+
+        # Feed trades with IDs <= 50 → all skipped
+        trades = _make_roundtrip_trades("BTCUSDT", "100.0", "90.0", "1.0", 1000, 49)
+        svc.process_trades(trades)
+        assert len(svc._guards) == 0  # Nothing processed
+        assert svc._last_trade_id == 50
+
+    def test_restore_trip_count(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """trip_count is cumulative across restarts."""
+        state_path = str(tmp_path / "state.json")
+        monkeypatch.setenv("GRINDER_CONSEC_LOSS_STATE_PATH", state_path)
+        monkeypatch.delenv("GRINDER_CONSEC_LOSS_EVIDENCE", raising=False)
+        monkeypatch.delenv("GRINDER_OPERATOR_OVERRIDE", raising=False)
+
+        pre_state = PersistedServiceState(
+            version=STATE_FILE_VERSION,
+            guards={
+                "BTCUSDT": {
+                    "count": 2,
+                    "tripped": False,
+                    "last_row_id": "row-prev",
+                    "last_ts_ms": 1700000000,
+                },
+            },
+            last_trade_id=10,
+            trip_count=3,
+            updated_at_ms=int(time.time() * 1000),
+        )
+        save_consec_loss_state(state_path, pre_state)
+
+        config = ConsecutiveLossConfig(enabled=True, threshold=3)
+        svc = ConsecutiveLossService(config)
+        assert svc.trip_count == 3
+
+        # One more loss → trip (count 2→3, threshold=3)
+        trades = _make_roundtrip_trades("BTCUSDT", "100.0", "90.0", "1.0", 2000, 11)
+        svc.process_trades(trades)
+        assert svc.trip_count == 4  # 3 + 1

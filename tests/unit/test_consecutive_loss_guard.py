@@ -11,6 +11,8 @@ Covers:
 - REQ-008: determinism — same sequence → same state.
 - REQ-009: trip returns True only on first trip (not repeated).
 - REQ-010: state snapshot immutable and serializable.
+- REQ-011: from_dict strict validation (PR-C3c).
+- REQ-012: from_state factory restores guard (PR-C3c).
 """
 
 from __future__ import annotations
@@ -338,3 +340,69 @@ class TestStateSnapshot:
         assert state.last_row_id == "my_row_123"
         assert state.last_ts_ms == 42000
         assert state.count == 1
+
+
+# --- REQ-011: from_dict strict validation (PR-C3c) ----------------------------
+
+
+class TestFromDict:
+    """REQ-011: ConsecutiveLossState.from_dict() strict validation."""
+
+    def test_roundtrip(self) -> None:
+        """to_dict() → from_dict() produces equal state."""
+        state = ConsecutiveLossState(count=3, tripped=True, last_row_id="r3", last_ts_ms=3000)
+        restored = ConsecutiveLossState.from_dict(state.to_dict())
+        assert restored == state
+
+    def test_empty_uses_defaults(self) -> None:
+        """from_dict({}) → default state."""
+        restored = ConsecutiveLossState.from_dict({})
+        assert restored == ConsecutiveLossState()
+
+    def test_rejects_negative_count(self) -> None:
+        """Negative count raises ValueError."""
+        with pytest.raises(ValueError, match="count must be int >= 0"):
+            ConsecutiveLossState.from_dict({"count": -1})
+
+    def test_rejects_string_tripped(self) -> None:
+        """String tripped raises ValueError (bool('false') == True trap)."""
+        with pytest.raises(ValueError, match="tripped must be bool"):
+            ConsecutiveLossState.from_dict({"tripped": "false"})
+
+    def test_rejects_string_ts_ms(self) -> None:
+        """String last_ts_ms raises ValueError."""
+        with pytest.raises(ValueError, match="last_ts_ms must be int"):
+            ConsecutiveLossState.from_dict({"last_ts_ms": "12345"})
+
+    def test_rejects_float_count(self) -> None:
+        """Float count raises ValueError (isinstance(1.0, int) is False in strict)."""
+        with pytest.raises(ValueError, match="count must be int >= 0"):
+            ConsecutiveLossState.from_dict({"count": 1.5})
+
+
+# --- REQ-012: from_state factory (PR-C3c) ------------------------------------
+
+
+class TestFromState:
+    """REQ-012: ConsecutiveLossGuard.from_state() factory."""
+
+    def test_restores_guard_state(self) -> None:
+        """Restored guard has correct count/state/config."""
+        config = ConsecutiveLossConfig(enabled=True, threshold=5)
+        state = ConsecutiveLossState(count=3, tripped=False, last_row_id="r3", last_ts_ms=3000)
+        guard = ConsecutiveLossGuard.from_state(config, state)
+        assert guard.count == 3
+        assert guard.state == state
+        assert guard.config == config
+        assert guard.is_tripped is False
+
+    def test_restored_guard_continues_counting(self) -> None:
+        """Guard restored at count=2, one more loss → count=3, trips at threshold=3."""
+        config = ConsecutiveLossConfig(enabled=True, threshold=3)
+        state = ConsecutiveLossState(count=2, tripped=False)
+        guard = ConsecutiveLossGuard.from_state(config, state)
+
+        tripped = guard.update(outcome="loss", row_id="r3", ts_ms=3000)
+        assert tripped is True
+        assert guard.count == 3
+        assert guard.is_tripped is True

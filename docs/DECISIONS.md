@@ -3853,3 +3853,12 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
   - Alerts: `ConsecutiveLossTrip` (critical, on trip), `ConsecutiveLossesHigh` (warning, early-warning at >=3).
   - Dedup: service maintains own `_last_trade_id` cursor; input sorted by trade ID before processing.
   - Remaining out of scope: per-symbol tracking (v1 tracks global streak), persistent state across restarts (count resets), FillModelV0 integration.
+
+- **Update (PR-C3c): Per-symbol guards + persistent state shipped.**
+  - Per-symbol independent streaks: `dict[str, ConsecutiveLossGuard]` keyed by symbol. Guards are lazily created on first trade for each symbol. One symbol tripping doesn't reset others.
+  - Metrics semantics change: `grinder_risk_consecutive_losses` = max(count) across all symbol guards (label-free, FORBIDDEN_METRIC_LABELS includes `symbol=`). `grinder_risk_consecutive_loss_trips_total` = sum of all trips. Per-symbol detail goes to evidence artifacts + structured logs only.
+  - Persistent state: JSON + sha256 sidecar via `GRINDER_CONSEC_LOSS_STATE_PATH`. State file format `consecutive_loss_state_v1` with `PersistedServiceState` envelope. Atomic write (tmp + replace). Monotonicity guard rejects backward cursor writes.
+  - `ConsecutiveLossState.from_dict()`: strict validation (isinstance checks, no coercion). Rejects negative count, string tripped, invalid types with ValueError.
+  - `ConsecutiveLossGuard.from_state()`: factory to restore guard from persisted state.
+  - RoundtripTracker is NOT persisted (too complex — `_OpenPosition` with Decimal accumulators per (symbol, direction) pair). On restart, tracker rebuilds from new trades. In-flight roundtrips at restart time are lost. Explicit `CONSEC_LOSS_TRACKER_NOT_RESTORED` warning emitted on state load.
+  - Remaining out of scope: DEGRADED action (needs FSM input channel), FillModelV0 integration, RoundtripTracker persistence.
