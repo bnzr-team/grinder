@@ -1313,6 +1313,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - PR2 (#221) — LiveEngine wiring + SOR metrics (merged @ `045e5c7`)
   - PR3 (#222) — Fire drill + evidence + runbook (merged @ `e5b177c`)
   - Note: AMEND deferred (requires order state tracking, not in scope for existing=None).
+- Next: Launch-15 PR0 — AccountSyncer spec (`docs/15_ACCOUNT_SYNC_SPEC.md`).
 - Expand tests to >50% coverage.
 - Adaptive Controller v1 (EMA-based adaptive step, trend detection, DRAWDOWN mode).
 - ~~Live Connector v1~~ [DONE] Done (LC-21: stream_ticks wired to BinanceWsConnector).

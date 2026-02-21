@@ -107,32 +107,40 @@ based on risk, tick/step constraints, exchange rules, and idempotency/retry beha
 
 ---
 
-## Launch-15: Fill Tracking v1.0 (PositionSyncer + RoundTrip)
+## Launch-15: AccountSyncer (Positions + Open Orders)
+
+> **SSOT:** `docs/15_ACCOUNT_SYNC_SPEC.md` (data contracts + invariants + PR plan)
+
+**Status:** IN PROGRESS (PR0: spec)
 
 ### Problem
-FillTracker exists, but we lack end-to-end "truth": position truth + round-trip accounting:
-- ensure our internal state matches exchange position
-- ensure we can attribute PnL / slippage / execution health per cycle
+The system operates "blind" with respect to exchange state:
+- No position truth: internal tracking is derived, never compared against exchange.
+- No order truth: exchange may have rejected/expired/partially filled orders without notification.
+- No mismatch detection: divergence between internal and exchange state goes undetected.
 
 ### Deliverables
-- `PositionSyncer`:
-  - compares local vs exchange position
-  - reconciles safely (read-only safe path + controlled remediation path)
-- `RoundTrip` accounting:
-  - tracks open→close cycle, fees, slippage, realized PnL
-  - emits metrics & evidence artifacts
-- Alerts/runbooks for mismatch thresholds.
+- `AccountSyncer`:
+  - fetches positions + open orders from exchange (read-only, safe-by-default)
+  - deterministic `AccountSnapshot` rendering (canonical sort, sha256)
+  - mismatch detection (duplicate keys, ts regression, negative qty, orphan orders)
+  - evidence artifacts (env-gated, `GRINDER_ACCOUNT_SYNC_EVIDENCE`)
+  - metrics: freshness, mismatch count, open orders count, sync errors
+- Feature flag: `account_sync_enabled` (default OFF), `GRINDER_ACCOUNT_SYNC_ENABLED` env var.
 
 ### Acceptance Criteria (MUST)
 - Deterministic fixtures for sync decisions (no flakiness).
-- Any remediation is gated (kill-switch / drawdown / leader-only if HA).
+- Sync is read-only (no exchange writes). Remediation deferred to P2.
 - Evidence artifacts produced for mismatch events (summary + sha256sums) and surfaced via `EVIDENCE_REF`.
-- Ops triage includes pointers to roundtrip evidence.
+- Round-trip equality: `snapshot == load(render(snapshot))`.
+- Canonical ordering: positions by `(symbol, side)`, orders by `(symbol, side, order_type, price, qty, order_id)`.
+- Ops triage includes account sync evidence mode.
 
-### Suggested PR breakdown
-- PR1: PositionSyncer core + tests + metrics/logs
-- PR2: RoundTrip model + integration + dashboards/alerts
-- PR3: drills + runbooks + ops entrypoint wiring
+### PR breakdown
+- PR0 — Spec/SSOT (`docs/15_ACCOUNT_SYNC_SPEC.md`)
+- PR1 — Core contracts + deterministic render + sha256 + tests + metrics
+- PR2 — Port wiring + syncer + mismatch detection + evidence + runbook
+- PR3 — Fire drill + evidence + runbook + ops entrypoint mode
 
 ---
 
