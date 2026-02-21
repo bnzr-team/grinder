@@ -49,7 +49,7 @@ def _make_trade(
     commission: str = "0.01",
     time: int = 1000000,
     order_id: int = 1,
-) -> dict:
+) -> dict[str, object]:
     """Build a Binance userTrade dict."""
     return {
         "id": trade_id,
@@ -70,7 +70,7 @@ def _make_roundtrip_trades(
     qty: str,
     base_time: int,
     base_id: int,
-) -> list[dict]:
+) -> list[dict[str, object]]:
     """Build BUY+SELL pair as Binance trade dicts (one roundtrip)."""
     return [
         _make_trade(
