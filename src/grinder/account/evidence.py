@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from grinder.account.render import render_snapshot
+from grinder.env_parse import parse_bool
 
 if TYPE_CHECKING:
     from grinder.account.contracts import AccountSnapshot
@@ -34,18 +35,15 @@ ENV_ENABLE = "GRINDER_ACCOUNT_SYNC_EVIDENCE"
 ENV_ARTIFACT_DIR = "GRINDER_ARTIFACT_DIR"
 DEFAULT_ARTIFACT_DIR = ".artifacts"
 
-_TRUTHY = frozenset({"1", "true", "yes", "on"})
-
 
 def should_write_evidence() -> bool:
     """Check if evidence writing is enabled via env var.
 
     Safe-by-default: returns False if env var is unset, empty, or non-truthy.
+
+    Uses :func:`grinder.env_parse.parse_bool` (SSOT for truthy/falsey).
     """
-    raw = os.environ.get(ENV_ENABLE)
-    if raw is None:
-        return False
-    return raw.strip().lower() in _TRUTHY
+    return parse_bool(ENV_ENABLE, default=False, strict=False)
 
 
 def _atomic_write_text(path: Path, content: str) -> None:

@@ -18,6 +18,8 @@ import os
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from grinder.env_parse import parse_bool
+
 if TYPE_CHECKING:
     from grinder.live.fsm_orchestrator import OrchestratorInputs, TransitionEvent
 
@@ -27,26 +29,16 @@ ARTIFACT_VERSION = "fsm_evidence_v1"
 ENV_ENABLE = "GRINDER_FSM_EVIDENCE"
 ENV_ARTIFACT_DIR = "GRINDER_ARTIFACT_DIR"
 
-_TRUTHY = frozenset({"1", "true", "yes", "on"})
-_FALSEY = frozenset({"0", "false", "no", "off", ""})
-
 
 def should_write_fsm_evidence() -> bool:
     """Check if evidence writing is enabled via env var.
 
     Safe-by-default: returns False if env var is unset, empty, whitespace,
     or any non-truthy value. Only returns True for explicit truthy values.
+
+    Uses :func:`grinder.env_parse.parse_bool` (SSOT for truthy/falsey).
     """
-    raw = os.environ.get(ENV_ENABLE)
-    if raw is None:
-        return False
-    v = raw.strip().lower()
-    if v in _TRUTHY:
-        return True
-    if v in _FALSEY:
-        return False
-    # Unknown values: safe default = disabled
-    return False
+    return parse_bool(ENV_ENABLE, default=False, strict=False)
 
 
 def _fmt_value(v: object) -> str:

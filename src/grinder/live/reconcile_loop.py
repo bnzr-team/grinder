@@ -15,13 +15,13 @@ See ADR-048 for design decisions.
 from __future__ import annotations
 
 import logging
-import os
 import threading
 import time
 from collections.abc import Callable  # noqa: TC003 - used at runtime in __init__
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from grinder.env_parse import parse_bool, parse_int
 from grinder.reconcile.config import RemediationAction
 from grinder.reconcile.runner import ReconcileRunner, ReconcileRunReport  # noqa: TC001
 
@@ -40,24 +40,21 @@ DEFAULT_ENABLED = False
 
 
 def _get_bool_env(key: str, default: bool) -> bool:
-    """Get boolean from environment variable (1/true/yes = True)."""
-    value = os.environ.get(key, "").lower()
-    if value in ("1", "true", "yes"):
-        return True
-    if value in ("0", "false", "no"):
-        return False
-    return default
+    """Get boolean from environment variable.
+
+    Delegates to :func:`grinder.env_parse.parse_bool` (SSOT).
+    """
+    return parse_bool(key, default=default, strict=False)
 
 
 def _get_int_env(key: str, default: int) -> int:
-    """Get integer from environment variable."""
-    value = os.environ.get(key)
-    if value is None:
-        return default
-    try:
-        return int(value)
-    except ValueError:
-        return default
+    """Get integer from environment variable.
+
+    Delegates to :func:`grinder.env_parse.parse_int` (SSOT).
+    """
+    result = parse_int(key, default=default, strict=False)
+    assert result is not None  # default is int, never None
+    return result
 
 
 @dataclass
