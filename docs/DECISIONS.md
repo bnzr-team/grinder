@@ -3753,3 +3753,54 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
 
 - **Consequences:** PR-C2 (fill probability model) and PR-C3 (consecutive loss limit) have a stable SSOT to build on. pyarrow is in `[dev]` extras (tests) and `[ml]` extras (production). Dataset is paper-fill only for now; live fills deferred.
 - **Alternatives:** "Reuse Feature Store v1 manifest" -- rejected because fill outcomes have different column semantics (no feature_order, no labels). "Store as CSV" -- rejected because parquet provides type safety, compression, and columnar access.
+
+## ADR-069 -- Fill probability model v0 (Track C, PR-C2)
+
+- **Date:** 2026-02-21
+- **Status:** accepted
+- **Context:** PR-C1 (#232) shipped the `fill_outcomes_v1` dataset. P2 backlog item #4 (fill probability model) needs a baseline estimator. v0 must be pure-Python (no sklearn), shadow-only (not wired to execution), and deterministic.
+- **Decision:** New module `src/grinder/ml/fill_model_v0.py` with:
+  - `FillModelV0` class: calibrated bin-count model, pure Python, no ML deps.
+  - `FillModelFeaturesV0` TypedDict: SSOT feature contract (4 fields, all int/str).
+  - `extract_features(row) -> FillModelFeaturesV0`: entry-side feature extraction.
+  - `FillModelV0.train(rows)`, `.predict(features) -> int` (0..10000 bps), `.save()`, `.load()`.
+  - CLI: `scripts/train_fill_model_v0.py --dataset <dir> --out-dir <dir>` (requires pyarrow).
+  - Artifact: `model.json` + `manifest.json` with sha256 integrity.
+
+- **Feature contract (`FillModelFeaturesV0` — SSOT):**
+
+  | Field | Type | Source | Leakage-safe |
+  |-------|------|--------|-------------|
+  | `direction` | str ("long"/"short") | `FillOutcomeRow.direction` | Yes — known at entry |
+  | `notional_bucket` | int (0..4) | `quantize(entry_price * entry_qty)` | Yes — known at entry |
+  | `entry_fill_count` | int (1..3) | `FillOutcomeRow.entry_fill_count`, clamped | Yes — known at close |
+  | `holding_ms_bucket` | int (0..4) | `quantize(holding_time_ms)` | Yes — known at close |
+
+  **Leakage policy:** `pnl_bps`, `net_pnl`, `realized_pnl`, `exit_price` are NEVER used as features. They are outcome data only. The label is `outcome == "win"` → 1, else → 0. `holding_ms_bucket` is available only for retroactive analysis on completed roundtrips; online prediction would need a replacement feature.
+
+- **Bucket boundaries (fixed for v0):**
+  - Notional: 100, 500, 1000, 5000 (quote currency units)
+  - Holding ms: 1000, 10000, 60000, 300000
+  - Fill count: 1, 2, 3+ (clamped)
+
+- **Model design:**
+  - Composite bin key: `"{direction}|{notional_bucket}|{entry_fill_count}|{holding_ms_bucket}"`
+  - Per-bin: `wins * 10000 // total` (integer arithmetic, no floats)
+  - Global prior: same formula across all rows (fallback for unseen bins)
+  - Empty dataset: returns 5000 bps (50% neutral)
+
+- **Determinism invariants:**
+  - `model.json`: `json.dumps(to_dict(), indent=2, sort_keys=True) + "\n"` — all values int/str, no floats
+  - `manifest.sha256["model.json"]` = sha256 of model.json bytes
+  - Integer-only arithmetic: `(wins * 10000 + total // 2) // total` avoids float rounding drift
+  - `created_at_utc` is manifest metadata only, not in sha256
+
+- **Out of scope (deferred):**
+  - Wiring into execution / risk / grid level filtering
+  - Online learning or incremental updates
+  - Drift detection or monitoring metrics
+  - sklearn/numpy dependency (v0 is pure Python)
+  - ONNX format (v0 uses JSON; ONNX deferred to v1+)
+
+- **Consequences:** PR-C3 (consecutive loss limit) can consume model predictions. No new deps (pyarrow already in `[dev]`/`[ml]`; core module is pure Python). `docs/GAPS.md` fill probability row updated PLANNED → PARTIAL.
+- **Alternatives:** "Use sklearn logistic regression" — rejected for v0 because it adds heavy dependency and makes core untestable without `[ml]` extras. "Train on pnl_bps as feature" — rejected due to label leakage (pnl_bps is outcome data, not entry-side).
