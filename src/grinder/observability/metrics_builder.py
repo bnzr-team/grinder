@@ -64,6 +64,25 @@ def reset_risk_metrics_state() -> None:
     _risk_state[0] = None
 
 
+# Module-level state for consecutive loss metrics (PR-C3b)
+_consec_loss_state: list[tuple[int, int]] = [(0, 0)]  # (count, trips)
+
+
+def set_consecutive_loss_metrics(count: int, trips: int) -> None:
+    """Set consecutive loss guard metrics (called by wiring service)."""
+    _consec_loss_state[0] = (count, trips)
+
+
+def get_consecutive_loss_metrics() -> tuple[int, int]:
+    """Get consecutive loss guard metrics (count, trips)."""
+    return _consec_loss_state[0]
+
+
+def reset_consecutive_loss_metrics() -> None:
+    """Reset consecutive loss metrics (for testing)."""
+    _consec_loss_state[0] = (0, 0)
+
+
 @dataclass
 class MetricsBuilder:
     """Builds consolidated Prometheus metrics output.
@@ -141,11 +160,11 @@ class MetricsBuilder:
         return gating_metrics.to_prometheus_lines()
 
     def _build_risk_metrics(self) -> list[str]:
-        """Build risk metrics (kill-switch, drawdown)."""
+        """Build risk metrics (kill-switch, drawdown, consecutive loss)."""
         state = get_risk_metrics_state()
         if state is None:
             # Return metrics with default values (risk module not active)
-            return [
+            lines = [
                 "# HELP grinder_kill_switch_triggered Whether kill-switch is active",
                 "# TYPE grinder_kill_switch_triggered gauge",
                 "grinder_kill_switch_triggered 0",
@@ -158,31 +177,44 @@ class MetricsBuilder:
                 "# TYPE grinder_high_water_mark gauge",
                 "grinder_high_water_mark 0",
             ]
+        else:
+            lines = [
+                "# HELP grinder_kill_switch_triggered Whether kill-switch is active",
+                "# TYPE grinder_kill_switch_triggered gauge",
+                f"grinder_kill_switch_triggered {state.kill_switch_triggered}",
+                "# HELP grinder_kill_switch_trips_total Total kill-switch trips by reason",
+                "# TYPE grinder_kill_switch_trips_total counter",
+            ]
 
-        lines = [
-            "# HELP grinder_kill_switch_triggered Whether kill-switch is active",
-            "# TYPE grinder_kill_switch_triggered gauge",
-            f"grinder_kill_switch_triggered {state.kill_switch_triggered}",
-            "# HELP grinder_kill_switch_trips_total Total kill-switch trips by reason",
-            "# TYPE grinder_kill_switch_trips_total counter",
-        ]
+            # Add trip counts by reason
+            for reason, count in sorted(state.kill_switch_trips.items()):
+                lines.append(f'grinder_kill_switch_trips_total{{reason="{reason}"}} {count}')
 
-        # Add trip counts by reason
-        for reason, count in sorted(state.kill_switch_trips.items()):
-            lines.append(f'grinder_kill_switch_trips_total{{reason="{reason}"}} {count}')
+            # If no trips yet, add a zero-value entry for visibility
+            if not state.kill_switch_trips:
+                lines.append('grinder_kill_switch_trips_total{reason="none"} 0')
 
-        # If no trips yet, add a zero-value entry for visibility
-        if not state.kill_switch_trips:
-            lines.append('grinder_kill_switch_trips_total{reason="none"} 0')
+            lines.extend(
+                [
+                    "# HELP grinder_drawdown_pct Current drawdown percentage",
+                    "# TYPE grinder_drawdown_pct gauge",
+                    f"grinder_drawdown_pct {state.drawdown_pct:.2f}",
+                    "# HELP grinder_high_water_mark Current equity high-water mark",
+                    "# TYPE grinder_high_water_mark gauge",
+                    f"grinder_high_water_mark {float(state.high_water_mark):.2f}",
+                ]
+            )
 
+        # PR-C3b: Consecutive loss guard metrics (always emitted, default 0)
+        cl_count, cl_trips = get_consecutive_loss_metrics()
         lines.extend(
             [
-                "# HELP grinder_drawdown_pct Current drawdown percentage",
-                "# TYPE grinder_drawdown_pct gauge",
-                f"grinder_drawdown_pct {state.drawdown_pct:.2f}",
-                "# HELP grinder_high_water_mark Current equity high-water mark",
-                "# TYPE grinder_high_water_mark gauge",
-                f"grinder_high_water_mark {float(state.high_water_mark):.2f}",
+                "# HELP grinder_risk_consecutive_losses Current consecutive loss count",
+                "# TYPE grinder_risk_consecutive_losses gauge",
+                f"grinder_risk_consecutive_losses {cl_count}",
+                "# HELP grinder_risk_consecutive_loss_trips_total Total consecutive loss guard trips",
+                "# TYPE grinder_risk_consecutive_loss_trips_total counter",
+                f"grinder_risk_consecutive_loss_trips_total {cl_trips}",
             ]
         )
 

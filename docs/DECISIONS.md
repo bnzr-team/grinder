@@ -3844,3 +3844,12 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
 
 - **Consequences:** Risk module now has three guards: DrawdownGuardV1 (equity), KillSwitch (emergency), ConsecutiveLossGuard (loss streaks). This PR ships the library only (pure logic + tests). Wiring, metrics, alerts, and runbook are deferred to PR-C3b to avoid SSOT breach (alerts implying active protection when no wiring exists). `docs/GAPS.md` consecutive loss row updated PLANNED → PARTIAL.
 - **Alternatives:** "Wire directly into FSM as new OrchestratorInputs field" — rejected for v1 to avoid modifying FSM contract + all callers. `operator_override="PAUSE"` achieves the same effect with zero FSM changes. "Auto-reset after cooldown" — rejected because loss streaks warrant human investigation before resuming.
+
+- **Update (PR-C3b): Live pipeline wiring shipped.**
+  - Integration point: `scripts/run_live_reconcile.py` only. Guard is wired into `_fetch_and_ingest_fills()` — after `ingest_fills()`, same Binance trades are fed through `ConsecutiveLossService` → `RoundtripTracker` → `ConsecutiveLossGuard`. Other entrypoints do NOT activate this guard.
+  - Action: PAUSE-only. `GRINDER_OPERATOR_OVERRIDE` supports `{"PAUSE", "EMERGENCY"}` — DEGRADED has no real channel and is not faked. Future softer actions require a new FSM input.
+  - Env vars: `GRINDER_CONSEC_LOSS_ENABLED` (bool, default False), `GRINDER_CONSEC_LOSS_THRESHOLD` (int, default 5, min 1), `GRINDER_CONSEC_LOSS_EVIDENCE` (bool, default False).
+  - Metrics: `grinder_risk_consecutive_losses` (gauge), `grinder_risk_consecutive_loss_trips_total` (counter). Dedicated `set_consecutive_loss_metrics()` setter in `metrics_builder.py` (not RiskMetricsState).
+  - Alerts: `ConsecutiveLossTrip` (critical, on trip), `ConsecutiveLossesHigh` (warning, early-warning at >=3).
+  - Dedup: service maintains own `_last_trade_id` cursor; input sorted by trade ID before processing.
+  - Remaining out of scope: per-symbol tracking (v1 tracks global streak), persistent state across restarts (count resets), FillModelV0 integration.

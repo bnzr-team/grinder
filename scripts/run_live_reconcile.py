@@ -100,6 +100,7 @@ from grinder.execution.fill_ingest import ingest_fills, push_tracker_to_metrics
 from grinder.execution.fill_tracker import FillTracker
 from grinder.live.reconcile_loop import ReconcileLoop, ReconcileLoopConfig
 from grinder.observability.fill_metrics import get_fill_metrics
+from grinder.observability.metrics_builder import set_consecutive_loss_metrics
 from grinder.ops.artifacts import (
     ArtifactPaths,
     cleanup_old_runs,
@@ -120,6 +121,7 @@ from grinder.reconcile.observed_state import ObservedStateStore
 from grinder.reconcile.remediation import RemediationExecutor
 from grinder.reconcile.runner import ReconcileRunner
 from grinder.reconcile.types import ExpectedPosition
+from grinder.risk.consecutive_loss_wiring import ConsecutiveLossService
 from scripts.http_measured_client import RequestsHttpClient, build_measured_client
 
 # =============================================================================
@@ -799,6 +801,16 @@ def main() -> int:  # noqa: PLR0915, PLR0912
     else:
         logger.info("Fill ingestion DISABLED (set FILL_INGEST_ENABLED=1 to enable)")
 
+    # --- Consecutive loss guard setup (PR-C3b) ---
+    consec_loss_service = ConsecutiveLossService()
+    if consec_loss_service.enabled:
+        logger.info(
+            "Consecutive loss guard ENABLED (threshold=%d)",
+            consec_loss_service.guard.config.threshold,
+        )
+    else:
+        logger.info("Consecutive loss guard DISABLED")
+
     # Snapshot callback for REST polling (LC-19)
     def fetch_snapshot() -> None:
         """Fetch REST snapshot (orders + positions + fills) before each reconcile run."""
@@ -856,6 +868,10 @@ def main() -> int:  # noqa: PLR0915, PLR0912
         )
         if count > 0:
             push_tracker_to_metrics(fill_tracker, fill_metrics)
+        # PR-C3b: Feed trades to consecutive loss guard
+        consec_loss_service.process_trades(all_trades)
+        losses, trips = consec_loss_service.get_metrics_state()
+        set_consecutive_loss_metrics(losses, trips)
         # PR6: save cursor on every successful poll (not just count > 0).
         # updated_at_ms gets now_ms, keeping cursor file fresh during quiet
         # markets.  This prevents FillCursorStuck false-positives.

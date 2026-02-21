@@ -156,6 +156,33 @@ curl -fsS http://localhost:9090/metrics | grep grinder_router_decision_total
 curl -fsS http://localhost:9090/metrics | grep grinder_account_sync
 ```
 
+### Consecutive Loss Guard (PR-C3b)
+
+| Alert | Severity | Action |
+|-------|----------|--------|
+| `ConsecutiveLossTrip` | critical | Guard tripped — PAUSE set via `GRINDER_OPERATOR_OVERRIDE`. Check if losses are real or a data issue. Clear override to resume: `unset GRINDER_OPERATOR_OVERRIDE` + restart. |
+| `ConsecutiveLossesHigh` | warning | Early warning: >=3 consecutive losses (guard trips at configured threshold, default 5). Monitor closely. |
+
+**Quick check:**
+```bash
+curl -fsS http://localhost:9090/metrics | grep grinder_risk_consecutive
+```
+
+**Env vars:**
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GRINDER_CONSEC_LOSS_ENABLED` | `false` | Enable guard |
+| `GRINDER_CONSEC_LOSS_THRESHOLD` | `5` | Consecutive losses before trip |
+| `GRINDER_CONSEC_LOSS_EVIDENCE` | `false` | Write evidence artifacts on trip |
+
+**Recovery:**
+1. Investigate: are losses real? Check `grinder_risk_consecutive_losses` count.
+2. If false positive: clear override, restart, adjust threshold.
+3. If real: keep PAUSE, investigate strategy.
+
+**Scope:** Wired only in `scripts/run_live_reconcile.py`. Other entrypoints do not activate this guard.
+
 ### Observability Quick Check
 
 Single command to grep all Launch-13/14/15 metrics at once (no Prometheus needed):
