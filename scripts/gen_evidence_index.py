@@ -369,6 +369,41 @@ ENTRIES: list[dict[str, Any]] = [
             },
         ],
     },
+    {
+        "id": "account_sync_fire_drill",
+        "title": "Account sync fire drill",
+        "run_via": [
+            "bash scripts/ops_fill_triage.sh account-sync-drill",
+            "bash scripts/fire_drill_account_sync.sh",
+        ],
+        "mode": "account-sync-drill",
+        "evidence_dir_pattern": ".artifacts/account_sync_fire_drill/<YYYYMMDDTHHMMSSZ>",
+        "required_files": [
+            "summary.txt",
+            "sha256sums.txt",
+        ],
+        "optional_files": [
+            "drill_a_log.txt",
+            "drill_a_metrics.txt",
+            "drill_b_log.txt",
+            "drill_b_metrics.txt",
+            "drill_c_log.txt",
+            "drill_c_metrics.txt",
+            "drill_d_log.txt",
+            "drill_d_metrics.txt",
+            "drill_e_metrics.txt",
+        ],
+        "doc_refs": [
+            {
+                "path": "docs/runbooks/00_EVIDENCE_INDEX.md",
+                "anchor": "account-sync-fire-drill-fire_drill_account_syncsh",
+            },
+            {
+                "path": "docs/runbooks/30_ACCOUNT_SYNC_FIRE_DRILL.md",
+                "anchor": "runbook-30-account-sync-fire-drill-launch-15",
+            },
+        ],
+    },
 ]
 
 # =========================================================================

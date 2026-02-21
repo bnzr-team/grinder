@@ -111,7 +111,7 @@ based on risk, tick/step constraints, exchange rules, and idempotency/retry beha
 
 > **SSOT:** `docs/15_ACCOUNT_SYNC_SPEC.md` (data contracts + invariants + PR plan)
 
-**Status:** IN PROGRESS (PR0: spec)
+**Status:** IN PROGRESS (PR0: spec, PR1: contracts+render+metrics, PR2: syncer+evidence, PR3: fire drill+ops)
 
 ### Problem
 The system operates "blind" with respect to exchange state:

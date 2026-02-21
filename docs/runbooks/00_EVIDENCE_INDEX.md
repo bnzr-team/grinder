@@ -25,6 +25,7 @@ See also: [Ops Quickstart](00_OPS_QUICKSTART.md) | [Fill Tracker Triage](26_FILL
 | Exchange port boundary | Gate chain (5 gates), idempotency cache, retry classification (transient vs fatal) | `scripts/ops_fill_triage.sh connector-exchange-port` | `.artifacts/connector_exchange_port_fire_drill/<ts>/` | `drill_a_log.txt` .. `drill_f_log.txt`, `drill_e_metrics.txt`, `drill_f_metrics.txt` | `summary.txt` + `sha256sums.txt` |
 | SOR fire drill | Router decisions (CANCEL_REPLACE/BLOCK/NOOP), metrics wiring, contract smoke | `scripts/ops_fill_triage.sh sor-fire-drill` | `.artifacts/sor_fire_drill/<ts>/` | `drill_a_*.txt` .. `drill_d_*.txt` | `summary.txt` + `sha256sums.txt` |
 | Account sync evidence | Positions + open orders snapshot, mismatch detection, metrics | `GRINDER_ACCOUNT_SYNC_EVIDENCE=1` (env-gated) | `.artifacts/account_sync/<ts>/` | `account_snapshot.json`, `positions.json`, `open_orders.json`, `mismatches.json` | `summary.txt` + `sha256sums.txt` |
+| Account sync fire drill | Mismatch rules (duplicate_key, negative_qty, orphan_order, ts_regression), metrics wiring, contract smoke | `scripts/ops_fill_triage.sh account-sync-drill` | `.artifacts/account_sync_fire_drill/<ts>/` | `drill_a_*.txt` .. `drill_e_*.txt` | `summary.txt` + `sha256sums.txt` |
 
 ---
 
@@ -204,6 +205,36 @@ See [Account Sync runbook](29_ACCOUNT_SYNC.md) for full details.
   mismatches.json           # Detected mismatches (empty array if clean)
   summary.txt               # Human-readable evidence block
   sha256sums.txt            # sha256 of all artifact files
+```
+
+### Account sync fire drill (`fire_drill_account_sync.sh`)
+
+**Command**: `bash scripts/ops_fill_triage.sh account-sync-drill`
+
+**Expected PASS markers** (grep to verify):
+```
+=== Results: 34 passed, 0 failed, 0 skipped ===
+  PASSED: account-sync-drill
+  evidence_dir: .artifacts/account_sync_fire_drill/<ts>
+```
+
+**Files to attach**: `summary.txt`, `sha256sums.txt`
+
+Artifact root can be overridden via `GRINDER_ARTIFACT_DIR` (default: `.artifacts`).
+
+```
+.artifacts/account_sync_fire_drill/<YYYYMMDDTHHMMSSZ>/
+  drill_a_log.txt          # Clean sync: happy path, metrics recorded
+  drill_a_metrics.txt      # Prometheus text (positions, orders, pending_notional)
+  drill_b_log.txt          # Mismatch: duplicate_key + negative_qty
+  drill_b_metrics.txt      # Prometheus text (mismatch counters)
+  drill_c_log.txt          # Orphan: orphan_ord_x flagged, known_ord_1 not
+  drill_c_metrics.txt      # Prometheus text (orphan_order counter)
+  drill_d_log.txt          # Regression: ts_regression, last_ts unchanged
+  drill_d_metrics.txt      # Prometheus text (ts_regression counter)
+  drill_e_metrics.txt      # Full MetricsBuilder output (contract smoke)
+  summary.txt              # Copy/paste evidence block
+  sha256sums.txt           # Full 64-char sha256 of all artifact files
 ```
 
 ---

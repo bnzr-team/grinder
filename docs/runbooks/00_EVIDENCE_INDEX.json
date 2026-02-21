@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at_utc": "2026-02-21T03:55:48Z",
+  "generated_at_utc": "2026-02-21T04:26:17Z",
   "sources": [
     {
       "type": "markdown",
@@ -8,7 +8,7 @@
     },
     {
       "type": "git",
-      "sha": "754da32bef9074078773ce1254730fb1fa5a32c3"
+      "sha": "1e64c24d77de95f2c90307b613179b6d80b5a73e"
     }
   ],
   "entries": [
@@ -348,6 +348,41 @@
         {
           "path": "docs/runbooks/29_ACCOUNT_SYNC.md",
           "anchor": "3-evidence-artifacts"
+        }
+      ]
+    },
+    {
+      "id": "account_sync_fire_drill",
+      "title": "Account sync fire drill",
+      "run_via": [
+        "bash scripts/ops_fill_triage.sh account-sync-drill",
+        "bash scripts/fire_drill_account_sync.sh"
+      ],
+      "mode": "account-sync-drill",
+      "evidence_dir_pattern": ".artifacts/account_sync_fire_drill/<YYYYMMDDTHHMMSSZ>",
+      "required_files": [
+        "summary.txt",
+        "sha256sums.txt"
+      ],
+      "optional_files": [
+        "drill_a_log.txt",
+        "drill_a_metrics.txt",
+        "drill_b_log.txt",
+        "drill_b_metrics.txt",
+        "drill_c_log.txt",
+        "drill_c_metrics.txt",
+        "drill_d_log.txt",
+        "drill_d_metrics.txt",
+        "drill_e_metrics.txt"
+      ],
+      "doc_refs": [
+        {
+          "path": "docs/runbooks/00_EVIDENCE_INDEX.md",
+          "anchor": "account-sync-fire-drill-fire_drill_account_syncsh"
+        },
+        {
+          "path": "docs/runbooks/30_ACCOUNT_SYNC_FIRE_DRILL.md",
+          "anchor": "runbook-30-account-sync-fire-drill-launch-15"
         }
       ]
     }
