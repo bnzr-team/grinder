@@ -40,6 +40,13 @@ REQUIRED_METRICS_PATTERNS = [
     "# HELP grinder_high_water_mark",
     "# TYPE grinder_high_water_mark",
     "grinder_high_water_mark",
+    # PR-C3b: Consecutive loss guard
+    "# HELP grinder_risk_consecutive_losses",
+    "# TYPE grinder_risk_consecutive_losses",
+    "grinder_risk_consecutive_losses",
+    "# HELP grinder_risk_consecutive_loss_trips_total",
+    "# TYPE grinder_risk_consecutive_loss_trips_total",
+    "grinder_risk_consecutive_loss_trips_total",
     # HA metrics
     "# HELP grinder_ha_role",
     "# TYPE grinder_ha_role",

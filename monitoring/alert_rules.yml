@@ -68,6 +68,10 @@
 #   - grinder_account_sync_age_seconds (gauge): seconds since last sync
 #   - grinder_account_sync_errors_total{reason} (counter): sync errors
 #   - grinder_account_sync_mismatches_total{rule} (counter): sync mismatches
+#
+# Consecutive loss guard metrics (PR-C3b):
+#   - grinder_risk_consecutive_losses (gauge): current consecutive loss count
+#   - grinder_risk_consecutive_loss_trips_total (counter): total guard trips
 
 groups:
   - name: grinder_availability
@@ -171,6 +175,28 @@ groups:
         annotations:
           summary: "Kill-switch trip detected"
           description: "Kill-switch trip count increased in the last 5 minutes."
+
+      # Critical: Consecutive loss guard tripped — PAUSE set (PR-C3b)
+      - alert: ConsecutiveLossTrip
+        expr: increase(grinder_risk_consecutive_loss_trips_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Consecutive loss guard tripped"
+          description: "Consecutive loss guard reached threshold and set PAUSE. Check GRINDER_OPERATOR_OVERRIDE."
+          runbook_url: "docs/runbooks/02_HEALTH_TRIAGE.md#consecutive-loss-guard-pr-c3b"
+
+      # Warning: Consecutive losses approaching threshold (early warning at >=3) (PR-C3b)
+      - alert: ConsecutiveLossesHigh
+        expr: grinder_risk_consecutive_losses >= 3
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Consecutive losses approaching threshold"
+          description: "{{ $value }} consecutive losses detected (guard trips at configured threshold, default 5)."
+          runbook_url: "docs/runbooks/02_HEALTH_TRIAGE.md#consecutive-loss-guard-pr-c3b"
 
 
   - name: grinder_reconcile
