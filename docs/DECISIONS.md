@@ -3737,9 +3737,9 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
 
 - **Determinism invariants:**
   - `row_id` = `sha1(f"{symbol}|{direction}|{entry_ts}|{exit_ts}|{entry_price}|{exit_price}|{qty}")`. Same canonical inputs → same hex digest, always.
-  - Parquet: `write_statistics=False` + `compression="snappy"` → byte-identical output for identical pyarrow Tables.
-  - Manifest: `json.dumps(manifest, indent=2, sort_keys=True) + "\n"` → deterministic JSON byte order.
-  - `manifest.sha256["data.parquet"]` = sha256 of the written parquet file. Verified by `TestDeterminismRebuild`: two builds from identical rows + identical `created_at_utc` produce identical sha256.
+  - Parquet: `write_statistics=False` + `compression="snappy"` → byte-identical `data.parquet` for identical input rows.
+  - `manifest.sha256["data.parquet"]` = sha256 of the parquet file only. `created_at_utc` is **not** included in the sha256 — it lives in manifest metadata only. Therefore `data.parquet` digest is deterministic regardless of build time.
+  - Manifest JSON uses `json.dumps(manifest, indent=2, sort_keys=True) + "\n"` for stable byte order. Full manifest byte-identity requires pinning `created_at_utc` (the CLI accepts `--created-at-utc` for this; tests always pin it).
   - Row order in parquet matches the order rows are emitted by `RoundtripTracker` (fill-sequence order, no re-sorting). Stable because `RoundtripTracker.record()` emits rows one-at-a-time in fill arrival order.
 
 - **Out of scope (deferred to v2 or later):**
