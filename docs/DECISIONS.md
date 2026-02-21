@@ -3831,21 +3831,16 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
   - Leverages existing FSM `OPERATOR_PAUSE` transition. No new FSM states or fields.
   - Safe-by-default: `enabled=False` means zero effect on trading.
 
-- **Metrics (emitted by caller, not guard):**
-  - `grinder_risk_consecutive_losses` (gauge): current streak count.
-  - `grinder_risk_consecutive_loss_trips_total` (counter): trip events.
-
-- **Alert rules (monitoring/alert_rules.yml):**
-  - `ConsecutiveLossTrip`: `increase(grinder_risk_consecutive_loss_trips_total[5m]) > 0` → severity: warning.
-  - `ConsecutiveLossesHigh`: `grinder_risk_consecutive_losses >= 3` → severity: info.
-
 - **Determinism:** Same sequence of `update()` calls → same state. No timestamps in logic (ts_ms is metadata only). No floats. Frozen dataclass state.
 
-- **Out of scope (deferred):**
+- **Out of scope (deferred to PR-C3b):**
   - Live pipeline wiring (RoundtripTracker → guard in reconcile loop).
+  - Metrics emission: `grinder_risk_consecutive_losses` (gauge), `grinder_risk_consecutive_loss_trips_total` (counter).
+  - Alert rules: `ConsecutiveLossTrip`, `ConsecutiveLossesHigh`.
+  - Runbook and observability panel sections.
   - Persistent state across restarts (count resets on restart).
   - Per-symbol tracking (v1 tracks global streak only).
   - Integration with FillModelV0 predictions.
 
-- **Consequences:** Risk module now has three guards: DrawdownGuardV1 (equity), KillSwitch (emergency), ConsecutiveLossGuard (loss streaks). Wiring into live pipeline is the next step. `docs/GAPS.md` consecutive loss row updated PLANNED → PARTIAL.
+- **Consequences:** Risk module now has three guards: DrawdownGuardV1 (equity), KillSwitch (emergency), ConsecutiveLossGuard (loss streaks). This PR ships the library only (pure logic + tests). Wiring, metrics, alerts, and runbook are deferred to PR-C3b to avoid SSOT breach (alerts implying active protection when no wiring exists). `docs/GAPS.md` consecutive loss row updated PLANNED → PARTIAL.
 - **Alternatives:** "Wire directly into FSM as new OrchestratorInputs field" — rejected for v1 to avoid modifying FSM contract + all callers. `operator_override="PAUSE"` achieves the same effect with zero FSM changes. "Auto-reset after cooldown" — rejected because loss streaks warrant human investigation before resuming.

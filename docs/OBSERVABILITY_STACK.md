@@ -180,21 +180,6 @@ Metrics from `src/grinder/account/metrics.py`.
 
 **Next step:** `bash scripts/ops_fill_triage.sh account-sync-drill` or [29_ACCOUNT_SYNC.md](runbooks/29_ACCOUNT_SYNC.md)
 
-### Consecutive Loss Guard (Track C, PR-C3)
-
-Metrics from caller of `src/grinder/risk/consecutive_loss_guard.py`.
-
-| Panel | PromQL | Type | Notes |
-|-------|--------|------|-------|
-| Loss streak | `grinder_risk_consecutive_losses` | Gauge | Current consecutive loss count; 0 = healthy |
-| Trip events | `increase(grinder_risk_consecutive_loss_trips_total[5m])` | Counter | >0 fires `ConsecutiveLossTrip` alert |
-
-**What good looks like:** `consecutive_losses` near 0, zero trips.
-
-**What bad looks like:** `consecutive_losses` climbing toward threshold, trip events firing.
-
-**Next step:** See [02_HEALTH_TRIAGE.md -- Consecutive Loss Alerts](runbooks/02_HEALTH_TRIAGE.md#consecutive-loss-alerts-track-c-pr-c3)
-
 ## File Structure
 
 ```
