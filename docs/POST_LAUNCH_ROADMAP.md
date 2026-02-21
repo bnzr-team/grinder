@@ -14,12 +14,14 @@
   - We keep **Launch-13/14/15** only for P1 (to preserve continuity),
   - Then move to **P2 Packs** (no more endless "Launch-XX" by default).
 
-## 1) Current baseline (as of 2026-02-20)
+## 1) Current baseline (as of 2026-02-21)
 
 - Milestones M1–M8: DONE
 - Launch-01–12: DONE
+- Launch-13 (FSM): DONE (main @ `7793045`)
+- Launch-14 (SmartOrderRouter): DONE (main @ `e5b177c`, existing=None scope)
 - P0 blockers: none
-- P1 gaps open: 3 (FSM, SmartOrderRouter, PositionSyncer/RoundTrip)
+- P1 gaps open: 1 (PositionSyncer/RoundTrip)
 - P2 backlog open: 12 (see section 3)
 
 ## 2) P1 Hardening Pack (ASAP post-launch)
@@ -78,31 +80,30 @@ INIT → READY → DEGRADED → EMERGENCY, with explicit transitions, reasons, a
 
 > **SSOT:** `docs/14_SMART_ORDER_ROUTER_SPEC.md` (decision matrix + invariants + PR plan)
 
-**Status:** IN PROGRESS (PR0: spec, PR1: core+tests, PR2: integration, PR3: drill+evidence+runbook)
+**Status:** ✅ COMPLETE (main @ `e5b177c`) — existing=None scope, AMEND deferred
 
 ### Problem
 We mostly do "cancel / place" patterns. Need router to decide:
 - amend existing order vs cancel-replace vs noop
 based on risk, tick/step constraints, exchange rules, and idempotency/retry behavior.
 
-### Deliverables
-- `SmartOrderRouter` contract:
-  - input: desired action plan + current open orders + constraints
-  - output: minimal-risk execution plan (amend / cancel+place / noop)
-- Router decision telemetry:
-  - metrics: router_decision_total{decision=amend|cancel_replace|noop, reason=...}
-  - log: decision with reason and key parameters.
+### Delivered
 
-### Acceptance Criteria (MUST)
-- Router never increases risk when drawdown gate is active.
-- Router respects minQty/stepSize and symbol whitelist constraints.
-- Router decisions are reproducible (tests cover >N cases).
-- Fire drill / simulation fixture shows router chooses amend when safe, cancel-replace otherwise.
+- `SmartOrderRouter` contract: `route(RouterInputs) -> RouterResult` with decision table
+- Decision paths: CANCEL_REPLACE / BLOCK / NOOP (AMEND deferred — requires order state tracking)
+- Spread-crossing detection, filter validation (tick/step/min_qty/min_notional), rate-limit budgets
+- SOR wired into `LiveEngineV0._apply_sor()` with feature flag (default OFF, `GRINDER_SOR_ENABLED=1`)
+- Router decision telemetry: `grinder_router_decision_total{decision, reason}`, `grinder_router_amend_savings_total`
+- Fire drill: 4 drills (CANCEL_REPLACE/BLOCK/NOOP/metrics contract smoke), 20 PASS
+- Runbook: `docs/runbooks/28_SOR_FIRE_DRILL.md`
+- Evidence index updated (12 entries)
 
-### Suggested PR breakdown
-- PR1: Router contract + decision table + unit tests
-- PR2: Integration with exchange port boundary + metrics/logs
-- PR3: fire drill + docs/runbook updates
+### PR chain
+
+- PR0 (#219) — Spec/decision matrix + invariants (merged @ `8ff7339`)
+- PR1 (#220) — Router core + table-driven tests (merged @ `d98008d`)
+- PR2 (#221) — LiveEngine wiring + SOR metrics (merged @ `045e5c7`)
+- PR3 (#222) — Fire drill + evidence + runbook (merged @ `e5b177c`)
 
 ---
 
