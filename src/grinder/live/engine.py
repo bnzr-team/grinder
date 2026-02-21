@@ -36,6 +36,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
+from grinder.account.evidence import write_evidence_bundle
 from grinder.connectors.errors import (
     CircuitOpenError,
     ConnectorError,
@@ -60,6 +61,7 @@ from grinder.risk.drawdown_guard_v1 import DrawdownGuardV1
 from grinder.risk.drawdown_guard_v1 import OrderIntent as RiskIntent
 
 if TYPE_CHECKING:
+    from grinder.account.syncer import AccountSyncer
     from grinder.contracts import Snapshot
     from grinder.execution.port import ExchangePort
     from grinder.live.config import LiveEngineConfig
@@ -213,6 +215,7 @@ class LiveEngineV0:
         retry_policy: RetryPolicy | None = None,
         fsm_driver: FsmDriver | None = None,
         exchange_filters: ExchangeFilters | None = None,
+        account_syncer: AccountSyncer | None = None,
     ) -> None:
         """Initialize LiveEngineV0.
 
@@ -224,6 +227,7 @@ class LiveEngineV0:
             retry_policy: Optional retry policy for transient errors
             fsm_driver: Optional FSM driver for state-based intent gating (Launch-13)
             exchange_filters: Optional exchange filters for SOR (Launch-14)
+            account_syncer: Optional account syncer for position/order sync (Launch-15)
         """
         self._paper_engine = paper_engine
         self._exchange_port = exchange_port
@@ -232,10 +236,14 @@ class LiveEngineV0:
         self._retry_policy = retry_policy or RetryPolicy(max_attempts=3)
         self._fsm_driver = fsm_driver
         self._exchange_filters = exchange_filters
+        self._account_syncer = account_syncer
         self._last_snapshot: Snapshot | None = None
         # Read GRINDER_SOR_ENABLED once at init (truthy: 1/true/yes/on)
         raw_sor = os.environ.get("GRINDER_SOR_ENABLED", "")
         self._sor_env_override = raw_sor.strip().lower() in {"1", "true", "yes", "on"}
+        # Read GRINDER_ACCOUNT_SYNC_ENABLED once at init (Launch-15)
+        raw_sync = os.environ.get("GRINDER_ACCOUNT_SYNC_ENABLED", "")
+        self._account_sync_env_override = raw_sync.strip().lower() in {"1", "true", "yes", "on"}
 
     @property
     def config(self) -> LiveEngineConfig:
@@ -273,6 +281,10 @@ class LiveEngineV0:
         # FSM tick: update state before action processing (Launch-13 PR3)
         if self._fsm_driver is not None:
             self._tick_fsm(snapshot.ts)
+
+        # Account sync: read-only fetch + mismatch detection (Launch-15)
+        if self._is_account_sync_enabled():
+            self._tick_account_sync()
 
         # Step 2: Process actions
         live_actions: list[LiveAction] = []
@@ -335,6 +347,47 @@ class LiveEngineV0:
             position_reduced=False,  # TODO: wire from position reducer
             operator_override=override,
         )
+
+    def _is_account_sync_enabled(self) -> bool:
+        """Check if account sync is active.
+
+        Requires: feature flag (config or env) AND syncer instance.
+        """
+        flag_on = self._config.account_sync_enabled or self._account_sync_env_override
+        if not flag_on:
+            return False
+        if self._account_syncer is None:
+            logger.debug("Account sync flag ON but no syncer instance, skipping")
+            return False
+        return True
+
+    def _tick_account_sync(self) -> None:
+        """Run one account sync cycle (read-only).
+
+        Fetches snapshot, detects mismatches, records metrics.
+        Evidence writing is delegated to evidence.py (env-gated).
+        """
+        assert self._account_syncer is not None  # caller guards
+
+        result = self._account_syncer.sync()
+
+        if result.error is not None:
+            logger.warning("Account sync failed: %s", result.error)
+            return
+
+        if result.snapshot is not None and result.mismatches:
+            logger.warning(
+                "Account sync mismatches detected: %d",
+                len(result.mismatches),
+            )
+            for m in result.mismatches:
+                logger.warning("  [%s] %s", m.rule, m.detail)
+
+        # Evidence writing (env-gated, safe-by-default)
+        if result.snapshot is not None:
+            evidence_dir = write_evidence_bundle(result.snapshot, result.mismatches)
+            if evidence_dir is not None:
+                logger.info("Account sync evidence written to %s", evidence_dir)
 
     def _process_action(self, action: ExecutionAction, ts: int) -> LiveAction:  # noqa: PLR0911
         """Process single action through safety gates and execute.

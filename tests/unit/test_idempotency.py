@@ -648,6 +648,12 @@ class TestRetryIdempotencyIntegration:
             def fetch_open_orders(self, symbol: str) -> list[Any]:  # noqa: ARG002
                 return []
 
+            def fetch_positions(self) -> list[Any]:
+                return []
+
+            def fetch_account_snapshot(self) -> Any:
+                raise NotImplementedError
+
         inner = CountingPort()
         port = IdempotentExchangePort(inner=inner, store=store)
 
@@ -707,6 +713,12 @@ class TestRetryIdempotencyIntegration:
 
             def fetch_open_orders(self, symbol: str) -> list[Any]:  # noqa: ARG002
                 return []
+
+            def fetch_positions(self) -> list[Any]:
+                return []
+
+            def fetch_account_snapshot(self) -> Any:
+                raise NotImplementedError
 
         inner = FailOncePort()
         port = IdempotentExchangePort(inner=inner, store=store)
@@ -897,6 +909,12 @@ class TestIdempotentPortWithCircuitBreaker:
             def fetch_open_orders(self, symbol: str) -> list[Any]:  # noqa: ARG002
                 return []
 
+            def fetch_positions(self) -> list[Any]:
+                return []
+
+            def fetch_account_snapshot(self) -> Any:
+                raise NotImplementedError
+
         config = CircuitBreakerConfig(failure_threshold=2, open_interval_s=30.0)
         breaker = CircuitBreaker(config=config, clock=clock)
 
@@ -956,6 +974,12 @@ class TestIdempotentPortWithCircuitBreaker:
 
             def fetch_open_orders(self, symbol: str) -> list[Any]:  # noqa: ARG002
                 return []
+
+            def fetch_positions(self) -> list[Any]:
+                return []
+
+            def fetch_account_snapshot(self) -> Any:
+                raise NotImplementedError
 
         config = CircuitBreakerConfig(
             failure_threshold=2, open_interval_s=30.0, trip_on=default_trip_on

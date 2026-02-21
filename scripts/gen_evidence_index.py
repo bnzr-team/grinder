@@ -340,6 +340,35 @@ ENTRIES: list[dict[str, Any]] = [
             },
         ],
     },
+    {
+        "id": "account_sync",
+        "title": "Account sync evidence",
+        "run_via": [
+            "GRINDER_ACCOUNT_SYNC_EVIDENCE=1 python3 -m grinder ...",
+        ],
+        "mode": "account-sync",
+        "evidence_dir_pattern": ".artifacts/account_sync/<YYYYMMDDTHHMMSSZ>",
+        "required_files": [
+            "summary.txt",
+            "sha256sums.txt",
+        ],
+        "optional_files": [
+            "account_snapshot.json",
+            "positions.json",
+            "open_orders.json",
+            "mismatches.json",
+        ],
+        "doc_refs": [
+            {
+                "path": "docs/runbooks/00_EVIDENCE_INDEX.md",
+                "anchor": "account-sync-evidence",
+            },
+            {
+                "path": "docs/runbooks/29_ACCOUNT_SYNC.md",
+                "anchor": "3-evidence-artifacts",
+            },
+        ],
+    },
 ]
 
 # =========================================================================
