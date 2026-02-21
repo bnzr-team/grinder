@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at_utc": "2026-02-19T23:57:58Z",
+  "generated_at_utc": "2026-02-21T01:22:36Z",
   "sources": [
     {
       "type": "markdown",
@@ -8,7 +8,7 @@
     },
     {
       "type": "git",
-      "sha": "6c6477136f2550ed463fb4e6de741eb367bd4b0c"
+      "sha": "045e5c7b04b36b4970084ac3a5ece625fefe83cc"
     }
   ],
   "entries": [
@@ -290,6 +290,35 @@
         {
           "path": "docs/runbooks/00_EVIDENCE_INDEX.md",
           "anchor": "exchange-port-boundary-fire-drill"
+        }
+      ]
+    },
+    {
+      "id": "sor_fire_drill",
+      "title": "SOR fire drill",
+      "run_via": [
+        "bash scripts/ops_fill_triage.sh sor-fire-drill",
+        "bash scripts/fire_drill_sor.sh"
+      ],
+      "mode": "sor-fire-drill",
+      "evidence_dir_pattern": ".artifacts/sor_fire_drill/<YYYYMMDDTHHMMSS>",
+      "required_files": [
+        "summary.txt",
+        "sha256sums.txt"
+      ],
+      "optional_files": [
+        "drill_a_log.txt",
+        "drill_a_metrics.txt",
+        "drill_b_log.txt",
+        "drill_b_metrics.txt",
+        "drill_c_log.txt",
+        "drill_c_metrics.txt",
+        "drill_d_metrics.txt"
+      ],
+      "doc_refs": [
+        {
+          "path": "docs/runbooks/00_EVIDENCE_INDEX.md",
+          "anchor": "sor-fire-drill-fire_drill_sorsh"
         }
       ]
     }

@@ -311,6 +311,35 @@ ENTRIES: list[dict[str, Any]] = [
             },
         ],
     },
+    {
+        "id": "sor_fire_drill",
+        "title": "SOR fire drill",
+        "run_via": [
+            "bash scripts/ops_fill_triage.sh sor-fire-drill",
+            "bash scripts/fire_drill_sor.sh",
+        ],
+        "mode": "sor-fire-drill",
+        "evidence_dir_pattern": ".artifacts/sor_fire_drill/<YYYYMMDDTHHMMSS>",
+        "required_files": [
+            "summary.txt",
+            "sha256sums.txt",
+        ],
+        "optional_files": [
+            "drill_a_log.txt",
+            "drill_a_metrics.txt",
+            "drill_b_log.txt",
+            "drill_b_metrics.txt",
+            "drill_c_log.txt",
+            "drill_c_metrics.txt",
+            "drill_d_metrics.txt",
+        ],
+        "doc_refs": [
+            {
+                "path": "docs/runbooks/00_EVIDENCE_INDEX.md",
+                "anchor": "sor-fire-drill-fire_drill_sorsh",
+            },
+        ],
+    },
 ]
 
 # =========================================================================
