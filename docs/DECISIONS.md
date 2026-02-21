@@ -3694,3 +3694,62 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
   - Callers must NOT define their own truthy/falsey sets -- use `env_parse` functions.
 - **Consequences:** Invalid env values are now visible (either crash or warning log). Future env flags get consistent parsing for free. Migration of remaining non-triage call sites is P2.
 - **Alternatives:** "strict=False default" -- rejected because it perpetuates silent misconfiguration; better to be loud-by-default and opt into leniency explicitly.
+
+## ADR-068 -- Fill outcome dataset v1 (Track C, PR-C1)
+
+- **Date:** 2026-02-21
+- **Status:** accepted
+- **Context:** P2 backlog items #4 (fill probability model) and #6 (consecutive loss limit) both depend on a structured dataset of completed fill roundtrips. No such dataset exists; fills are tracked in-memory by FillTracker but never persisted as roundtrip outcomes.
+- **Decision:** New module `src/grinder/ml/fill_dataset.py` with:
+  - `FillOutcomeRow` frozen dataclass (21 fields: identification, entry, exit, PnL, context, metadata).
+  - `RoundtripTracker` that groups fills by (symbol, direction), emits a row when position transitions from non-zero back to zero.
+  - `build_fill_dataset_v1()` writes `data.parquet` + `manifest.json` with deterministic settings (`write_statistics=False`, `compression="snappy"`).
+  - Deterministic `row_id` = `sha1(symbol|direction|entry_ts|exit_ts|entry_price|exit_price|qty)`.
+  - CLI: `scripts/build_fill_dataset_v1.py --fixture <path> --out-dir <path>`.
+  - Artifact: `ml/datasets/fill_outcomes/v1/manifest.json` + `data.parquet`.
+  - Manifest schema: `fill_outcomes_v1` (distinct from Feature Store v1 `feature_order_hash` schema).
+
+- **Field schema (21 columns, deterministic column order in `FILL_OUTCOME_COLUMNS`):**
+
+  | # | Field | Parquet Type | Description |
+  |---|-------|-------------|-------------|
+  | 1 | `row_id` | string | sha1 of canonical pipe-separated key fields |
+  | 2 | `symbol` | string | Trading pair, e.g. "BTCUSDT" |
+  | 3 | `direction` | string | "long" or "short" |
+  | 4 | `entry_ts` | int64 | First entry fill timestamp (ms) |
+  | 5 | `entry_price` | float64 | Weighted average entry price |
+  | 6 | `entry_qty` | float64 | Total entry quantity |
+  | 7 | `entry_fee` | float64 | Sum of fees on entry fills |
+  | 8 | `entry_fill_count` | int32 | Number of fills that built the position |
+  | 9 | `exit_ts` | int64 | Last exit fill timestamp (ms) |
+  | 10 | `exit_price` | float64 | Weighted average exit price |
+  | 11 | `exit_qty` | float64 | Total exit quantity |
+  | 12 | `exit_fee` | float64 | Sum of fees on exit fills |
+  | 13 | `exit_fill_count` | int32 | Number of fills that closed the position |
+  | 14 | `realized_pnl` | float64 | (exit_price - entry_price) * qty * direction_sign |
+  | 15 | `net_pnl` | float64 | realized_pnl - entry_fee - exit_fee |
+  | 16 | `pnl_bps` | int32 | net_pnl / notional * 10000, rounded |
+  | 17 | `holding_time_ms` | int64 | exit_ts - entry_ts |
+  | 18 | `notional` | float64 | entry_price * entry_qty |
+  | 19 | `outcome` | string | "win", "loss", or "breakeven" (based on net_pnl) |
+  | 20 | `source` | string | "paper" (only value in v1) |
+  | 21 | `dataset_version` | string | "v1" |
+
+- **Determinism invariants:**
+  - `row_id` = `sha1(f"{symbol}|{direction}|{entry_ts}|{exit_ts}|{entry_price}|{exit_price}|{qty}")`. Same canonical inputs → same hex digest, always.
+  - Parquet: `write_statistics=False` + `compression="snappy"` → byte-identical `data.parquet` for identical input rows.
+  - `manifest.sha256["data.parquet"]` = sha256 of the parquet file only. `created_at_utc` is **not** included in the sha256 — it lives in manifest metadata only. Therefore `data.parquet` digest is deterministic regardless of build time.
+  - Manifest JSON uses `json.dumps(manifest, indent=2, sort_keys=True) + "\n"` for stable byte order. Full manifest byte-identity requires pinning `created_at_utc` (the CLI accepts `--created-at-utc` for this; tests always pin it).
+  - Row order in parquet matches the order rows are emitted by `RoundtripTracker` (fill-sequence order, no re-sorting). Stable because `RoundtripTracker.record()` emits rows one-at-a-time in fill arrival order.
+
+- **Out of scope (deferred to v2 or later):**
+  - Live exchange fills (v1 is paper-fill only; `source="paper"`).
+  - Slippage or partial-fill modeling (paper fills are all-or-nothing).
+  - Per-fill detail rows (v1 aggregates to roundtrip level only).
+  - Automatic dataset rebuild from FillTracker events (v1 requires explicit CLI invocation).
+  - Feature Store v1 integration (`feature_order_hash`, labels) — different schema lineage.
+
+- **Versioning plan:** Schema changes that add columns are additive (v1 consumers ignore unknown columns). Schema changes that remove, rename, or retype columns require a new `schema_version` ("fill_outcomes_v2") and a new `build_fill_dataset_v2()` entry point. The `dataset_version` field in each row records which builder wrote it.
+
+- **Consequences:** PR-C2 (fill probability model) and PR-C3 (consecutive loss limit) have a stable SSOT to build on. pyarrow is in `[dev]` extras (tests) and `[ml]` extras (production). Dataset is paper-fill only for now; live fills deferred.
+- **Alternatives:** "Reuse Feature Store v1 manifest" -- rejected because fill outcomes have different column semantics (no feature_order, no labels). "Store as CSV" -- rejected because parquet provides type safety, compression, and columnar access.

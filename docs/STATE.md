@@ -1321,6 +1321,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
 - [DONE] P2 triage PR1: alert coverage for Launch-13/14/15 metrics + runbook wiring. 7 alert rules (FsmBadStateTooLong, FsmActionBlockedSpike, SorBlockedSpike, SorNoopSpike, AccountSyncStale, AccountSyncErrors, AccountSyncMismatchSpike) + triage wiring in RB02. Zero src/ changes.
 - [DONE] P2 triage PR3: env parsing unified. New `src/grinder/env_parse.py` SSOT with parse_bool/parse_int/parse_csv/parse_enum. Migrated 5 triage-flow call sites (fsm_evidence, account evidence, live engine SOR/sync/override, reconcile_loop). strict=True raises ConfigError, strict=False warns+default.
 - [DONE] P2 triage PR2: observability quick panels + triage discoverability (Launch-13/14/15). Added FSM/SOR/AccountSync panel definitions to OBSERVABILITY_STACK.md + consolidated "Observability Quick Check" in RB02. Zero src/ changes.
+- [DONE] Track C PR-C1: Fill Dataset v1. New `src/grinder/ml/fill_dataset.py` with FillOutcomeRow (21 fields), RoundtripTracker, build_fill_dataset_v1(). CLI: `scripts/build_fill_dataset_v1.py`. Artifact: `ml/datasets/fill_outcomes/v1/data.parquet + manifest.json`. 24 tests. ADR-068.
 - Expand tests to >50% coverage.
 - Adaptive Controller v1 (EMA-based adaptive step, trend detection, DRAWDOWN mode).
 - ~~Live Connector v1~~ [DONE] Done (LC-21: stream_ticks wired to BinanceWsConnector).
