@@ -23,6 +23,7 @@ See also: [Ops Quickstart](00_OPS_QUICKSTART.md) | [Fill Tracker Triage](26_FILL
 | Execution intent gates | NOT_ARMED blocks all, kill-switch blocks non-CANCEL, drawdown blocks INCREASE_RISK, all-pass reaches port | `scripts/fire_drill_execution_intents.sh` | `.artifacts/execution_fire_drill/<ts>/` | `drill_a_*.txt`, `drill_b_*.txt`, `drill_c_*.txt`, `drill_d_*.txt` | `summary.txt` |
 | Market data connector | L2 parse validation, DQ staleness/gaps/outliers, symbol whitelist | `scripts/ops_fill_triage.sh connector-market-data` | `.artifacts/connector_market_data_fire_drill/<ts>/` | `drill_a_*.txt` .. `drill_e_*.txt` | `summary.txt` + `sha256sums.txt` |
 | Exchange port boundary | Gate chain (5 gates), idempotency cache, retry classification (transient vs fatal) | `scripts/ops_fill_triage.sh connector-exchange-port` | `.artifacts/connector_exchange_port_fire_drill/<ts>/` | `drill_a_log.txt` .. `drill_f_log.txt`, `drill_e_metrics.txt`, `drill_f_metrics.txt` | `summary.txt` + `sha256sums.txt` |
+| SOR fire drill | Router decisions (CANCEL_REPLACE/BLOCK/NOOP), metrics wiring, contract smoke | `scripts/ops_fill_triage.sh sor-fire-drill` | `.artifacts/sor_fire_drill/<ts>/` | `drill_a_*.txt` .. `drill_d_*.txt` | `summary.txt` + `sha256sums.txt` |
 
 ---
 
@@ -156,6 +157,34 @@ Gate B/C artifacts only present when `BINANCE_API_KEY` and `BINANCE_API_SECRET` 
   drill_f_log.txt          # Retry classification: transient vs fatal
   drill_f_metrics.txt      # Prometheus text (retry counters)
   summary.txt              # Copy/paste evidence block with code_path markers
+  sha256sums.txt           # Full 64-char sha256 of all artifact files
+```
+
+### SOR fire drill (`fire_drill_sor.sh`)
+
+**Command**: `bash scripts/ops_fill_triage.sh sor-fire-drill`
+
+**Expected PASS markers** (grep to verify):
+```
+=== Results: 20 passed, 0 failed, 0 skipped ===
+  PASSED: sor-fire-drill
+  evidence_dir: .artifacts/sor_fire_drill/<ts>
+```
+
+**Files to attach**: `summary.txt`, `sha256sums.txt`
+
+Artifact root can be overridden via `GRINDER_ARTIFACT_DIR` (default: `.artifacts`).
+
+```
+.artifacts/sor_fire_drill/<YYYYMMDDTHHMMSS>/
+  drill_a_log.txt          # CANCEL_REPLACE: happy path, port called
+  drill_a_metrics.txt      # Prometheus text (decision counter)
+  drill_b_log.txt          # BLOCK: spread crossing, ROUTER_BLOCKED
+  drill_b_metrics.txt      # Prometheus text (block counter)
+  drill_c_log.txt          # NOOP: budget exhausted (router-only, direct route())
+  drill_c_metrics.txt      # Prometheus text (noop counter)
+  drill_d_metrics.txt      # Full MetricsBuilder output (contract smoke)
+  summary.txt              # Copy/paste evidence block
   sha256sums.txt           # Full 64-char sha256 of all artifact files
 ```
 

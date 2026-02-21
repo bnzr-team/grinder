@@ -78,7 +78,7 @@ INIT → READY → DEGRADED → EMERGENCY, with explicit transitions, reasons, a
 
 > **SSOT:** `docs/14_SMART_ORDER_ROUTER_SPEC.md` (decision matrix + invariants + PR plan)
 
-**Status:** IN PROGRESS (PR0: spec, PR1: core+tests, PR2: integration -- existing=None, AMEND deferred)
+**Status:** IN PROGRESS (PR0: spec, PR1: core+tests, PR2: integration, PR3: drill+evidence+runbook)
 
 ### Problem
 We mostly do "cancel / place" patterns. Need router to decide:

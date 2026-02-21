@@ -7,6 +7,7 @@
 #   fire-drill             -> fire_drill_fill_alerts.sh
 #   connector-market-data  -> fire_drill_connector_market_data.sh
 #   connector-exchange-port -> fire_drill_connector_exchange_port.sh
+#   sor-fire-drill         -> fire_drill_sor.sh
 #   all                    -> runs connector-market-data + connector-exchange-port sequentially
 #
 # Does NOT invent a new evidence format -- runs the underlying script,
@@ -23,6 +24,7 @@
 #   fire-drill             No API keys. Proves alert inputs are produced (~10s).
 #   connector-market-data  No API keys. L2 parse, DQ, symbol whitelist (~2s).
 #   connector-exchange-port No API keys. Gate chain, idempotency, retry (~2s).
+#   sor-fire-drill         No API keys. SOR decision paths + metrics (~2s).
 #   all                    Runs connector-market-data + connector-exchange-port (~4s).
 #
 # Exit codes:
@@ -62,6 +64,7 @@ Modes:
   fire-drill              Deterministic alert input proof (no API keys needed)
   connector-market-data   L2 parse, DQ staleness/gaps/outliers, symbol whitelist
   connector-exchange-port Gate chain, idempotency cache, retry classification
+  sor-fire-drill          SOR decision paths (CANCEL_REPLACE/BLOCK/NOOP) + metrics
   all                     Run all connector modes sequentially (~4s)
 
 Options:
@@ -74,6 +77,7 @@ Examples:
   bash scripts/ops_fill_triage.sh staging
   bash scripts/ops_fill_triage.sh connector-market-data
   bash scripts/ops_fill_triage.sh connector-exchange-port
+  bash scripts/ops_fill_triage.sh sor-fire-drill
   bash scripts/ops_fill_triage.sh connector-market-data --no-status
   bash scripts/ops_fill_triage.sh all
 
@@ -278,8 +282,14 @@ case "$MODE" in
     HAS_ARTIFACTS=1
     TRIAGE_DOC="docs/runbooks/00_EVIDENCE_INDEX.md"
     ;;
+  sor-fire-drill)
+    SCRIPT_PATH="$SCRIPT_DIR/fire_drill_sor.sh"
+    LABEL="SOR fire drill (Launch-14)"
+    HAS_ARTIFACTS=1
+    TRIAGE_DOC="docs/runbooks/28_SOR_FIRE_DRILL.md"
+    ;;
   *)
-    die "Unknown mode: '$MODE'. Valid modes: local, staging, fire-drill, connector-market-data, connector-exchange-port, all (try -h for help)"
+    die "Unknown mode: '$MODE'. Valid modes: local, staging, fire-drill, connector-market-data, connector-exchange-port, sor-fire-drill, all (try -h for help)"
     ;;
 esac
 
