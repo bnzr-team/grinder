@@ -15,6 +15,7 @@ import time
 from dataclasses import dataclass, field
 from decimal import Decimal
 
+from grinder.account.metrics import get_account_sync_metrics
 from grinder.connectors.metrics import get_connector_metrics
 from grinder.data.quality_metrics import get_data_quality_metrics
 from grinder.execution.sor_metrics import get_sor_metrics
@@ -116,6 +117,9 @@ class MetricsBuilder:
 
         # SOR metrics (Launch-14)
         lines.extend(self._build_sor_metrics())
+
+        # Account sync metrics (Launch-15)
+        lines.extend(self._build_account_sync_metrics())
 
         return "\n".join(lines)
 
@@ -252,6 +256,11 @@ class MetricsBuilder:
         """Build SmartOrderRouter metrics (Launch-14)."""
         sor_metrics = get_sor_metrics()
         return sor_metrics.to_prometheus_lines()
+
+    def _build_account_sync_metrics(self) -> list[str]:
+        """Build account sync metrics (Launch-15)."""
+        account_metrics = get_account_sync_metrics()
+        return account_metrics.to_prometheus_lines()
 
 
 class _BuilderHolder:
