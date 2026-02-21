@@ -20,7 +20,7 @@ import os
 
 logger = logging.getLogger(__name__)
 
-# ── Canonical truthy / falsey sets ────────────────────────────────────────
+# --- Canonical truthy / falsey sets ------------------------------------
 TRUTHY: frozenset[str] = frozenset({"1", "true", "yes", "on"})
 FALSEY: frozenset[str] = frozenset({"0", "false", "no", "off", ""})
 
@@ -29,7 +29,7 @@ class ConfigError(Exception):
     """Raised when an environment variable has an invalid value (strict mode)."""
 
 
-# ── Public API ────────────────────────────────────────────────────────────
+# --- Public API -------------------------------------------------------
 
 
 def parse_bool(

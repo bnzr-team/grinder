@@ -3681,3 +3681,16 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
   - Short-term focus shifts to single-venue launch readiness (ops, rollout, e2e smoke).
   - Multi-venue work is out of scope for pre-launch milestones unless explicitly re-prioritized.
 - **Alternatives:** "Start M9 immediately after M8" -- rejected because multi-venue surface area is too broad without validated single-venue ops.
+
+## ADR-067 -- Unified env parsing with strict-by-default contract
+
+- **Date:** 2026-02-21
+- **Status:** accepted
+- **Context:** Six divergent boolean-parsing patterns across triage-flow modules (fsm_evidence, account evidence, live engine, reconcile_loop). Each defined its own truthy/falsey sets with inconsistent coverage (some missing "on"/"off", some `== "1"` only). Unknown values were silently swallowed everywhere, making operator misconfiguration invisible.
+- **Decision:** New SSOT module `src/grinder/env_parse.py` with `parse_bool`, `parse_int`, `parse_csv`, `parse_enum`. Canonical truthy: `{1, true, yes, on}`. Canonical falsey: `{0, false, no, off, ""}`. All case-insensitive, whitespace-stripped. `strict=True` is the default: unknown/invalid values raise `ConfigError`. `strict=False` logs a warning and returns the default.
+- **Usage rules:**
+  - New code should use `strict=True` (the default) unless there is a documented reason to tolerate invalid values.
+  - Migrated legacy call sites use `strict=False` to preserve safe-by-default behavior without breaking existing deployments.
+  - Callers must NOT define their own truthy/falsey sets -- use `env_parse` functions.
+- **Consequences:** Invalid env values are now visible (either crash or warning log). Future env flags get consistent parsing for free. Migration of remaining non-triage call sites is P2.
+- **Alternatives:** "strict=False default" -- rejected because it perpetuates silent misconfiguration; better to be loud-by-default and opt into leniency explicitly.
