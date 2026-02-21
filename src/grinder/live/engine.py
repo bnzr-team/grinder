@@ -44,6 +44,17 @@ from grinder.connectors.errors import (
 )
 from grinder.connectors.live_connector import SafeMode
 from grinder.connectors.retries import RetryPolicy, is_retryable
+from grinder.execution.smart_order_router import (
+    ExchangeFilters,
+    MarketSnapshot,
+    RouterDecision,
+    RouterInputs,
+    route,
+)
+from grinder.execution.smart_order_router import (
+    OrderIntent as SorOrderIntent,
+)
+from grinder.execution.sor_metrics import get_sor_metrics
 from grinder.execution.types import ActionType, ExecutionAction
 from grinder.risk.drawdown_guard_v1 import DrawdownGuardV1
 from grinder.risk.drawdown_guard_v1 import OrderIntent as RiskIntent
@@ -70,6 +81,7 @@ class BlockReason(Enum):
     MAX_RETRIES_EXCEEDED = "MAX_RETRIES_EXCEEDED"
     NON_RETRYABLE_ERROR = "NON_RETRYABLE_ERROR"
     FSM_STATE_BLOCKED = "FSM_STATE_BLOCKED"
+    ROUTER_BLOCKED = "ROUTER_BLOCKED"
 
 
 class LiveActionStatus(Enum):
@@ -200,6 +212,7 @@ class LiveEngineV0:
         drawdown_guard: DrawdownGuardV1 | None = None,
         retry_policy: RetryPolicy | None = None,
         fsm_driver: FsmDriver | None = None,
+        exchange_filters: ExchangeFilters | None = None,
     ) -> None:
         """Initialize LiveEngineV0.
 
@@ -210,6 +223,7 @@ class LiveEngineV0:
             drawdown_guard: Optional drawdown guard for intent blocking
             retry_policy: Optional retry policy for transient errors
             fsm_driver: Optional FSM driver for state-based intent gating (Launch-13)
+            exchange_filters: Optional exchange filters for SOR (Launch-14)
         """
         self._paper_engine = paper_engine
         self._exchange_port = exchange_port
@@ -217,6 +231,11 @@ class LiveEngineV0:
         self._drawdown_guard = drawdown_guard
         self._retry_policy = retry_policy or RetryPolicy(max_attempts=3)
         self._fsm_driver = fsm_driver
+        self._exchange_filters = exchange_filters
+        self._last_snapshot: Snapshot | None = None
+        # Read GRINDER_SOR_ENABLED once at init (truthy: 1/true/yes/on)
+        raw_sor = os.environ.get("GRINDER_SOR_ENABLED", "")
+        self._sor_env_override = raw_sor.strip().lower() in {"1", "true", "yes", "on"}
 
     @property
     def config(self) -> LiveEngineConfig:
@@ -245,6 +264,9 @@ class LiveEngineV0:
         Returns:
             LiveEngineOutput with paper output and live action results
         """
+        # Store snapshot for SOR market data (Launch-14 PR2)
+        self._last_snapshot = snapshot
+
         # Step 1: Get paper engine decisions
         paper_output = self._paper_engine.process_snapshot(snapshot)
 
@@ -403,8 +425,109 @@ class LiveEngineV0:
                 intent=intent,
             )
 
+        # SOR routing (Launch-14 PR2): after all safety gates, before execution
+        if self._is_sor_enabled() and action.action_type in (
+            ActionType.PLACE,
+            ActionType.REPLACE,
+        ):
+            sor_result = self._apply_sor(action, ts, intent)
+            if sor_result is not None:
+                return sor_result
+
         # All gates passed - execute action
         return self._execute_action(action, ts, intent)
+
+    def _is_sor_enabled(self) -> bool:
+        """Check if SOR routing is active.
+
+        Requires all of: feature flag (config or env), exchange filters, and snapshot.
+        """
+        flag_on = self._config.sor_enabled or self._sor_env_override
+        if not flag_on:
+            return False
+        if self._exchange_filters is None:
+            logger.debug("SOR flag ON but exchange_filters missing, skipping SOR")
+            return False
+        if self._last_snapshot is None:
+            logger.debug("SOR flag ON but no snapshot available, skipping SOR")
+            return False
+        return True
+
+    def _apply_sor(
+        self, action: ExecutionAction, _ts: int, intent: RiskIntent
+    ) -> LiveAction | None:
+        """Apply SmartOrderRouter to decide execution method.
+
+        Returns LiveAction for BLOCK/NOOP, None to continue with normal execution
+        (CANCEL_REPLACE falls through to standard _execute_action).
+
+        Args:
+            action: PLACE or REPLACE action from PaperEngine
+            ts: Current timestamp
+            intent: Risk intent classification
+
+        Returns:
+            LiveAction if SOR blocks/skips, None to continue normal execution.
+        """
+        assert self._exchange_filters is not None  # caller guards via _is_sor_enabled
+        assert self._last_snapshot is not None  # caller guards via _is_sor_enabled
+        assert action.price is not None
+        assert action.quantity is not None
+        assert action.side is not None
+
+        router_inputs = RouterInputs(
+            intent=SorOrderIntent(
+                price=action.price,
+                qty=action.quantity,
+                side=action.side.value,
+            ),
+            existing=None,  # PR2: no order state tracking yet
+            market=MarketSnapshot(
+                best_bid=self._last_snapshot.bid_price,
+                best_ask=self._last_snapshot.ask_price,
+            ),
+            filters=self._exchange_filters,
+            drawdown_breached=False,  # Already handled by Gate 5
+        )
+
+        result = route(router_inputs)
+
+        # Normalize AMEND to CANCEL_REPLACE before recording metrics (P1-1)
+        decision = result.decision
+        reason = result.reason
+        if decision == RouterDecision.AMEND:
+            logger.warning(
+                "SOR returned AMEND with existing=None (unreachable), normalizing to CANCEL_REPLACE"
+            )
+            decision = RouterDecision.CANCEL_REPLACE
+            reason = "AMEND_NORMALIZED_TO_CANCEL_REPLACE"
+
+        # Record metric (single call, after normalization)
+        get_sor_metrics().record_decision(decision.value, reason)
+
+        if decision == RouterDecision.BLOCK:
+            logger.info(
+                "SOR blocked action: reason=%s, action=%s",
+                reason,
+                action.action_type.value,
+            )
+            return LiveAction(
+                action=action,
+                status=LiveActionStatus.BLOCKED,
+                block_reason=BlockReason.ROUTER_BLOCKED,
+                intent=intent,
+            )
+
+        if decision == RouterDecision.NOOP:
+            logger.debug("SOR NOOP: reason=%s", reason)
+            return LiveAction(
+                action=action,
+                status=LiveActionStatus.SKIPPED,
+                intent=intent,
+            )
+
+        # CANCEL_REPLACE: fall through to normal execution
+        return None
 
     def _execute_action(self, action: ExecutionAction, ts: int, intent: RiskIntent) -> LiveAction:
         """Execute action on exchange port with retries.

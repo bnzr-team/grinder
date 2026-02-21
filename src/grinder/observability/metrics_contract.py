@@ -186,6 +186,13 @@ REQUIRED_METRICS_PATTERNS = [
     "# TYPE grinder_fsm_transitions_total",
     "# HELP grinder_fsm_action_blocked_total",
     "# TYPE grinder_fsm_action_blocked_total",
+    # Launch-14: SOR metrics
+    "# HELP grinder_router_decision_total",
+    "# TYPE grinder_router_decision_total",
+    "grinder_router_decision_total{decision=",
+    "# HELP grinder_router_amend_savings_total",
+    "# TYPE grinder_router_amend_savings_total",
+    "grinder_router_amend_savings_total",
 ]
 
 # PR6: Concrete series patterns requiring fill ingest to be running.
