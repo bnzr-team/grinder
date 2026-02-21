@@ -1,0 +1,332 @@
+# 15 -- AccountSyncer Spec (Positions + Open Orders)
+
+> **Status:** DRAFT (Launch-15 PR0)
+> **Last updated:** 2026-02-21
+> **SSOT:** This document. Referenced from `docs/POST_LAUNCH_ROADMAP.md` (Launch-15 section).
+> **Prerequisite:** `docs/14_SMART_ORDER_ROUTER_SPEC.md` (SOR needs execution reality to route).
+> **Variant:** 2 (positions + open orders). Variant 1 (positions-only) was rejected as insufficient for operational use.
+
+---
+
+## 15.1 Problem Statement
+
+The system currently operates "blind" with respect to exchange state:
+
+1. **No position truth:** Internal position tracking (via `Ledger`) is derived from simulated
+   fills in paper mode. In live mode there is no comparison against the exchange's actual
+   position. Risk gates, drawdown guard, and kill-switch decisions depend on accurate
+   position data.
+
+2. **No order truth:** `ExecutionEngine` tracks orders internally, but the exchange may have
+   rejected, expired, or partially filled orders without notifying us. SOR
+   (Launch-14) needs accurate `existing` order state to route correctly.
+
+3. **No mismatch detection:** If internal state diverges from exchange state (e.g., manual
+   intervention, network partition, partial fill race), there is no mechanism to detect or
+   alert on the discrepancy.
+
+**AccountSyncer** periodically fetches positions + open orders from the exchange,
+produces a deterministic `AccountSnapshot`, detects mismatches, emits evidence
+artifacts, and exposes metrics for alerting.
+
+---
+
+## 15.2 Scope
+
+### In scope (Launch-15)
+
+- Read-only sync: fetch positions + open orders from exchange, compare with internal state.
+- Deterministic snapshot rendering: stable sort, stable Decimal formatting, sha256.
+- Mismatch detection: sanity rules (duplicate keys, ts regression, negative qty, orphan orders).
+- Evidence artifacts: `AccountSnapshot` -> JSON -> sha256 -> artifact file (safe-by-default, env-gated).
+- Metrics: freshness, mismatch count, open orders count, sync errors.
+- Feature flag: `account_sync_enabled` (default OFF), `GRINDER_ACCOUNT_SYNC_ENABLED` env var.
+- Fire drill: exercise all mismatch scenarios with evidence artifacts.
+
+### Out of scope (deferred)
+
+- Write-path remediation (auto-cancel orphan orders, auto-close positions) -- P2.
+- Balance sync (USDT margin balance) -- P2.
+- Multi-venue sync -- deferred to M9.
+- Full RoundTrip accounting (open->close PnL attribution) -- P2 (depends on fill tracking maturity).
+
+---
+
+## 15.3 Data Contracts
+
+### 15.3.1 PositionSnap
+
+Frozen dataclass representing a single exchange position at a point in time.
+
+```python
+@dataclass(frozen=True)
+class PositionSnap:
+    symbol: str              # e.g. "BTCUSDT"
+    side: str                # "LONG" | "SHORT" | "BOTH" (Binance hedge mode)
+    qty: Decimal             # Absolute quantity (always >= 0)
+    entry_price: Decimal     # Average entry price
+    mark_price: Decimal      # Current mark price (for uPnL calc)
+    unrealized_pnl: Decimal  # Exchange-reported uPnL
+    leverage: int            # Current leverage setting
+    ts: int                  # Unix ms when fetched from exchange
+```
+
+**Serialization rules:**
+- `Decimal` fields rendered via `str()` (no scientific notation, no trailing zeros beyond precision).
+- `ts` as integer (Unix ms).
+- `side` as uppercase string.
+
+### 15.3.2 OpenOrderSnap
+
+Frozen dataclass representing a single open order on the exchange.
+
+```python
+@dataclass(frozen=True)
+class OpenOrderSnap:
+    order_id: str            # Exchange order ID
+    symbol: str              # e.g. "BTCUSDT"
+    side: str                # "BUY" | "SELL"
+    order_type: str          # "LIMIT" | "MARKET" | "STOP" | ...
+    price: Decimal           # Limit price (0 for market orders)
+    qty: Decimal             # Original quantity
+    filled_qty: Decimal      # Already filled quantity
+    reduce_only: bool        # Whether reduce-only flag is set
+    status: str              # "NEW" | "PARTIALLY_FILLED"
+    ts: int                  # Unix ms when fetched from exchange
+```
+
+### 15.3.3 AccountSnapshot
+
+Top-level container: positions + open orders at a consistent point in time.
+
+```python
+@dataclass(frozen=True)
+class AccountSnapshot:
+    positions: tuple[PositionSnap, ...]     # Canonical order (see 15.4)
+    open_orders: tuple[OpenOrderSnap, ...]  # Canonical order (see 15.4)
+    ts: int                                  # Snapshot timestamp (max of component ts values)
+    source: str                              # "exchange" | "test" | "fire_drill"
+```
+
+**Invariant:** `positions` and `open_orders` are tuples (immutable) in canonical sort order.
+
+---
+
+## 15.4 Canonical Ordering
+
+Deterministic ordering is required for sha256 stability and diff correctness.
+
+### Positions
+
+Sorted by `(symbol, side)` -- both ascending, lexicographic.
+
+```
+BTCUSDT/LONG < BTCUSDT/SHORT < ETHUSDT/LONG
+```
+
+### Open Orders
+
+Sorted by `(symbol, side, order_type, price, qty, order_id)` -- all ascending.
+
+- `price` and `qty` compared as `Decimal` (numeric order).
+- `order_id` as string (lexicographic) -- tiebreaker for identical price/qty.
+
+```
+BTCUSDT/BUY/LIMIT/49000/0.01/id_1 < BTCUSDT/BUY/LIMIT/49500/0.01/id_2 < BTCUSDT/SELL/LIMIT/51000/0.01/id_3
+```
+
+---
+
+## 15.5 Invariants
+
+These **must** hold at all times. Tests enforce them.
+
+### I1: Deterministic serialization
+
+```
+render(snapshot_1) == render(snapshot_2)  iff  snapshot_1 == snapshot_2
+```
+
+Same inputs always produce byte-identical JSON output. Canonical sort order + stable
+Decimal formatting guarantee this.
+
+### I2: Round-trip equality
+
+```
+snapshot == load(render(snapshot))
+```
+
+Serialize to JSON, deserialize back, assert equality. This ensures no data loss or
+precision drift in the serialization layer.
+
+### I3: Sha256 stability
+
+```
+sha256(render(snapshot)) is stable across runs
+```
+
+Given identical inputs, sha256 is identical. No timestamps, random IDs, or dict
+ordering instability in the render path.
+
+### I4: Safe-by-default (read-only)
+
+AccountSyncer **never** writes to the exchange. It only reads positions and orders.
+Mismatch detection produces alerts and evidence, not remediation actions.
+
+### I5: Monotonic timestamp guard
+
+```
+new_snapshot.ts >= last_snapshot.ts
+```
+
+Reject snapshots with timestamps older than the last accepted snapshot. This prevents
+state rollback from stale API responses or clock skew.
+
+### I6: No duplicate keys
+
+Position keys `(symbol, side)` and order keys `(order_id)` must be unique within a
+snapshot. Duplicates indicate a bug in the fetch/parse layer and must be flagged as a
+mismatch.
+
+---
+
+## 15.6 Artifact Scheme
+
+### Evidence directory
+
+```
+${GRINDER_ARTIFACT_DIR:-.artifacts}/account_sync/<YYYYMMDDTHHMMSSZ>/
+```
+
+### Artifact files
+
+```
+account_snapshot.json     # Full AccountSnapshot (canonical JSON)
+positions.json            # Positions only (canonical JSON)
+open_orders.json          # Open orders only (canonical JSON)
+mismatches.json           # Detected mismatches (if any)
+summary.txt              # Human-readable evidence block
+sha256sums.txt           # sha256sum of all artifact files
+```
+
+### Env gate
+
+Evidence writing is gated by `GRINDER_ACCOUNT_SYNC_EVIDENCE` env var (truthy = enabled).
+Follows the same pattern as `GRINDER_FSM_EVIDENCE` in `fsm_evidence.py`.
+
+No files are written unless the env var is set. This is the safe-by-default path.
+
+---
+
+## 15.7 Metrics
+
+All metrics follow existing patterns from `MetricsBuilder` / `REQUIRED_METRICS_PATTERNS`.
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `grinder_account_sync_last_ts` | gauge | — | Unix ms of last successful sync |
+| `grinder_account_sync_age_seconds` | gauge | — | Seconds since last successful sync |
+| `grinder_account_sync_errors_total` | counter | `reason` | Sync errors by reason (timeout, auth, parse) |
+| `grinder_account_sync_mismatches_total` | counter | `rule` | Mismatches detected by rule (duplicate_key, ts_regression, negative_qty, orphan_order) |
+| `grinder_account_sync_positions_count` | gauge | — | Number of positions in last snapshot |
+| `grinder_account_sync_open_orders_count` | gauge | — | Number of open orders in last snapshot |
+| `grinder_account_sync_pending_notional` | gauge | — | Total notional value of open orders (price * remaining_qty) |
+
+### Mismatch rules (for `mismatches_total` counter)
+
+| Rule | Description |
+|------|-------------|
+| `duplicate_key` | Two positions with same `(symbol, side)` or two orders with same `order_id` |
+| `ts_regression` | Snapshot timestamp older than previously accepted snapshot |
+| `negative_qty` | Position qty or order qty is negative |
+| `orphan_order` | Order exists on exchange but not tracked by `ExecutionEngine` |
+
+---
+
+## 15.8 Port Interface Extensions
+
+`ExchangePort` already has `fetch_open_orders(symbol)`. Launch-15 adds:
+
+```python
+class ExchangePort(Protocol):
+    # ... existing methods ...
+
+    def fetch_positions(self, symbol: str) -> list[PositionSnap]:
+        """Fetch current positions for a symbol from the exchange."""
+        ...
+
+    def fetch_account_snapshot(self) -> AccountSnapshot:
+        """Fetch full account snapshot (all positions + all open orders).
+
+        This is the preferred method for sync -- single consistent read.
+        """
+        ...
+```
+
+`NoOpExchangePort` will return empty lists (no positions, no orders) -- safe for
+replay/paper mode.
+
+---
+
+## 15.9 PR Breakdown
+
+### PR0 (this PR): Spec + SSOT pointers
+
+- **NEW:** `docs/15_ACCOUNT_SYNC_SPEC.md` (this file)
+- **MOD:** `docs/STATE.md` -- Launch-15 pointer
+- **MOD:** `docs/POST_LAUNCH_ROADMAP.md` -- Launch-15 status update
+
+### PR1: Core contracts + deterministic render + tests
+
+- **NEW:** `src/grinder/account/contracts.py` -- `PositionSnap`, `OpenOrderSnap`, `AccountSnapshot`
+- **NEW:** `src/grinder/account/render.py` -- `render_snapshot()`, `load_snapshot()`, `snapshot_sha256()`
+- **NEW:** `src/grinder/account/metrics.py` -- `AccountSyncMetrics` (counters + gauges)
+- **MOD:** `src/grinder/observability/metrics_builder.py` -- wire account sync metrics
+- **MOD:** `src/grinder/observability/live_contract.py` -- add account sync patterns to `REQUIRED_METRICS_PATTERNS`
+- **NEW:** `tests/unit/test_account_contracts.py` -- round-trip, sha256 stability, canonical ordering
+- **NEW:** `tests/unit/test_account_render.py` -- render/load/sha256 determinism
+- **NEW:** `tests/unit/test_account_metrics.py` -- metrics contract tests
+
+### PR2: Port wiring + syncer + mismatch detection + evidence
+
+- **NEW:** `src/grinder/account/syncer.py` -- `AccountSyncer` (fetch + compare + detect mismatches)
+- **NEW:** `src/grinder/account/evidence.py` -- evidence artifact writer (env-gated)
+- **MOD:** `src/grinder/execution/port.py` -- add `fetch_positions()`, `fetch_account_snapshot()` to `ExchangePort`
+- **MOD:** `src/grinder/live/config.py` -- add `account_sync_enabled: bool = False`
+- **MOD:** `src/grinder/live/engine.py` -- wire syncer into live loop (gated by feature flag)
+- **NEW:** `docs/runbooks/29_ACCOUNT_SYNC.md` -- enablement, running, verifying, troubleshooting
+- **MOD:** `docs/runbooks/00_EVIDENCE_INDEX.md` -- add account sync row
+- **MOD:** `scripts/gen_evidence_index.py` -- add `account_sync` entry
+- **NEW:** `tests/unit/test_account_syncer.py` -- mismatch detection, invariant enforcement
+- **NEW:** `tests/unit/test_account_evidence.py` -- evidence artifact tests
+
+### PR3: Fire drill + evidence + runbook + ops entrypoint
+
+- **NEW:** `scripts/fire_drill_account_sync.sh` -- 3-4 scenarios (happy path, mismatch, orphan order, ts regression)
+- **MOD:** `scripts/ops_fill_triage.sh` -- add `account-sync-drill` mode
+- **NEW:** `docs/runbooks/30_ACCOUNT_SYNC_FIRE_DRILL.md`
+- **MOD:** `docs/runbooks/00_EVIDENCE_INDEX.md` -- add fire drill row
+- **MOD:** `scripts/gen_evidence_index.py` -- add fire drill entry
+
+---
+
+## 15.10 Open Questions
+
+1. **Sync frequency:** How often should AccountSyncer poll? Every tick? Every N seconds?
+   Likely every N seconds (configurable, default 30s) to avoid rate-limit pressure.
+
+2. **Partial fill race:** If an order is partially filled between our fetch and our internal
+   state check, is that a mismatch? Likely: yes, flag it but with severity=INFO (not
+   ERROR).
+
+3. **Hedge mode:** Binance USDT-M supports hedge mode (separate LONG/SHORT positions).
+   The spec uses `side: str` to accommodate both one-way and hedge mode. PR1 should
+   handle both.
+
+4. **Batch vs per-symbol fetch:** `fetch_account_snapshot()` fetches everything at once.
+   Per-symbol `fetch_positions(symbol)` is also available for targeted checks.
+   PR2 should prefer batch for consistency.
+
+5. **RoundTrip accounting scope:** Full open->close PnL attribution is deferred to P2.
+   Launch-15 only tracks "does our position match the exchange" -- not "what was the
+   PnL of each trade cycle."
