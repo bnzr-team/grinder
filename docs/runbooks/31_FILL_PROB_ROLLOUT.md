@@ -255,7 +255,7 @@ docker restart grinder
 **Verify on startup log:**
 
 ```
-THRESHOLD_RESOLVED mode=recommend_only recommended_bps=3000 configured_bps=2500 effective_bps=2500 reason=recommend_only
+FILL_PROB_THRESHOLD_RESOLUTION_OK mode=recommend_only recommended_bps=3000 configured_bps=2500 effective_bps=2500 provenance_ok=true
 ```
 
 Key points to observe over 24-48h:
@@ -284,7 +284,7 @@ Compare recommended vs configured and decide whether to auto-apply.
 
 - `recommended_bps` differs wildly from `configured_bps` (delta >= 1000 bps) → investigate model/eval before proceeding
 - Block rate climbing or CB tripped → model may be stale
-- `grinder_router_fill_prob_auto_threshold_bps` shows 0 → resolution failed, check logs for `THRESHOLD_RESOLVE_FAILED`
+- `grinder_router_fill_prob_auto_threshold_bps` shows 0 → resolution failed, check logs for `FILL_PROB_THRESHOLD_RESOLUTION_FAILED`
 
 ```bash
 # Quick metrics check
@@ -306,7 +306,7 @@ docker restart grinder
 **Verify on startup log:**
 
 ```
-THRESHOLD_RESOLVED mode=auto_apply recommended_bps=3000 configured_bps=2500 effective_bps=3000 reason=auto_applied
+FILL_PROB_THRESHOLD_RESOLUTION_OK mode=auto_apply recommended_bps=3000 configured_bps=2500 effective_bps=3000 provenance_ok=true
 ```
 
 Note: `effective_bps` now equals `recommended_bps` (not `configured_bps`).
@@ -345,7 +345,7 @@ export GRINDER_FILL_PROB_AUTO_THRESHOLD=0
 docker restart grinder
 ```
 
-Verify: no `THRESHOLD_RESOLVED` log line. `grinder_router_fill_prob_auto_threshold_bps` = 0.
+Verify: no `FILL_PROB_THRESHOLD_RESOLUTION_OK` log line. `grinder_router_fill_prob_auto_threshold_bps` = 0.
 
 #### Emergency: disable enforcement
 
@@ -367,7 +367,7 @@ This disables the entire fill-prob gate (not just auto-threshold).
 | Circuit breaker | `grinder_router_fill_prob_cb_trips_total` | = 0 | > 0 (block rate exceeded 50% in window) |
 | Enforcement enabled | `grinder_router_fill_prob_enforce_enabled` | = 1 | = 0 (disabled) |
 | Evidence artifacts | `{GRINDER_ARTIFACT_DIR}/fill_prob/threshold_resolution_*.json` | Present after each restart | Missing (ARTIFACT_DIR unset or write error) |
-| Startup log | `THRESHOLD_RESOLVED mode=... reason=...` | `reason=auto_applied` or `reason=recommend_only` | `reason=resolution_failed` or absent |
+| Startup log | `FILL_PROB_THRESHOLD_RESOLUTION_OK mode=...` | Present (mode=auto_apply or recommend_only) | `FILL_PROB_THRESHOLD_RESOLUTION_FAILED` or absent |
 
 **Alert:** `FillProbCircuitBreakerTripped` fires when `grinder_router_fill_prob_cb_trips_total` increases. Action: check block rate, review model calibration, consider rollback.
 
