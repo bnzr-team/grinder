@@ -426,7 +426,6 @@ Both instances share the **same model, eval, and threshold config**. The only di
 
 ```bash
 # --- Shared (identical on both instances) ---
-export GRINDER_MODE=dry-run                       # or live, per your deployment
 export GRINDER_FILL_MODEL_DIR=ml/models/fill_model_v0
 export GRINDER_FILL_PROB_EVAL_DIR=ml/eval/fill_model_v0
 export GRINDER_FILL_PROB_AUTO_THRESHOLD=0          # recommend-only (safest for canary)
@@ -519,7 +518,7 @@ echo "=== control ===" && curl -s http://localhost:9091/metrics | grep fill_prob
 
 | What | Canary (enforce=1) | Control (enforce=0) | Concern |
 |------|-------------------|--------------------|---------|
-| `grinder_router_fill_prob_blocks_total` | > 0 (expected) | = 0 | Canary blocks climbing rapidly → threshold too aggressive |
+| `grinder_router_fill_prob_blocks_total` | > 0 (expected) | ~0 (no enforced blocks; if non-zero, verify enforce flag and logs) | Canary blocks climbing rapidly → threshold too aggressive |
 | `grinder_router_fill_prob_cb_trips_total` | = 0 | = 0 | Any CB trip → immediate rollback |
 | `grinder_router_fill_prob_enforce_enabled` | = 1 | = 0 | Mismatch → env misconfiguration |
 | `grinder_router_fill_prob_auto_threshold_bps` | Same on both | Same on both | Differs → different eval reports loaded |
