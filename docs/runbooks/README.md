@@ -32,6 +32,11 @@ Operational runbooks for GRINDER trading system.
 | [25_LATENCY_RETRY_ENABLEMENT_CEREMONY](25_LATENCY_RETRY_ENABLEMENT_CEREMONY.md) | Latency/retry enablement ceremony (Launch-05b) |
 | [26_FILL_TRACKER_TRIAGE](26_FILL_TRACKER_TRIAGE.md) | Fill tracker metrics triage (Launch-06) |
 | [27_FSM_OPERATOR_OVERRIDE](27_FSM_OPERATOR_OVERRIDE.md) | FSM operator override: PAUSE/EMERGENCY via env var (Launch-13) |
+| [28_SOR_FIRE_DRILL](28_SOR_FIRE_DRILL.md) | SOR fire drill (Launch-14) |
+| [29_ACCOUNT_SYNC](29_ACCOUNT_SYNC.md) | Account sync operations (Launch-15) |
+| [30_ACCOUNT_SYNC_FIRE_DRILL](30_ACCOUNT_SYNC_FIRE_DRILL.md) | Account sync fire drill (Launch-15) |
+| [31_FILL_PROB_ROLLOUT](31_FILL_PROB_ROLLOUT.md) | Fill probability enforcement setup and config (Track C) |
+| [32_MAINNET_ROLLOUT_FILL_PROB](32_MAINNET_ROLLOUT_FILL_PROB.md) | Mainnet rollout ceremony for fill-prob enforcement (Track C) |
 
 ## Quick Reference
 

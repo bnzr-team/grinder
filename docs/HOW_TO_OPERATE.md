@@ -238,6 +238,8 @@ For detailed procedures, see [docs/runbooks/](runbooks/):
 | [Soak Gate](runbooks/05_SOAK_GATE.md) | Validating releases |
 | [Alert Response](runbooks/06_ALERT_RESPONSE.md) | Responding to alerts |
 | [HA Operations](runbooks/07_HA_OPERATIONS.md) | High availability deployment |
+| [Fill-Prob Rollout](runbooks/31_FILL_PROB_ROLLOUT.md) | Fill probability enforcement setup and config |
+| [Mainnet Rollout Ceremony](runbooks/32_MAINNET_ROLLOUT_FILL_PROB.md) | End-to-end mainnet ceremony for fill-prob enforcement |
 
 ---
 
