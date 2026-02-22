@@ -168,24 +168,48 @@ FILL_PROB_CIRCUIT_BREAKER_TRIPPED block_count=15 total_count=20 block_rate_pct=7
 
 ---
 
-## Auto-Threshold from Eval Report (PR-C9)
+## Auto-Threshold Ceremony (PR-C9, PR-A1)
 
-Instead of manually setting `GRINDER_FILL_PROB_MIN_BPS`, the engine can read the recommended threshold directly from the eval report.
+Instead of manually setting `GRINDER_FILL_PROB_MIN_BPS`, the engine can read the recommended threshold directly from the eval report. This section is the **operator ceremony** for safely enabling this feature.
 
-### Setup
+**Related:** ADR-074 in docs/DECISIONS.md.
+
+---
+
+### Environment Variables Reference
+
+| Env Var | Type | Default | Description |
+|---------|------|---------|-------------|
+| `GRINDER_FILL_PROB_EVAL_DIR` | str | _(unset)_ | Path to eval report dir. **Unset = feature disabled, zero eval reads.** |
+| `GRINDER_FILL_MODEL_DIR` | str | _(unset)_ | Path to model dir (for provenance check). |
+| `GRINDER_FILL_PROB_AUTO_THRESHOLD` | bool | `0` | `0` = recommend-only (log only). `1` = auto-apply (override threshold). |
+| `GRINDER_FILL_PROB_MIN_BPS` | int | `2500` | Configured threshold. Used as fallback when auto-threshold fails or is disabled. |
+| `GRINDER_ARTIFACT_DIR` | str | _(unset)_ | If set, evidence artifact `threshold_resolution_{ts}.json` written on resolution. |
+| `GRINDER_FILL_MODEL_ENFORCE` | bool | `0` | Must be `1` for enforcement. Auto-threshold only affects threshold value, not enforcement on/off. |
+
+**Safe defaults:** with all env vars unset, auto-threshold is fully disabled. No eval reads, no threshold changes.
+
+---
+
+### Phase 0: Preconditions
+
+Before starting the ceremony, verify:
 
 ```bash
-# Point to eval report directory
-export GRINDER_FILL_PROB_EVAL_DIR=ml/eval/fill_model_v0
+# 1. Model directory exists and has manifest.json
+ls ml/models/fill_model_v0/manifest.json ml/models/fill_model_v0/model.json
 
-# Mode 1: Recommend-only (default) — log + metric, no override
-export GRINDER_FILL_PROB_AUTO_THRESHOLD=0
+# 2. Eval report directory exists (from eval_fill_model_v0.py)
+ls ml/eval/fill_model_v0/eval_report.json ml/eval/fill_model_v0/manifest.json
 
-# Mode 2: Auto-apply — override configured threshold
-export GRINDER_FILL_PROB_AUTO_THRESHOLD=1
+# 3. Evidence artifacts exist (from shadow mode)
+ls ml/evidence/fill_prob/*.json | head -5
+
+# 4. GRINDER_ARTIFACT_DIR set (for threshold resolution evidence)
+echo $GRINDER_ARTIFACT_DIR
 ```
 
-### Pre-flight with Auto-Threshold
+Run pre-flight to validate everything:
 
 ```bash
 python3 -m scripts.preflight_fill_prob \
@@ -195,23 +219,161 @@ python3 -m scripts.preflight_fill_prob \
     --auto-threshold
 ```
 
-### Startup Log
+**All checks must show PASS.** The output will include a threshold summary:
 
-On engine start, look for:
+```
+============================================================
+Threshold Summary
+============================================================
+  configured_threshold_bps : 2500
+  recommended_threshold_bps: 3000
+  effective_threshold_bps  : 2500 (recommend-only: no override)
+  mode                     : recommend_only
+============================================================
+```
+
+**Do NOT proceed if any check shows FAIL.**
+
+---
+
+### Phase 1: Recommend-Only (minimum 24-48h)
+
+Enable threshold resolution in **recommend-only mode** (log + metric, no threshold override):
+
+```bash
+export GRINDER_FILL_PROB_EVAL_DIR=ml/eval/fill_model_v0
+export GRINDER_FILL_MODEL_DIR=ml/models/fill_model_v0
+export GRINDER_FILL_PROB_AUTO_THRESHOLD=0   # recommend-only (default)
+
+docker restart grinder
+```
+
+**Verify on startup log:**
+
+```
+THRESHOLD_RESOLVED mode=recommend_only recommended_bps=3000 configured_bps=2500 effective_bps=2500 reason=recommend_only
+```
+
+Key points to observe over 24-48h:
+- `effective_bps` equals `configured_bps` (no override happened)
+- `recommended_bps` is stable across restarts
+- `grinder_router_fill_prob_auto_threshold_bps` gauge shows the recommended value (not 0)
+- Block rate (`grinder_router_fill_prob_blocks_total`) is not spiking
+- No circuit breaker trips (`grinder_router_fill_prob_cb_trips_total` = 0)
+
+---
+
+### Phase 2: Go/No-Go Decision
+
+Compare recommended vs configured and decide whether to auto-apply.
+
+**Go criteria (ALL must be true):**
+
+1. Recommend-only mode ran for >= 24h without issues
+2. `recommended_bps` is stable (same value on every restart)
+3. `recommended_bps` is within reasonable range of `configured_bps` (delta < 1000 bps)
+4. Block rate is acceptable (< 20% of orders blocked)
+5. Zero circuit breaker trips
+6. Evidence artifact `threshold_resolution_{ts}.json` present (if `GRINDER_ARTIFACT_DIR` set)
+
+**No-go triggers (any one blocks):**
+
+- `recommended_bps` differs wildly from `configured_bps` (delta >= 1000 bps) → investigate model/eval before proceeding
+- Block rate climbing or CB tripped → model may be stale
+- `grinder_router_fill_prob_auto_threshold_bps` shows 0 → resolution failed, check logs for `THRESHOLD_RESOLVE_FAILED`
+
+```bash
+# Quick metrics check
+curl -s http://localhost:9090/metrics | grep -E "router_fill_prob_(auto_threshold|blocks|cb_trips|enforce)"
+```
+
+---
+
+### Phase 3: Auto-Apply
+
+Enable auto-apply (threshold override from eval report):
+
+```bash
+export GRINDER_FILL_PROB_AUTO_THRESHOLD=1   # auto-apply
+
+docker restart grinder
+```
+
+**Verify on startup log:**
+
 ```
 THRESHOLD_RESOLVED mode=auto_apply recommended_bps=3000 configured_bps=2500 effective_bps=3000 reason=auto_applied
 ```
 
-### Key Metric
+Note: `effective_bps` now equals `recommended_bps` (not `configured_bps`).
+
+**Monitor closely for the first 30 minutes:**
 
 ```bash
-# Shows resolved threshold (0 = disabled/failed)
-curl -s http://localhost:9090/metrics | grep router_fill_prob_auto_threshold
+# Every 5 minutes:
+curl -s http://localhost:9090/metrics | grep -E "router_fill_prob_(auto_threshold|blocks|cb_trips|enforce)"
 ```
 
-### Safety
+Expected:
+- `grinder_router_fill_prob_auto_threshold_bps` shows the new threshold
+- `grinder_router_fill_prob_enforce_enabled` = 1
+- Block rate stable
+- `grinder_router_fill_prob_cb_trips_total` = 0
 
-- If `GRINDER_FILL_PROB_EVAL_DIR` is unset → no eval read, no threshold resolution.
-- 3-layer validation: sha256, schema_version, model provenance.
-- Any validation failure → fall back to `GRINDER_FILL_PROB_MIN_BPS`.
-- Evidence artifact written to `{GRINDER_ARTIFACT_DIR}/fill_prob/threshold_resolution_{ts}.json`.
+---
+
+### Rollback
+
+#### Quick rollback: disable auto-apply, keep manual threshold
+
+```bash
+export GRINDER_FILL_PROB_AUTO_THRESHOLD=0
+docker restart grinder
+```
+
+Verify: `effective_bps` equals `configured_bps` in startup log.
+
+#### Full rollback: disable threshold resolution entirely
+
+```bash
+unset GRINDER_FILL_PROB_EVAL_DIR
+export GRINDER_FILL_PROB_AUTO_THRESHOLD=0
+docker restart grinder
+```
+
+Verify: no `THRESHOLD_RESOLVED` log line. `grinder_router_fill_prob_auto_threshold_bps` = 0.
+
+#### Emergency: disable enforcement
+
+```bash
+export GRINDER_FILL_MODEL_ENFORCE=0
+docker restart grinder
+```
+
+This disables the entire fill-prob gate (not just auto-threshold).
+
+---
+
+### What to Monitor
+
+| What | Metric / Artifact | Healthy | Unhealthy |
+|------|-------------------|---------|-----------|
+| Auto-threshold resolved | `grinder_router_fill_prob_auto_threshold_bps` | > 0 (shows resolved value) | = 0 (disabled or failed) |
+| Block rate | `rate(grinder_router_fill_prob_blocks_total[5m])` | Low and stable | Climbing rapidly |
+| Circuit breaker | `grinder_router_fill_prob_cb_trips_total` | = 0 | > 0 (block rate exceeded 50% in window) |
+| Enforcement enabled | `grinder_router_fill_prob_enforce_enabled` | = 1 | = 0 (disabled) |
+| Evidence artifacts | `{GRINDER_ARTIFACT_DIR}/fill_prob/threshold_resolution_*.json` | Present after each restart | Missing (ARTIFACT_DIR unset or write error) |
+| Startup log | `THRESHOLD_RESOLVED mode=... reason=...` | `reason=auto_applied` or `reason=recommend_only` | `reason=resolution_failed` or absent |
+
+**Alert:** `FillProbCircuitBreakerTripped` fires when `grinder_router_fill_prob_cb_trips_total` increases. Action: check block rate, review model calibration, consider rollback.
+
+---
+
+### Interpreting the Auto-Threshold Gauge
+
+| `grinder_router_fill_prob_auto_threshold_bps` | Meaning |
+|----------------------------------------------|---------|
+| 0 | Feature disabled (eval_dir unset) OR resolution failed |
+| > 0 | Resolved threshold from eval report (both recommend-only and auto-apply) |
+
+In **recommend-only** mode, the gauge shows the recommended value but the actual enforcement threshold remains `GRINDER_FILL_PROB_MIN_BPS`. In **auto-apply** mode, the gauge value IS the enforcement threshold.
