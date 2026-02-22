@@ -44,7 +44,8 @@ from grinder.connectors.errors import (
 )
 from grinder.connectors.live_connector import SafeMode
 from grinder.connectors.retries import RetryPolicy, is_retryable
-from grinder.env_parse import parse_bool, parse_enum
+from grinder.env_parse import parse_bool, parse_enum, parse_int
+from grinder.execution.fill_prob_gate import FillProbVerdict, check_fill_prob
 from grinder.execution.smart_order_router import (
     ExchangeFilters,
     MarketSnapshot,
@@ -57,6 +58,7 @@ from grinder.execution.smart_order_router import (
 )
 from grinder.execution.sor_metrics import get_sor_metrics
 from grinder.execution.types import ActionType, ExecutionAction
+from grinder.ml.fill_model_loader import extract_online_features
 from grinder.risk.drawdown_guard_v1 import DrawdownGuardV1
 from grinder.risk.drawdown_guard_v1 import OrderIntent as RiskIntent
 
@@ -66,6 +68,7 @@ if TYPE_CHECKING:
     from grinder.execution.port import ExchangePort
     from grinder.live.config import LiveEngineConfig
     from grinder.live.fsm_driver import FsmDriver
+    from grinder.ml.fill_model_v0 import FillModelV0
     from grinder.paper.engine import PaperEngine
 
 logger = logging.getLogger(__name__)
@@ -84,6 +87,7 @@ class BlockReason(Enum):
     NON_RETRYABLE_ERROR = "NON_RETRYABLE_ERROR"
     FSM_STATE_BLOCKED = "FSM_STATE_BLOCKED"
     ROUTER_BLOCKED = "ROUTER_BLOCKED"
+    FILL_PROB_LOW = "FILL_PROB_LOW"
 
 
 class LiveActionStatus(Enum):
@@ -216,6 +220,7 @@ class LiveEngineV0:
         fsm_driver: FsmDriver | None = None,
         exchange_filters: ExchangeFilters | None = None,
         account_syncer: AccountSyncer | None = None,
+        fill_model: FillModelV0 | None = None,
     ) -> None:
         """Initialize LiveEngineV0.
 
@@ -228,6 +233,7 @@ class LiveEngineV0:
             fsm_driver: Optional FSM driver for state-based intent gating (Launch-13)
             exchange_filters: Optional exchange filters for SOR (Launch-14)
             account_syncer: Optional account syncer for position/order sync (Launch-15)
+            fill_model: Optional FillModelV0 for fill probability gating (PR-C5)
         """
         self._paper_engine = paper_engine
         self._exchange_port = exchange_port
@@ -237,6 +243,7 @@ class LiveEngineV0:
         self._fsm_driver = fsm_driver
         self._exchange_filters = exchange_filters
         self._account_syncer = account_syncer
+        self._fill_model = fill_model
         self._last_snapshot: Snapshot | None = None
         # Read GRINDER_SOR_ENABLED once at init (via env_parse SSOT)
         self._sor_env_override = parse_bool("GRINDER_SOR_ENABLED", default=False, strict=False)
@@ -244,6 +251,22 @@ class LiveEngineV0:
         self._account_sync_env_override = parse_bool(
             "GRINDER_ACCOUNT_SYNC_ENABLED", default=False, strict=False
         )
+        # Read fill prob gate env vars once at init (PR-C5)
+        self._fill_prob_enforce = parse_bool(
+            "GRINDER_FILL_MODEL_ENFORCE", default=False, strict=False
+        )
+        self._fill_prob_min_bps: int = (
+            parse_int(
+                "GRINDER_FILL_PROB_MIN_BPS",
+                default=2500,
+                min_value=0,
+                max_value=10000,
+                strict=False,
+            )
+            or 2500
+        )
+        # Set enforce_enabled metric at init (always emitted, default 0)
+        get_sor_metrics().set_fill_prob_enforce_enabled(self._fill_prob_enforce)
 
     @property
     def config(self) -> LiveEngineConfig:
@@ -469,6 +492,15 @@ class LiveEngineV0:
                 intent=intent,
             )
 
+        # Gate 7: Fill probability gate (PR-C5, PLACE/REPLACE only)
+        if self._fill_model is not None and action.action_type in (
+            ActionType.PLACE,
+            ActionType.REPLACE,
+        ):
+            fill_result = self._check_fill_prob(action, intent)
+            if fill_result is not None:
+                return fill_result
+
         # SOR routing (Launch-14 PR2): after all safety gates, before execution
         if self._is_sor_enabled() and action.action_type in (
             ActionType.PLACE,
@@ -571,6 +603,62 @@ class LiveEngineV0:
             )
 
         # CANCEL_REPLACE: fall through to normal execution
+        return None
+
+    def _check_fill_prob(self, action: ExecutionAction, intent: RiskIntent) -> LiveAction | None:
+        """Check fill probability gate for a PLACE/REPLACE action.
+
+        Returns LiveAction on BLOCK, None to continue normal processing.
+
+        Args:
+            action: PLACE or REPLACE action from PaperEngine.
+            intent: Risk intent classification.
+
+        Returns:
+            LiveAction if gate blocks, None to proceed.
+        """
+        assert action.price is not None
+        assert action.quantity is not None
+        assert action.side is not None
+
+        direction = "long" if action.side.value == "BUY" else "short"
+        notional = float(action.price * action.quantity)
+        features = extract_online_features(direction=direction, notional=notional)
+
+        result = check_fill_prob(
+            model=self._fill_model,
+            features=features,
+            threshold_bps=self._fill_prob_min_bps,
+            enforce=self._fill_prob_enforce,
+        )
+
+        # Record metrics
+        sor_metrics = get_sor_metrics()
+
+        if result.verdict == FillProbVerdict.BLOCK:
+            sor_metrics.record_fill_prob_block()
+            logger.info(
+                "FILL_PROB_BLOCKED prob_bps=%d threshold=%d action=%s",
+                result.prob_bps,
+                result.threshold_bps,
+                action.action_type.value,
+            )
+            return LiveAction(
+                action=action,
+                status=LiveActionStatus.BLOCKED,
+                block_reason=BlockReason.FILL_PROB_LOW,
+                intent=intent,
+            )
+
+        if result.verdict == FillProbVerdict.SHADOW:
+            logger.debug(
+                "FILL_PROB_SHADOW prob_bps=%d threshold=%d action=%s",
+                result.prob_bps,
+                result.threshold_bps,
+                action.action_type.value,
+            )
+
+        # ALLOW or SHADOW: continue normal processing
         return None
 
     def _execute_action(self, action: ExecutionAction, ts: int, intent: RiskIntent) -> LiveAction:

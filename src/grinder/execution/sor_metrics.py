@@ -16,6 +16,8 @@ from dataclasses import dataclass, field
 # Metric names (stable contract)
 METRIC_ROUTER_DECISION = "grinder_router_decision_total"
 METRIC_ROUTER_AMEND_SAVINGS = "grinder_router_amend_savings_total"
+METRIC_FILL_PROB_BLOCKS = "grinder_router_fill_prob_blocks_total"
+METRIC_FILL_PROB_ENFORCE = "grinder_router_fill_prob_enforce_enabled"
 
 
 @dataclass
@@ -32,6 +34,8 @@ class SorMetrics:
 
     decisions: dict[tuple[str, str], int] = field(default_factory=dict)
     amend_savings: int = 0
+    fill_prob_blocks: int = 0
+    fill_prob_enforce_enabled: bool = False
 
     def record_decision(self, decision: str, reason: str) -> None:
         """Record a router decision.
@@ -46,6 +50,14 @@ class SorMetrics:
     def record_amend_saving(self) -> None:
         """Record an amend that saved a cancel+place pair."""
         self.amend_savings += 1
+
+    def record_fill_prob_block(self) -> None:
+        """Record an order blocked by fill probability gate (PR-C5)."""
+        self.fill_prob_blocks += 1
+
+    def set_fill_prob_enforce_enabled(self, enabled: bool) -> None:
+        """Set fill probability enforcement state (PR-C5)."""
+        self.fill_prob_enforce_enabled = enabled
 
     def to_prometheus_lines(self) -> list[str]:
         """Generate Prometheus text format lines.
@@ -76,6 +88,18 @@ class SorMetrics:
                 f"# HELP {METRIC_ROUTER_AMEND_SAVINGS} Amends that saved a cancel+place pair",
                 f"# TYPE {METRIC_ROUTER_AMEND_SAVINGS} counter",
                 f"{METRIC_ROUTER_AMEND_SAVINGS} {self.amend_savings}",
+            ]
+        )
+
+        # Fill probability gate metrics (PR-C5)
+        lines.extend(
+            [
+                f"# HELP {METRIC_FILL_PROB_BLOCKS} Orders blocked by fill probability gate",
+                f"# TYPE {METRIC_FILL_PROB_BLOCKS} counter",
+                f"{METRIC_FILL_PROB_BLOCKS} {self.fill_prob_blocks}",
+                f"# HELP {METRIC_FILL_PROB_ENFORCE} Whether fill probability enforcement is enabled (1=yes, 0=no)",
+                f"# TYPE {METRIC_FILL_PROB_ENFORCE} gauge",
+                f"{METRIC_FILL_PROB_ENFORCE} {1 if self.fill_prob_enforce_enabled else 0}",
             ]
         )
 
