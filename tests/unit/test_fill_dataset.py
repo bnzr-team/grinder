@@ -494,6 +494,121 @@ class TestEmptyDataset:
         assert (dataset_dir / "data.parquet").exists()
 
 
+class TestTrackerStateSerialization:
+    """PR-C3d: RoundtripTracker.to_state_dict / from_state_dict."""
+
+    def test_tracker_state_roundtrip_single_position(self) -> None:
+        """to_state_dict -> from_state_dict preserves open position."""
+        tracker = RoundtripTracker(source="live")
+        tracker.record(_fill(1000, "BTCUSDT", "BUY", "50000", "0.1"))
+
+        state = tracker.to_state_dict()
+
+        # Verify state structure
+        assert state["source"] == "live"
+        assert "BTCUSDT|long" in state["positions"]
+        pos = state["positions"]["BTCUSDT|long"]
+        assert pos["direction"] == "long"
+        assert pos["qty"] == "0.1"
+        assert pos["cost"] == "5000.0"  # 50000 * 0.1
+        assert pos["fill_count"] == 1
+        assert pos["first_ts"] == 1000
+
+        # Restore and verify functional equivalence
+        restored = RoundtripTracker.from_state_dict(state)
+        assert ("BTCUSDT", "long") in restored.open_positions
+
+        # Close position on restored tracker -- should emit row
+        row = restored.record(_fill(2000, "BTCUSDT", "SELL", "51000", "0.1"))
+        assert row is not None
+        assert row.symbol == "BTCUSDT"
+        assert row.direction == "long"
+        assert row.entry_price == _D("50000")
+        assert row.exit_price == _D("51000")
+        assert row.realized_pnl == _D("100")
+        assert row.outcome == "win"
+        assert row.source == "live"
+
+    def test_tracker_state_roundtrip_multiple_symbols_directions(self) -> None:
+        """Multiple (symbol, direction) pairs survive serialization."""
+        tracker = RoundtripTracker()
+        # BTC long
+        tracker.record(_fill(1000, "BTCUSDT", "BUY", "50000", "0.1"))
+        # ETH short
+        tracker.record(_fill(1100, "ETHUSDT", "SELL", "3000", "1"))
+        # BTC long partial add
+        tracker.record(_fill(1200, "BTCUSDT", "BUY", "50200", "0.05"))
+
+        state = tracker.to_state_dict()
+        assert len(state["positions"]) == 2
+        assert "BTCUSDT|long" in state["positions"]
+        assert "ETHUSDT|short" in state["positions"]
+
+        # Verify sorted key order (deterministic)
+        keys = list(state["positions"].keys())
+        assert keys == sorted(keys)
+
+        # BTC long should have 2 fills, qty 0.15
+        btc = state["positions"]["BTCUSDT|long"]
+        assert btc["qty"] == "0.15"
+        assert btc["fill_count"] == 2
+
+        # Roundtrip through serialization
+        restored = RoundtripTracker.from_state_dict(state)
+        assert len(restored.open_positions) == 2
+
+        # Close both and verify correct PnL
+        row_eth = restored.record(_fill(2000, "ETHUSDT", "BUY", "2900", "1"))
+        assert row_eth is not None
+        assert row_eth.symbol == "ETHUSDT"
+        assert row_eth.direction == "short"
+        assert row_eth.realized_pnl == _D("100")
+
+        row_btc = restored.record(_fill(3000, "BTCUSDT", "SELL", "51000", "0.15"))
+        assert row_btc is not None
+        assert row_btc.symbol == "BTCUSDT"
+        assert row_btc.entry_qty == _D("0.15")
+        assert row_btc.entry_fill_count == 2
+
+    def test_tracker_from_state_rejects_bad_types(self) -> None:
+        """Strict validation rejects invalid data without coercion."""
+        # Bad direction
+        with pytest.raises(ValueError, match="direction must be"):
+            RoundtripTracker.from_state_dict(
+                {"positions": {"BTC|invalid": {"direction": "invalid"}}}
+            )
+
+        # Missing pipe separator in key
+        with pytest.raises(ValueError, match="position key must be"):
+            RoundtripTracker.from_state_dict({"positions": {"BTCUSDT_long": {"direction": "long"}}})
+
+        # fill_count as string (no coercion)
+        with pytest.raises(ValueError, match="fill_count must be int"):
+            RoundtripTracker.from_state_dict(
+                {"positions": {"BTC|long": {"direction": "long", "fill_count": "1"}}}
+            )
+
+        # Decimal field as float (no coercion)
+        with pytest.raises(ValueError, match="qty must be str"):
+            RoundtripTracker.from_state_dict(
+                {"positions": {"BTC|long": {"direction": "long", "qty": 0.1}}}
+            )
+
+        # Negative first_ts
+        with pytest.raises(ValueError, match="first_ts must be int >= 0"):
+            RoundtripTracker.from_state_dict(
+                {"positions": {"BTC|long": {"direction": "long", "first_ts": -1}}}
+            )
+
+        # positions as list
+        with pytest.raises(ValueError, match="positions must be dict"):
+            RoundtripTracker.from_state_dict({"positions": []})
+
+        # source as int
+        with pytest.raises(ValueError, match="source must be str"):
+            RoundtripTracker.from_state_dict({"source": 123})
+
+
 class TestForceOverwrite:
     """Force flag allows overwriting existing dataset."""
 

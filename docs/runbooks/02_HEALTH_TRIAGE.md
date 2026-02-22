@@ -177,14 +177,14 @@ curl -fsS http://localhost:9090/metrics | grep grinder_risk_consecutive
 | `GRINDER_CONSEC_LOSS_EVIDENCE` | `false` | Write evidence artifacts on trip |
 | `GRINDER_CONSEC_LOSS_STATE_PATH` | none | Path to persist guard state (JSON + sha256 sidecar) |
 
-**State file (PR-C3c):**
-- Format: `consecutive_loss_state_v1` JSON + `.sha256` sidecar.
-- Contains per-symbol guard states, `last_trade_id` cursor, cumulative `trip_count`.
+**State file (PR-C3d):**
+- Format: `consecutive_loss_state_v2` JSON + `.sha256` sidecar (v1 files auto-upgraded on load).
+- Contains per-symbol guard states, `last_trade_id` cursor, cumulative `trip_count`, and RoundtripTracker open positions.
 - Inspect: `cat $GRINDER_CONSEC_LOSS_STATE_PATH | python3 -m json.tool`
 - Reset guard: delete state file and restart (`rm $GRINDER_CONSEC_LOSS_STATE_PATH*`).
 - Per-symbol attribution: check evidence artifacts in `$GRINDER_ARTIFACT_DIR/risk/` for symbol-level detail.
-
-**Limitation (PR-C3c):** RoundtripTracker is NOT persisted. On restart, in-flight (unclosed) roundtrips are lost. Guard state and dedup cursor are persisted. Look for `CONSEC_LOSS_TRACKER_NOT_RESTORED` in logs after restart.
+- Tracker recovery: after restart, in-flight roundtrips (entry before restart) are restored from state file. Exit fills after restart close them normally. Look for `CONSEC_LOSS_TRACKER_RESTORED` in logs.
+- Tracker restore failure: if state file tracker data is corrupt, service logs `CONSEC_LOSS_TRACKER_RESTORE_FAILED` and starts with fresh tracker. Guards and dedup cursor are still restored.
 
 **Recovery:**
 1. Investigate: are losses real? Check `grinder_risk_consecutive_losses` count (= max across all symbols).

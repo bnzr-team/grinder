@@ -292,6 +292,101 @@ class RoundtripTracker:
         """Read-only view of currently open positions (for diagnostics)."""
         return dict(self._positions)
 
+    def to_state_dict(self) -> dict[str, Any]:
+        """Serialize open positions for persistence.
+
+        Decimals are stored as strings to avoid float precision loss.
+        Keys are ``"symbol|direction"`` for JSON compatibility.
+        """
+        positions: dict[str, dict[str, Any]] = {}
+        for (symbol, direction), pos in sorted(self._positions.items()):
+            key = f"{symbol}|{direction}"
+            positions[key] = {
+                "direction": pos.direction,
+                "qty": str(pos.qty),
+                "cost": str(pos.cost),
+                "fee": str(pos.fee),
+                "fill_count": pos.fill_count,
+                "first_ts": pos.first_ts,
+                "exit_qty": str(pos.exit_qty),
+                "exit_cost": str(pos.exit_cost),
+                "exit_fee": str(pos.exit_fee),
+                "exit_fill_count": pos.exit_fill_count,
+                "last_exit_ts": pos.last_exit_ts,
+            }
+        return {"source": self._source, "positions": positions}
+
+    @classmethod
+    def from_state_dict(cls, data: dict[str, Any]) -> RoundtripTracker:
+        """Restore tracker from persisted state.  Strict validation.
+
+        Raises ValueError on invalid data (no coercion).
+        """
+        source = data.get("source", "live")
+        if not isinstance(source, str):
+            raise ValueError(f"source must be str, got {type(source).__name__}")
+
+        raw_positions = data.get("positions", {})
+        if not isinstance(raw_positions, dict):
+            raise ValueError(f"positions must be dict, got {type(raw_positions).__name__}")
+
+        tracker = cls(source=source)
+        for key, pdata in raw_positions.items():
+            if not isinstance(key, str) or "|" not in key:
+                raise ValueError(f"position key must be 'symbol|direction', got {key!r}")
+            if not isinstance(pdata, dict):
+                raise ValueError(
+                    f"position value for {key!r} must be dict, got {type(pdata).__name__}"
+                )
+
+            parts = key.split("|", 1)
+            symbol, direction = parts[0], parts[1]
+
+            if direction not in ("long", "short"):
+                raise ValueError(f"direction must be 'long' or 'short', got {direction!r}")
+
+            # Validate and parse fields (strict: no coercion)
+            raw_fc = pdata.get("fill_count", 0)
+            if not isinstance(raw_fc, int) or raw_fc < 0:
+                raise ValueError(f"fill_count must be int >= 0, got {raw_fc!r}")
+
+            raw_first_ts = pdata.get("first_ts", 0)
+            if not isinstance(raw_first_ts, int) or raw_first_ts < 0:
+                raise ValueError(f"first_ts must be int >= 0, got {raw_first_ts!r}")
+
+            raw_efc = pdata.get("exit_fill_count", 0)
+            if not isinstance(raw_efc, int) or raw_efc < 0:
+                raise ValueError(f"exit_fill_count must be int >= 0, got {raw_efc!r}")
+
+            raw_let = pdata.get("last_exit_ts", 0)
+            if not isinstance(raw_let, int) or raw_let < 0:
+                raise ValueError(f"last_exit_ts must be int >= 0, got {raw_let!r}")
+
+            # Decimal fields must be strings
+            for field_name in ("qty", "cost", "fee", "exit_qty", "exit_cost", "exit_fee"):
+                raw_val = pdata.get(field_name, "0")
+                if not isinstance(raw_val, str):
+                    raise ValueError(
+                        f"{field_name} must be str (Decimal), got {type(raw_val).__name__}"
+                    )
+
+            pos = _OpenPosition(
+                direction=direction,
+                qty=Decimal(pdata.get("qty", "0")),
+                cost=Decimal(pdata.get("cost", "0")),
+                fee=Decimal(pdata.get("fee", "0")),
+                fill_count=raw_fc,
+                first_ts=raw_first_ts,
+                exit_qty=Decimal(pdata.get("exit_qty", "0")),
+                exit_cost=Decimal(pdata.get("exit_cost", "0")),
+                exit_fee=Decimal(pdata.get("exit_fee", "0")),
+                exit_fill_count=raw_efc,
+                last_exit_ts=raw_let,
+            )
+            tracker._positions[(symbol, direction)] = pos
+
+        return tracker
+
 
 # --- Dataset builder --------------------------------------------------------
 

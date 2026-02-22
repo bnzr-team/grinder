@@ -1,4 +1,4 @@
-"""Wire ConsecutiveLossGuard into the live reconciliation pipeline (PR-C3b/C3c).
+"""Wire ConsecutiveLossGuard into the live reconciliation pipeline (PR-C3b/C3c/C3d).
 
 Side-effect layer: env config, Binance trade conversion, evidence writing,
 operator PAUSE action, metrics push, state persistence, per-symbol routing.
@@ -10,7 +10,10 @@ Other entrypoints do NOT activate this guard.
 PR-C3c additions:
 - Per-symbol independent streak tracking (dict[symbol, ConsecutiveLossGuard])
 - Persistent state to JSON + sha256 sidecar (atomic write, monotonicity guard)
-- RoundtripTracker is NOT persisted (limitation — see ADR-070)
+
+PR-C3d additions:
+- RoundtripTracker persisted in state v2 (in-flight recovery)
+- Backward compat: v1 files load without tracker (warning logged)
 
 SSOT: this module.  ADR-070 in docs/DECISIONS.md.
 """
@@ -40,7 +43,8 @@ from grinder.risk.consecutive_loss_guard import (
 logger = logging.getLogger(__name__)
 
 ARTIFACT_VERSION = "consecutive_loss_evidence_v1"
-STATE_FILE_VERSION = "consecutive_loss_state_v1"
+STATE_FILE_VERSION = "consecutive_loss_state_v2"
+STATE_FILE_VERSION_V1 = "consecutive_loss_state_v1"
 ENV_ENABLE = "GRINDER_CONSEC_LOSS_ENABLED"
 ENV_THRESHOLD = "GRINDER_CONSEC_LOSS_THRESHOLD"
 ENV_EVIDENCE = "GRINDER_CONSEC_LOSS_EVIDENCE"
@@ -174,29 +178,40 @@ def set_operator_pause(count: int, threshold: int) -> None:
 
 @dataclass(frozen=True)
 class PersistedServiceState:
-    """Full persisted state envelope for the consecutive loss service."""
+    """Full persisted state envelope for the consecutive loss service.
+
+    v2 adds ``tracker`` field for RoundtripTracker persistence.
+    v1 files are accepted with ``tracker=None`` (backward compat).
+    """
 
     version: str
     guards: dict[str, dict[str, Any]]  # {symbol: ConsecutiveLossState.to_dict()}
     last_trade_id: int
     trip_count: int
     updated_at_ms: int
+    tracker: dict[str, Any] | None  # RoundtripTracker.to_state_dict() or None (v1)
 
     def to_dict(self) -> dict[str, Any]:
         """JSON-serializable dict."""
-        return {
+        d: dict[str, Any] = {
             "version": self.version,
             "guards": self.guards,
             "last_trade_id": self.last_trade_id,
             "trip_count": self.trip_count,
             "updated_at_ms": self.updated_at_ms,
         }
+        if self.tracker is not None:
+            d["tracker"] = self.tracker
+        return d
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> PersistedServiceState:
-        """Strict parsing.  Raises ValueError on invalid data."""
+        """Strict parsing.  Raises ValueError on invalid data.
+
+        Accepts both v1 (no tracker) and v2 (with tracker).
+        """
         version = data.get("version", "")
-        if version != STATE_FILE_VERSION:
+        if version not in (STATE_FILE_VERSION, STATE_FILE_VERSION_V1):
             raise ValueError(f"unsupported state version: {version!r}")
 
         raw_guards = data.get("guards", {})
@@ -222,12 +237,18 @@ class PersistedServiceState:
         if not isinstance(updated_at_ms, int) or updated_at_ms < 0:
             raise ValueError(f"updated_at_ms must be int >= 0, got {updated_at_ms!r}")
 
+        # v2: tracker field; v1: None
+        raw_tracker = data.get("tracker")
+        if raw_tracker is not None and not isinstance(raw_tracker, dict):
+            raise ValueError(f"tracker must be dict | None, got {type(raw_tracker).__name__}")
+
         return cls(
             version=version,
             guards=raw_guards,
             last_trade_id=last_trade_id,
             trip_count=trip_count,
             updated_at_ms=updated_at_ms,
+            tracker=raw_tracker,
         )
 
 
@@ -371,14 +392,37 @@ class ConsecutiveLossService:
                             "age_hours": round(age_h, 1),
                         },
                     )
-                # P1-1: tracker not restored — explicit limitation
-                logger.warning(
-                    "CONSEC_LOSS_TRACKER_NOT_RESTORED",
-                    extra={
-                        "symbol_count": len(self._guards),
-                        "last_trade_id": self._last_trade_id,
-                    },
-                )
+                # Restore tracker (v2) or log limitation (v1)
+                if persisted.tracker is not None:
+                    try:
+                        self.tracker = RoundtripTracker.from_state_dict(
+                            persisted.tracker,
+                        )
+                        logger.info(
+                            "CONSEC_LOSS_TRACKER_RESTORED",
+                            extra={
+                                "open_positions": len(self.tracker.open_positions),
+                                "last_trade_id": self._last_trade_id,
+                            },
+                        )
+                    except (ValueError, KeyError, TypeError) as exc:
+                        logger.warning(
+                            "CONSEC_LOSS_TRACKER_RESTORE_FAILED",
+                            extra={
+                                "error": str(exc),
+                                "last_trade_id": self._last_trade_id,
+                            },
+                        )
+                        # Keep fresh tracker — in-flight roundtrips lost
+                else:
+                    logger.warning(
+                        "CONSEC_LOSS_TRACKER_NOT_IN_STATE",
+                        extra={
+                            "version": persisted.version,
+                            "symbol_count": len(self._guards),
+                            "last_trade_id": self._last_trade_id,
+                        },
+                    )
 
     @property
     def guard(self) -> ConsecutiveLossGuard:
@@ -514,6 +558,7 @@ class ConsecutiveLossService:
             last_trade_id=self._last_trade_id,
             trip_count=self.trip_count,
             updated_at_ms=now_ms,
+            tracker=self.tracker.to_state_dict(),
         )
         save_consec_loss_state(self._state_path, persisted)
         self._state_dirty = False
