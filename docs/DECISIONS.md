@@ -3983,3 +3983,25 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
 - **Alert rule:** `FillProbCircuitBreakerTripped` — fires if `grinder_router_fill_prob_cb_trips_total` increases by > 0 in 5 minutes. Severity: warning. Links to rollout runbook.
 - **Consequences:** Operators get automatic protection against runaway blocking. Pre-flight script prevents premature enablement. Runbook provides repeatable ceremony. Circuit breaker is zero-overhead in shadow mode.
 - **Alternatives:** "Percentage-based canary (enforce on N% of decisions)" — rejected (adds non-determinism, harder to reason about, complicates evidence analysis). "Symbol-based canary" — operators can already achieve this by running separate instances per symbol with different env vars. "Automatic threshold adjustment" — deferred to future PR (requires online calibration loop, too complex for v0 rollout).
+
+## ADR-074: Auto-threshold from eval report (PR-C9) — accepted
+
+- **Status:** accepted
+- **Context:** Before PR-C9, operators had to manually copy `recommended_threshold_bps` from the eval report into `GRINDER_FILL_PROB_MIN_BPS`. This is error-prone and creates a risk of stale thresholds (model retrained, eval re-run, but env var not updated). ADR-073 deferred "Automatic threshold adjustment" as too complex — but the offline variant (read from eval report at startup) is straightforward and safe.
+- **Decision:** Add `src/grinder/ml/threshold_resolver.py` — a pure-offline module that reads `eval_report.json`, validates sha256/schema/model-provenance, and extracts `recommended_threshold_bps`. Two modes:
+  - **Recommend-only** (default): resolves threshold, emits structured log + gauge metric, but does NOT override `GRINDER_FILL_PROB_MIN_BPS`. Operator sees mismatch in logs/metrics.
+  - **Auto-apply** (opt-in via `GRINDER_FILL_PROB_AUTO_THRESHOLD=1`): resolves threshold AND overrides `_fill_prob_min_bps` in engine. Only if eval validations pass.
+- **Env vars:**
+  - `GRINDER_FILL_PROB_EVAL_DIR` (str, default unset): path to eval report directory. If unset → zero eval reads, no threshold resolution, no metric change. This is the kill switch for the feature.
+  - `GRINDER_FILL_PROB_AUTO_THRESHOLD` (bool, default `0`): if `1` and eval resolution succeeds → override configured threshold. If `0` → recommend-only mode (log only).
+- **3-layer validation:**
+  1. SHA256 integrity of `eval_report.json` against `manifest.json` in eval dir.
+  2. `schema_version` must equal `fill_model_eval_v0`.
+  3. Model provenance: `model_manifest_sha256` in eval report must match SHA256 of current `model_dir/manifest.json`. Prevents using eval from a different model version.
+- **Fail-open:** Any validation failure → `resolve_threshold()` returns `None` → engine uses configured `GRINDER_FILL_PROB_MIN_BPS` → structured log `THRESHOLD_RESOLVE_FAILED reason=<reason>`. Never crashes, never uses unvalidated data.
+- **Startup log:** `THRESHOLD_RESOLVED mode=<mode> recommended_bps=<N> configured_bps=<M> effective_bps=<E> reason=<reason>`. Operator always sees which threshold is actually active.
+- **Metric:** `grinder_router_fill_prob_auto_threshold_bps` (gauge, default 0). Shows resolved threshold (0 = disabled/failed). Operator can alert on mismatch vs configured.
+- **Evidence artifact:** `threshold_resolution_{ts}.json + .sha256` in `{GRINDER_ARTIFACT_DIR}/fill_prob/`. Gated on `GRINDER_ARTIFACT_DIR` being set (NOT `GRINDER_FILL_PROB_EVIDENCE` — this is a boot-time config artifact, not a runtime event). Contains: mode, recommended_bps, configured_bps, effective_bps, eval_sha256, model_manifest_sha256.
+- **Preflight integration:** `scripts/preflight_fill_prob.py` gains `--auto-threshold` flag. When passed, runs `resolve_threshold()` against the provided model + eval dirs. PASS = resolution succeeds, FAIL = resolution fails.
+- **Consequences:** Operators can safely auto-apply thresholds from eval reports with full provenance tracking. Default mode (recommend-only) is zero-risk — only logs. Auto-apply requires explicit opt-in and passes all 3 validation layers. Preflight catches mismatches before deployment.
+- **Alternatives:** "Hot-reload eval report at runtime" — rejected (adds complexity, non-deterministic behavior mid-session). "Single env var combining eval_dir + auto-apply" — rejected (violates separation of concerns, harder to audit). "Gate evidence on GRINDER_FILL_PROB_EVIDENCE" — rejected (C6 evidence is runtime BLOCK/SHADOW events, threshold resolution is boot-time config — different lifecycle).

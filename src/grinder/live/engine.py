@@ -30,6 +30,7 @@ See: ADR-036 for design decisions
 from __future__ import annotations
 
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -64,6 +65,10 @@ from grinder.execution.smart_order_router import (
 from grinder.execution.sor_metrics import get_sor_metrics
 from grinder.execution.types import ActionType, ExecutionAction
 from grinder.ml.fill_model_loader import extract_online_features
+from grinder.ml.threshold_resolver import (
+    resolve_threshold,
+    write_threshold_resolution_evidence,
+)
 from grinder.risk.drawdown_guard_v1 import DrawdownGuardV1
 from grinder.risk.drawdown_guard_v1 import OrderIntent as RiskIntent
 
@@ -274,6 +279,70 @@ class LiveEngineV0:
         self._fill_prob_cb = FillProbCircuitBreaker()
         # Set enforce_enabled metric at init (always emitted, default 0)
         get_sor_metrics().set_fill_prob_enforce_enabled(self._fill_prob_enforce)
+
+        # Auto-threshold resolution from eval report (PR-C9, ADR-074)
+        self._resolve_auto_threshold()
+
+    def _resolve_auto_threshold(self) -> None:
+        """Resolve threshold from eval report at startup (PR-C9).
+
+        Reads GRINDER_FILL_PROB_EVAL_DIR and GRINDER_FILL_PROB_AUTO_THRESHOLD.
+        If eval_dir is unset, does nothing.  If set, resolves threshold.
+        In auto-apply mode, overrides self._fill_prob_min_bps.
+        In recommend-only mode (default), logs but does not override.
+        Fail-open: any error -> keep configured threshold.
+        """
+        eval_dir = os.environ.get("GRINDER_FILL_PROB_EVAL_DIR", "").strip()
+        if not eval_dir:
+            return
+
+        model_dir = os.environ.get("GRINDER_FILL_MODEL_DIR", "").strip()
+        if not model_dir:
+            logger.warning(
+                "THRESHOLD_RESOLVE_SKIPPED reason=model_dir_unset eval_dir=%s",
+                eval_dir,
+            )
+            return
+
+        auto_apply = parse_bool("GRINDER_FILL_PROB_AUTO_THRESHOLD", default=False, strict=False)
+        mode = "auto_apply" if auto_apply else "recommend_only"
+
+        resolution = resolve_threshold(eval_dir, model_dir)
+        if resolution is None:
+            logger.warning(
+                "THRESHOLD_RESOLVED mode=%s recommended_bps=FAILED "
+                "configured_bps=%d effective_bps=%d reason=resolution_failed",
+                mode,
+                self._fill_prob_min_bps,
+                self._fill_prob_min_bps,
+            )
+            return
+
+        configured_bps = self._fill_prob_min_bps
+        if auto_apply:
+            self._fill_prob_min_bps = resolution.threshold_bps
+        effective_bps = self._fill_prob_min_bps
+
+        logger.info(
+            "THRESHOLD_RESOLVED mode=%s recommended_bps=%d "
+            "configured_bps=%d effective_bps=%d reason=%s",
+            mode,
+            resolution.threshold_bps,
+            configured_bps,
+            effective_bps,
+            "auto_applied" if auto_apply else "recommend_only",
+        )
+
+        # Set metric (visible to operator)
+        get_sor_metrics().set_fill_prob_auto_threshold(resolution.threshold_bps)
+
+        # Evidence artifact (gated on GRINDER_ARTIFACT_DIR, not GRINDER_FILL_PROB_EVIDENCE)
+        write_threshold_resolution_evidence(
+            resolution=resolution,
+            configured_bps=configured_bps,
+            mode=mode,
+            effective_bps=effective_bps,
+        )
 
     @property
     def config(self) -> LiveEngineConfig:

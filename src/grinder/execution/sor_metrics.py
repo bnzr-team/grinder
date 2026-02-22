@@ -19,6 +19,7 @@ METRIC_ROUTER_AMEND_SAVINGS = "grinder_router_amend_savings_total"
 METRIC_FILL_PROB_BLOCKS = "grinder_router_fill_prob_blocks_total"
 METRIC_FILL_PROB_ENFORCE = "grinder_router_fill_prob_enforce_enabled"
 METRIC_FILL_PROB_CB_TRIPS = "grinder_router_fill_prob_cb_trips_total"
+METRIC_FILL_PROB_AUTO_THRESHOLD = "grinder_router_fill_prob_auto_threshold_bps"
 
 
 @dataclass
@@ -38,6 +39,7 @@ class SorMetrics:
     fill_prob_blocks: int = 0
     fill_prob_enforce_enabled: bool = False
     fill_prob_cb_trips: int = 0
+    fill_prob_auto_threshold_bps: int = 0
 
     def record_decision(self, decision: str, reason: str) -> None:
         """Record a router decision.
@@ -64,6 +66,10 @@ class SorMetrics:
     def record_cb_trip(self) -> None:
         """Record a fill probability circuit breaker trip (PR-C8)."""
         self.fill_prob_cb_trips += 1
+
+    def set_fill_prob_auto_threshold(self, threshold_bps: int) -> None:
+        """Set resolved auto-threshold value (PR-C9). 0 = disabled/failed."""
+        self.fill_prob_auto_threshold_bps = threshold_bps
 
     def to_prometheus_lines(self) -> list[str]:
         """Generate Prometheus text format lines.
@@ -109,6 +115,10 @@ class SorMetrics:
                 f"# HELP {METRIC_FILL_PROB_CB_TRIPS} Fill probability circuit breaker trips",
                 f"# TYPE {METRIC_FILL_PROB_CB_TRIPS} counter",
                 f"{METRIC_FILL_PROB_CB_TRIPS} {self.fill_prob_cb_trips}",
+                # PR-C9: Auto-threshold gauge (0 = disabled/failed)
+                f"# HELP {METRIC_FILL_PROB_AUTO_THRESHOLD} Resolved auto-threshold from eval report (bps, 0=disabled)",
+                f"# TYPE {METRIC_FILL_PROB_AUTO_THRESHOLD} gauge",
+                f"{METRIC_FILL_PROB_AUTO_THRESHOLD} {self.fill_prob_auto_threshold_bps}",
             ]
         )
 

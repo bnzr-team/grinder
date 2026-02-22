@@ -165,3 +165,53 @@ FILL_PROB_CIRCUIT_BREAKER_TRIPPED block_count=15 total_count=20 block_rate_pct=7
 ## Alert Rules
 
 - **FillProbCircuitBreakerTripped** — fires when `grinder_router_fill_prob_cb_trips_total` increases. Severity: warning. Action: check block rate, review model calibration, consider rollback.
+
+---
+
+## Auto-Threshold from Eval Report (PR-C9)
+
+Instead of manually setting `GRINDER_FILL_PROB_MIN_BPS`, the engine can read the recommended threshold directly from the eval report.
+
+### Setup
+
+```bash
+# Point to eval report directory
+export GRINDER_FILL_PROB_EVAL_DIR=ml/eval/fill_model_v0
+
+# Mode 1: Recommend-only (default) — log + metric, no override
+export GRINDER_FILL_PROB_AUTO_THRESHOLD=0
+
+# Mode 2: Auto-apply — override configured threshold
+export GRINDER_FILL_PROB_AUTO_THRESHOLD=1
+```
+
+### Pre-flight with Auto-Threshold
+
+```bash
+python3 -m scripts.preflight_fill_prob \
+    --model ml/models/fill_model_v0 \
+    --eval ml/eval/fill_model_v0 \
+    --evidence-dir ml/evidence/fill_prob \
+    --auto-threshold
+```
+
+### Startup Log
+
+On engine start, look for:
+```
+THRESHOLD_RESOLVED mode=auto_apply recommended_bps=3000 configured_bps=2500 effective_bps=3000 reason=auto_applied
+```
+
+### Key Metric
+
+```bash
+# Shows resolved threshold (0 = disabled/failed)
+curl -s http://localhost:9090/metrics | grep router_fill_prob_auto_threshold
+```
+
+### Safety
+
+- If `GRINDER_FILL_PROB_EVAL_DIR` is unset → no eval read, no threshold resolution.
+- 3-layer validation: sha256, schema_version, model provenance.
+- Any validation failure → fall back to `GRINDER_FILL_PROB_MIN_BPS`.
+- Evidence artifact written to `{GRINDER_ARTIFACT_DIR}/fill_prob/threshold_resolution_{ts}.json`.

@@ -16,6 +16,7 @@ import json
 from typing import TYPE_CHECKING, Any
 
 from scripts.preflight_fill_prob import (
+    _check_auto_threshold,
     _check_calibration,
     _check_eval,
     _check_evidence,
@@ -236,3 +237,106 @@ class TestCheckEvidence:
         ok, msg = _check_evidence(evidence_dir)
         assert not ok
         assert "No evidence" in msg
+
+
+# --- Tests: Auto-threshold check (PR-C9) ------------------------------------
+
+
+def _write_model_with_provenance(model_dir: Path) -> str:
+    """Write a valid model directory, return manifest sha256 (binary)."""
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    model_data: dict[str, Any] = {
+        "schema_version": "fill_model_v0",
+        "bins": {"long|0|1|0": 6000},
+        "global_prior_bps": 5000,
+        "n_train_rows": 10,
+        "bucket_thresholds": {
+            "notional": [100, 500, 1000, 5000],
+            "holding_ms": [1000, 10000, 60000, 300000],
+            "max_fill_count": 3,
+        },
+    }
+    model_content = json.dumps(model_data, indent=2, sort_keys=True) + "\n"
+    (model_dir / "model.json").write_text(model_content)
+
+    model_sha = hashlib.sha256(model_content.encode()).hexdigest()
+    manifest: dict[str, Any] = {
+        "schema_version": "fill_model_v0",
+        "model_file": "model.json",
+        "created_at_utc": "2025-01-01T00:00:00Z",
+        "n_train_rows": 10,
+        "global_prior_bps": 5000,
+        "n_bins": 1,
+        "sha256": {"model.json": model_sha},
+    }
+    manifest_content = json.dumps(manifest, indent=2, sort_keys=True) + "\n"
+    (model_dir / "manifest.json").write_text(manifest_content)
+
+    h = hashlib.sha256()
+    with (model_dir / "manifest.json").open("rb") as f:
+        for chunk in iter(lambda: f.read(8192), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _write_eval_with_provenance(
+    eval_dir: Path, model_manifest_sha256: str, *, threshold: int = 2500
+) -> None:
+    """Write eval report with model provenance."""
+    eval_dir.mkdir(parents=True, exist_ok=True)
+
+    report: dict[str, Any] = {
+        "schema_version": "fill_model_eval_v0",
+        "model_manifest_sha256": model_manifest_sha256,
+        "n_rows": 100,
+        "recommended_threshold_bps": threshold,
+        "calibration_well_calibrated": True,
+        "calibration_max_error_bps": 200,
+    }
+    report_content = json.dumps(report, indent=2, sort_keys=True) + "\n"
+    (eval_dir / "eval_report.json").write_text(report_content, encoding="utf-8")
+
+    report_sha = hashlib.sha256(report_content.encode("utf-8")).hexdigest()
+    manifest: dict[str, Any] = {
+        "schema_version": "fill_model_eval_v0",
+        "sha256": {"eval_report.json": report_sha},
+    }
+    (eval_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+
+
+class TestCheckAutoThreshold:
+    """PAT-001..PAT-003: auto-threshold preflight check (PR-C9)."""
+
+    def test_valid_auto_threshold_passes(self, tmp_path: Path) -> None:
+        """PAT-001: valid model+eval with matching provenance → PASS."""
+        model_dir = tmp_path / "model"
+        model_sha = _write_model_with_provenance(model_dir)
+
+        eval_dir = tmp_path / "eval"
+        _write_eval_with_provenance(eval_dir, model_sha, threshold=3000)
+
+        ok, msg = _check_auto_threshold(model_dir, eval_dir)
+        assert ok
+        assert "3000" in msg
+
+    def test_provenance_mismatch_fails(self, tmp_path: Path) -> None:
+        """PAT-002: model provenance mismatch → FAIL."""
+        model_dir = tmp_path / "model"
+        _write_model_with_provenance(model_dir)
+
+        eval_dir = tmp_path / "eval"
+        _write_eval_with_provenance(eval_dir, "wrong_sha" * 8)
+
+        ok, msg = _check_auto_threshold(model_dir, eval_dir)
+        assert not ok
+        assert "failed" in msg.lower()
+
+    def test_missing_eval_fails(self, tmp_path: Path) -> None:
+        """PAT-003: missing eval dir → FAIL."""
+        model_dir = tmp_path / "model"
+        _write_model_with_provenance(model_dir)
+
+        ok, msg = _check_auto_threshold(model_dir, tmp_path / "nonexistent")
+        assert not ok
+        assert "failed" in msg.lower()
