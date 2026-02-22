@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import time
 from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock
 
@@ -25,6 +26,7 @@ from grinder.ml.fill_model_v0 import FillModelV0
 from grinder.ml.threshold_resolver import (
     ThresholdResolution,
     resolve_threshold,
+    resolve_threshold_result,
     write_threshold_resolution_evidence,
 )
 from grinder.observability.metrics_contract import (
@@ -82,11 +84,20 @@ def _write_eval_dir(
     eval_dir: Path,
     model_manifest_sha256: str,
     *,
-    threshold_bps: int = 2500,
+    threshold_bps: int | str = 2500,
     schema_version: str = "fill_model_eval_v0",
     well_calibrated: bool = True,
+    ts_ms: int | None = None,
+    extra_fields: dict[str, Any] | None = None,
+    omit_fields: tuple[str, ...] = (),
 ) -> None:
-    """Write a valid eval report directory."""
+    """Write a valid eval report directory.
+
+    Args:
+        ts_ms: If set, adds ``ts_ms`` to the report (for freshness tests).
+        extra_fields: Extra keys to merge into the report dict.
+        omit_fields: Field names to remove after building the report dict.
+    """
     eval_dir.mkdir(parents=True, exist_ok=True)
 
     report: dict[str, Any] = {
@@ -108,6 +119,13 @@ def _write_eval_dir(
         "calibration_max_error_bps": 200 if well_calibrated else 800,
         "calibration_well_calibrated": well_calibrated,
     }
+    if ts_ms is not None:
+        report["ts_ms"] = ts_ms
+    if extra_fields:
+        report.update(extra_fields)
+    for field in omit_fields:
+        report.pop(field, None)
+
     report_content = json.dumps(report, indent=2, sort_keys=True) + "\n"
     (eval_dir / "eval_report.json").write_text(report_content, encoding="utf-8")
 
@@ -507,3 +525,167 @@ class TestEngineAutoThreshold:
 
         assert engine._fill_prob_min_bps == 2500
         assert get_sor_metrics().fill_prob_auto_threshold_bps == 0
+
+
+# --- Tests: Sanity checks (PR-B1) -------------------------------------------
+
+
+class TestSanityChecks:
+    """BS-001..BS-012: hardened sanity checks via resolve_threshold_result()."""
+
+    def test_valid_report_returns_ok(self, tmp_path: Path) -> None:
+        """BS-001: valid report → reason_code == 'ok', resolution not None."""
+        model_dir = tmp_path / "model"
+        model_sha = _write_model_dir(model_dir)
+        eval_dir = tmp_path / "eval"
+        _write_eval_dir(eval_dir, model_sha, threshold_bps=3000)
+
+        result = resolve_threshold_result(eval_dir, model_dir)
+        assert result.resolution is not None
+        assert result.reason_code == "ok"
+        assert result.resolution.threshold_bps == 3000
+
+    def test_recommended_threshold_string_type(self, tmp_path: Path) -> None:
+        """BS-002: recommended_threshold_bps = '2500' (str) → bad_type."""
+        model_dir = tmp_path / "model"
+        model_sha = _write_model_dir(model_dir)
+        eval_dir = tmp_path / "eval"
+        _write_eval_dir(eval_dir, model_sha, threshold_bps="2500")
+
+        result = resolve_threshold_result(eval_dir, model_dir)
+        assert result.resolution is None
+        assert result.reason_code == "bad_type"
+        assert "recommended_threshold_bps" in result.detail
+
+    def test_recommended_threshold_negative(self, tmp_path: Path) -> None:
+        """BS-003: recommended_threshold_bps = -1 → out_of_range."""
+        model_dir = tmp_path / "model"
+        model_sha = _write_model_dir(model_dir)
+        eval_dir = tmp_path / "eval"
+        _write_eval_dir(eval_dir, model_sha, threshold_bps=-1)
+
+        result = resolve_threshold_result(eval_dir, model_dir)
+        assert result.resolution is None
+        assert result.reason_code == "out_of_range"
+
+    def test_recommended_threshold_boundary_10001(self, tmp_path: Path) -> None:
+        """BS-004: recommended_threshold_bps = 10001 → out_of_range."""
+        model_dir = tmp_path / "model"
+        model_sha = _write_model_dir(model_dir)
+        eval_dir = tmp_path / "eval"
+        _write_eval_dir(eval_dir, model_sha, threshold_bps=10001)
+
+        result = resolve_threshold_result(eval_dir, model_dir)
+        assert result.resolution is None
+        assert result.reason_code == "out_of_range"
+
+    def test_missing_schema_version_field(self, tmp_path: Path) -> None:
+        """BS-005: report without 'schema_version' → missing_field."""
+        model_dir = tmp_path / "model"
+        model_sha = _write_model_dir(model_dir)
+        eval_dir = tmp_path / "eval"
+        _write_eval_dir(eval_dir, model_sha, omit_fields=("schema_version",))
+
+        result = resolve_threshold_result(eval_dir, model_dir)
+        assert result.resolution is None
+        assert result.reason_code == "missing_field"
+        assert "schema_version" in result.detail
+
+    def test_missing_model_manifest_sha256_field(self, tmp_path: Path) -> None:
+        """BS-006: report without 'model_manifest_sha256' → missing_field."""
+        model_dir = tmp_path / "model"
+        model_sha = _write_model_dir(model_dir)
+        eval_dir = tmp_path / "eval"
+        _write_eval_dir(eval_dir, model_sha, omit_fields=("model_manifest_sha256",))
+
+        result = resolve_threshold_result(eval_dir, model_dir)
+        assert result.resolution is None
+        assert result.reason_code == "missing_field"
+        assert "model_manifest_sha256" in result.detail
+
+    def test_manifest_missing_sha256_block(self, tmp_path: Path) -> None:
+        """BS-007: eval manifest.json without 'sha256' key → missing_field."""
+        model_dir = tmp_path / "model"
+        _write_model_dir(model_dir)
+        eval_dir = tmp_path / "eval"
+        eval_dir.mkdir(parents=True)
+        # Write a manifest without sha256 block
+        (eval_dir / "manifest.json").write_text(
+            json.dumps({"schema_version": "fill_model_eval_v0"}, indent=2) + "\n",
+            encoding="utf-8",
+        )
+        (eval_dir / "eval_report.json").write_text("{}", encoding="utf-8")
+
+        result = resolve_threshold_result(eval_dir, model_dir)
+        assert result.resolution is None
+        assert result.reason_code == "missing_field"
+        assert "sha256" in result.detail
+
+    def test_freshness_too_old(self, tmp_path: Path, monkeypatch: Any) -> None:
+        """BS-008: stale ts_ms + max_age set → timestamp_too_old."""
+        model_dir = tmp_path / "model"
+        model_sha = _write_model_dir(model_dir)
+        eval_dir = tmp_path / "eval"
+        # 48 hours ago
+
+        stale_ts_ms = int((time.time() - 48 * 3600) * 1000)
+        _write_eval_dir(eval_dir, model_sha, ts_ms=stale_ts_ms)
+
+        monkeypatch.setenv("GRINDER_FILL_PROB_EVAL_MAX_AGE_HOURS", "24")
+        result = resolve_threshold_result(eval_dir, model_dir)
+        assert result.resolution is None
+        assert result.reason_code == "timestamp_too_old"
+
+    def test_freshness_future(self, tmp_path: Path, monkeypatch: Any) -> None:
+        """BS-009: future ts_ms + max_age set → timestamp_future."""
+        model_dir = tmp_path / "model"
+        model_sha = _write_model_dir(model_dir)
+        eval_dir = tmp_path / "eval"
+        # 1 hour in the future (well beyond 5-min tolerance)
+
+        future_ts_ms = int((time.time() + 3600) * 1000)
+        _write_eval_dir(eval_dir, model_sha, ts_ms=future_ts_ms)
+
+        monkeypatch.setenv("GRINDER_FILL_PROB_EVAL_MAX_AGE_HOURS", "24")
+        result = resolve_threshold_result(eval_dir, model_dir)
+        assert result.resolution is None
+        assert result.reason_code == "timestamp_future"
+
+    def test_freshness_disabled_by_default(self, tmp_path: Path, monkeypatch: Any) -> None:
+        """BS-010: very stale report but env not set → ok (freshness disabled)."""
+        model_dir = tmp_path / "model"
+        model_sha = _write_model_dir(model_dir)
+        eval_dir = tmp_path / "eval"
+        # 72 hours ago — very stale
+
+        stale_ts_ms = int((time.time() - 72 * 3600) * 1000)
+        _write_eval_dir(eval_dir, model_sha, ts_ms=stale_ts_ms)
+
+        monkeypatch.delenv("GRINDER_FILL_PROB_EVAL_MAX_AGE_HOURS", raising=False)
+        result = resolve_threshold_result(eval_dir, model_dir)
+        assert result.resolution is not None
+        assert result.reason_code == "ok"
+
+    def test_freshness_no_timestamp_passes(self, tmp_path: Path, monkeypatch: Any) -> None:
+        """BS-011: env set but no ts in report → ok (no timestamp to check)."""
+        model_dir = tmp_path / "model"
+        model_sha = _write_model_dir(model_dir)
+        eval_dir = tmp_path / "eval"
+        _write_eval_dir(eval_dir, model_sha)  # no ts_ms
+
+        monkeypatch.setenv("GRINDER_FILL_PROB_EVAL_MAX_AGE_HOURS", "24")
+        result = resolve_threshold_result(eval_dir, model_dir)
+        assert result.resolution is not None
+        assert result.reason_code == "ok"
+
+    def test_freshness_env_invalid(self, tmp_path: Path, monkeypatch: Any) -> None:
+        """BS-012: bad env var value → env_invalid."""
+        model_dir = tmp_path / "model"
+        model_sha = _write_model_dir(model_dir)
+        eval_dir = tmp_path / "eval"
+        _write_eval_dir(eval_dir, model_sha)
+
+        monkeypatch.setenv("GRINDER_FILL_PROB_EVAL_MAX_AGE_HOURS", "not_a_number")
+        result = resolve_threshold_result(eval_dir, model_dir)
+        assert result.resolution is None
+        assert result.reason_code == "env_invalid"

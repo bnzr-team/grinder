@@ -186,8 +186,11 @@ Instead of manually setting `GRINDER_FILL_PROB_MIN_BPS`, the engine can read the
 | `GRINDER_FILL_PROB_MIN_BPS` | int | `2500` | Configured threshold. Used as fallback when auto-threshold fails or is disabled. |
 | `GRINDER_ARTIFACT_DIR` | str | _(unset)_ | If set, evidence artifact `threshold_resolution_{ts}.json` written on resolution. |
 | `GRINDER_FILL_MODEL_ENFORCE` | bool | `0` | Must be `1` for enforcement. Auto-threshold only affects threshold value, not enforcement on/off. |
+| `GRINDER_FILL_PROB_EVAL_MAX_AGE_HOURS` | float | _(unset)_ | Eval report freshness gate (**behavioral control**). Unset = disabled. When set, reports older than N hours cause fail-open. Only checked if report contains timestamp (`ts_ms`, `created_at`, `generated_at`). See ADR-074a. |
 
-**Safe defaults:** with all env vars unset, auto-threshold is fully disabled. No eval reads, no threshold changes.
+**Safe defaults:** with all env vars unset, auto-threshold is fully disabled. No eval reads, no threshold changes, no freshness checks.
+
+**Freshness gate:** `GRINDER_FILL_PROB_EVAL_MAX_AGE_HOURS` is a behavioral control — it changes which eval reports the resolver accepts. Test in recommend-only mode before production. If the eval report has no timestamp field, freshness is skipped (pass). See ADR-074a.
 
 ---
 

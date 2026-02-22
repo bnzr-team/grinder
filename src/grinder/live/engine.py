@@ -66,7 +66,7 @@ from grinder.execution.sor_metrics import get_sor_metrics
 from grinder.execution.types import ActionType, ExecutionAction
 from grinder.ml.fill_model_loader import extract_online_features
 from grinder.ml.threshold_resolver import (
-    resolve_threshold,
+    resolve_threshold_result,
     write_threshold_resolution_evidence,
 )
 from grinder.risk.drawdown_guard_v1 import DrawdownGuardV1
@@ -307,30 +307,32 @@ class LiveEngineV0:
         auto_apply = parse_bool("GRINDER_FILL_PROB_AUTO_THRESHOLD", default=False, strict=False)
         mode = "auto_apply" if auto_apply else "recommend_only"
 
-        resolution = resolve_threshold(eval_dir, model_dir)
-        if resolution is None:
+        result = resolve_threshold_result(eval_dir, model_dir)
+        if result.resolution is None:
             logger.warning(
-                "THRESHOLD_RESOLVED mode=%s recommended_bps=FAILED "
-                "configured_bps=%d effective_bps=%d reason=resolution_failed",
+                "FILL_PROB_THRESHOLD_RESOLUTION_FAILED reason_code=%s "
+                "detail=%s eval_path=%s mode=%s configured_bps=%d",
+                result.reason_code,
+                result.detail,
+                eval_dir,
                 mode,
-                self._fill_prob_min_bps,
                 self._fill_prob_min_bps,
             )
             return
 
+        resolution = result.resolution
         configured_bps = self._fill_prob_min_bps
         if auto_apply:
             self._fill_prob_min_bps = resolution.threshold_bps
         effective_bps = self._fill_prob_min_bps
 
         logger.info(
-            "THRESHOLD_RESOLVED mode=%s recommended_bps=%d "
-            "configured_bps=%d effective_bps=%d reason=%s",
+            "FILL_PROB_THRESHOLD_RESOLUTION_OK mode=%s recommended_bps=%d "
+            "configured_bps=%d effective_bps=%d provenance_ok=true",
             mode,
             resolution.threshold_bps,
             configured_bps,
             effective_bps,
-            "auto_applied" if auto_apply else "recommend_only",
         )
 
         # Set metric (visible to operator)

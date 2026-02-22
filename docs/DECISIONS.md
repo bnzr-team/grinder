@@ -4005,3 +4005,21 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
 - **Preflight integration:** `scripts/preflight_fill_prob.py` gains `--auto-threshold` flag. When passed, runs `resolve_threshold()` against the provided model + eval dirs. PASS = resolution succeeds, FAIL = resolution fails.
 - **Consequences:** Operators can safely auto-apply thresholds from eval reports with full provenance tracking. Default mode (recommend-only) is zero-risk — only logs. Auto-apply requires explicit opt-in and passes all 3 validation layers. Preflight catches mismatches before deployment.
 - **Alternatives:** "Hot-reload eval report at runtime" — rejected (adds complexity, non-deterministic behavior mid-session). "Single env var combining eval_dir + auto-apply" — rejected (violates separation of concerns, harder to audit). "Gate evidence on GRINDER_FILL_PROB_EVIDENCE" — rejected (C6 evidence is runtime BLOCK/SHADOW events, threshold resolution is boot-time config — different lifecycle).
+
+### ADR-074a: Eval report freshness check (PR-B1) — accepted
+
+- **Status:** accepted (addendum to ADR-074)
+- **Context:** Stale eval reports (e.g., from a model retrain weeks ago) could silently recommend outdated thresholds. Operator needs a way to catch this. Additionally, `resolve_threshold()` returned bare `None` on failure — callers couldn't distinguish between different failure reasons for triage.
+- **Decision:**
+  - Add `resolve_threshold_result()` returning `ResolveResult(resolution, reason_code, detail)` with stable reason codes: `ok`, `missing_field`, `bad_type`, `out_of_range`, `sha256_mismatch`, `schema_unsupported`, `model_provenance_mismatch`, `timestamp_future`, `timestamp_too_old`, `parse_error`, `env_invalid`.
+  - Old `resolve_threshold()` preserved as backward-compatible thin wrapper (returns `.resolution`).
+  - Resolver is a **pure validation function** — no logging. Callers (engine, preflight) own all logging via unified events `FILL_PROB_THRESHOLD_RESOLUTION_FAILED` / `FILL_PROB_THRESHOLD_RESOLUTION_OK`.
+  - Opt-in freshness gate via `GRINDER_FILL_PROB_EVAL_MAX_AGE_HOURS` (**behavioral control**):
+    - Unset = disabled (safe default). No freshness checks.
+    - When enabled, checks `ts_ms`, `created_at`, or `generated_at` in eval report.
+    - No timestamp in report → skip (pass). Timestamp presence is not required.
+    - Future timestamps (>5 min tolerance) → fail-open with `timestamp_future`.
+    - Stale timestamps (> max_age) → fail-open with `timestamp_too_old`.
+    - Bad env var value (non-numeric) → `env_invalid`, fail-open.
+  - This is a behavioral control: it changes which eval reports the resolver accepts. Operators should validate in recommend-only mode before enabling.
+- **Consequences:** Triage-friendly structured errors. Operators can set a staleness limit to catch forgotten eval reruns. All failures are fail-open (no crash, no threshold override).
