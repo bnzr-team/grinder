@@ -26,6 +26,7 @@ See also: [Ops Quickstart](00_OPS_QUICKSTART.md) | [Fill Tracker Triage](26_FILL
 | SOR fire drill | Router decisions (CANCEL_REPLACE/BLOCK/NOOP), metrics wiring, contract smoke | `scripts/ops_fill_triage.sh sor-fire-drill` | `.artifacts/sor_fire_drill/<ts>/` | `drill_a_*.txt` .. `drill_d_*.txt` | `summary.txt` + `sha256sums.txt` |
 | Account sync evidence | Positions + open orders snapshot, mismatch detection, metrics | `GRINDER_ACCOUNT_SYNC_EVIDENCE=1` (env-gated) | `.artifacts/account_sync/<ts>/` | `account_snapshot.json`, `positions.json`, `open_orders.json`, `mismatches.json` | `summary.txt` + `sha256sums.txt` |
 | Account sync fire drill | Mismatch rules (duplicate_key, negative_qty, orphan_order, ts_regression), metrics wiring, contract smoke | `scripts/ops_fill_triage.sh account-sync-drill` | `.artifacts/account_sync_fire_drill/<ts>/` | `drill_a_*.txt` .. `drill_e_*.txt` | `summary.txt` + `sha256sums.txt` |
+| Fill probability evidence | Why an order was blocked/shadowed by fill prob gate — features, model metadata, threshold vs probability | `GRINDER_FILL_PROB_EVIDENCE=1` (env-gated) | `.artifacts/fill_prob/` | `{ts_ms}_{verdict}_{symbol}.json` + `.sha256` | JSON evidence artifact |
 
 ---
 
@@ -236,6 +237,31 @@ Artifact root can be overridden via `GRINDER_ARTIFACT_DIR` (default: `.artifacts
   summary.txt              # Copy/paste evidence block
   sha256sums.txt           # Full 64-char sha256 of all artifact files
 ```
+
+### Fill probability evidence
+
+**Enablement**: `GRINDER_FILL_PROB_EVIDENCE=1` (env-gated, off by default)
+
+Evidence is written automatically during live engine processing when an order is BLOCKED or SHADOW-predicted by the fill probability gate.
+
+```
+.artifacts/fill_prob/
+  {ts_ms}_BLOCK_{symbol}.json     # Evidence for blocked order
+  {ts_ms}_BLOCK_{symbol}.sha256   # SHA256 sidecar
+  {ts_ms}_SHADOW_{symbol}.json    # Evidence for shadow-predicted order
+  {ts_ms}_SHADOW_{symbol}.sha256  # SHA256 sidecar
+```
+
+**JSON payload** (`fill_prob_evidence_v1`):
+- `verdict`: BLOCK or SHADOW
+- `prob_bps`: predicted fill probability (0..10000)
+- `threshold_bps`: configured minimum threshold
+- `enforce`: whether enforcement was active
+- `features`: direction, notional_bucket, entry_fill_count, holding_ms_bucket
+- `action`: symbol, side, price, qty, action_type
+- `model`: n_bins, n_train_rows, global_prior_bps (null if model unavailable)
+
+**Structured log**: `FILL_PROB_EVIDENCE` always emitted on BLOCK (not env-gated). On SHADOW, only when `GRINDER_FILL_PROB_EVIDENCE=1`.
 
 ---
 

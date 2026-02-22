@@ -3816,7 +3816,7 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
 - **Metrics:** `grinder_ml_fill_prob_bps_last` (gauge, last computed fill probability 0..10000 bps), `grinder_ml_fill_model_loaded` (gauge, 0/1). No `symbol=` label (FORBIDDEN_METRIC_LABELS contract).
 - **Shadow-only guarantee:** `prob_bps` is logged at DEBUG level and emitted as metrics. It is NEVER referenced in any SOR, execution, or decision path.
 - **Fail-open:** Missing dir, SHA256 mismatch, bad JSON → model=None, metrics default to 0, no crash.
-- **Remaining:** ~~SOR enforcement gate (PR-C5)~~ shipped (ADR-071), evidence artifacts (PR-C4b).
+- **Remaining:** ~~SOR enforcement gate (PR-C5)~~ shipped (ADR-071), ~~evidence artifacts (PR-C4b)~~ shipped (ADR-071a).
 
 ## ADR-070 -- Consecutive loss guard v1 (Track C, PR-C3)
 
@@ -3904,3 +3904,20 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
 - **Block reason:** `BlockReason.FILL_PROB_LOW` in `LiveEngineV0`.
 - **Consequences:** Orders with fill probability below 25% (2500 bps) can be blocked when enforcement is enabled. Shadow mode allows operators to observe gate behavior before enabling. Model predictions are entry-side only (direction + notional bucket, conservative defaults: fill_count=1, holding_ms=0).
 - **Alternatives:** "Gate at level filtering" — deferred to PR-C5b (more nuanced, per-level filtering). "Embed in SOR route() function" — rejected because route() is pure/stateless and shouldn't depend on ML model.
+
+## ADR-071a -- Fill probability evidence artifacts (Track C, PR-C6)
+
+- **Date:** 2026-02-22
+- **Status:** accepted
+- **Context:** PR-C5 added the fill probability gate (BLOCK/SHADOW/ALLOW). On BLOCK, operators need to diagnose *why* an order was blocked — features, model metadata, threshold vs actual probability. Without evidence, the only signal is a counter increment and a log line.
+- **Decision:** New module `src/grinder/execution/fill_prob_evidence.py`:
+  - **Evidence artifacts** (JSON + sha256 sidecar) written on BLOCK and SHADOW events.
+  - **Env-gated** via `GRINDER_FILL_PROB_EVIDENCE` (default OFF, safe-by-default).
+  - **Atomic writes** (tmp + os.replace), same pattern as `fsm_evidence.py`.
+  - **Deterministic format**: `sort_keys=True`, `indent=2`, trailing newline.
+  - **Structured logging**: `FILL_PROB_EVIDENCE` log always emitted on BLOCK (not env-gated). On SHADOW, log emitted only when evidence env is ON.
+  - **Payload contract** (`fill_prob_evidence_v1`): verdict, prob_bps, threshold_bps, enforce, features (direction, notional_bucket, entry_fill_count, holding_ms_bucket), action metadata (symbol, side, price, qty, action_type), model metadata (n_bins, n_train_rows, global_prior_bps — null if model unavailable).
+  - **File naming**: `{ts_ms}_{verdict}_{symbol}.json` in `{GRINDER_ARTIFACT_DIR}/fill_prob/`.
+  - **Fail-open**: OSError on write → log warning, return None, no crash.
+  - **No new metrics**: evidence goes to artifacts + structured logs only.
+- **Consequences:** Operators can diagnose blocked orders immediately. SHADOW artifacts enable offline analysis of near-miss events before enabling enforcement. Zero runtime cost when evidence is disabled (default).
