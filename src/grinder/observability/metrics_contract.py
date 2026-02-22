@@ -248,6 +248,10 @@ REQUIRED_METRICS_PATTERNS = [
     "# HELP grinder_router_fill_prob_enforce_allowlist_enabled",
     "# TYPE grinder_router_fill_prob_enforce_allowlist_enabled",
     "grinder_router_fill_prob_enforce_allowlist_enabled",
+    # PR-C4: Engine initialized gauge (0 = LiveEngineV0 not running, 1 = initialized)
+    "# HELP grinder_live_engine_initialized",
+    "# TYPE grinder_live_engine_initialized",
+    "grinder_live_engine_initialized",
 ]
 
 # PR6: Concrete series patterns requiring fill ingest to be running.

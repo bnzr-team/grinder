@@ -21,6 +21,7 @@ METRIC_FILL_PROB_ENFORCE = "grinder_router_fill_prob_enforce_enabled"
 METRIC_FILL_PROB_CB_TRIPS = "grinder_router_fill_prob_cb_trips_total"
 METRIC_FILL_PROB_AUTO_THRESHOLD = "grinder_router_fill_prob_auto_threshold_bps"
 METRIC_FILL_PROB_ENFORCE_ALLOWLIST = "grinder_router_fill_prob_enforce_allowlist_enabled"
+METRIC_ENGINE_INITIALIZED = "grinder_live_engine_initialized"
 
 
 @dataclass
@@ -42,6 +43,7 @@ class SorMetrics:
     fill_prob_cb_trips: int = 0
     fill_prob_auto_threshold_bps: int = 0
     fill_prob_enforce_allowlist_enabled: bool = False
+    engine_initialized: bool = False
 
     def record_decision(self, decision: str, reason: str) -> None:
         """Record a router decision.
@@ -76,6 +78,10 @@ class SorMetrics:
     def set_fill_prob_enforce_allowlist_enabled(self, enabled: bool) -> None:
         """Set whether symbol allowlist is active (PR-C2)."""
         self.fill_prob_enforce_allowlist_enabled = enabled
+
+    def set_engine_initialized(self) -> None:
+        """Mark LiveEngineV0 as initialized (PR-C4). Called once at end of __init__."""
+        self.engine_initialized = True
 
     def to_prometheus_lines(self) -> list[str]:
         """Generate Prometheus text format lines.
@@ -129,6 +135,15 @@ class SorMetrics:
                 f"# HELP {METRIC_FILL_PROB_ENFORCE_ALLOWLIST} Whether symbol allowlist is active for fill-prob enforcement (1=yes, 0=no)",
                 f"# TYPE {METRIC_FILL_PROB_ENFORCE_ALLOWLIST} gauge",
                 f"{METRIC_FILL_PROB_ENFORCE_ALLOWLIST} {1 if self.fill_prob_enforce_allowlist_enabled else 0}",
+            ]
+        )
+
+        # PR-C4: Engine initialized gauge (1 = LiveEngineV0 running, 0 = not yet)
+        lines.extend(
+            [
+                f"# HELP {METRIC_ENGINE_INITIALIZED} Whether LiveEngineV0 has been initialized (1=yes, 0=no)",
+                f"# TYPE {METRIC_ENGINE_INITIALIZED} gauge",
+                f"{METRIC_ENGINE_INITIALIZED} {1 if self.engine_initialized else 0}",
             ]
         )
 

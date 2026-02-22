@@ -526,6 +526,25 @@ class TestEngineAutoThreshold:
         assert engine._fill_prob_min_bps == 2500
         assert get_sor_metrics().fill_prob_auto_threshold_bps == 0
 
+    def test_engine_init_sets_initialized_gauge(self, monkeypatch: Any) -> None:
+        """PR-C4: LiveEngineV0.__init__ sets engine_initialized=True in SorMetrics."""
+        monkeypatch.delenv("GRINDER_FILL_PROB_EVAL_DIR", raising=False)
+
+        assert get_sor_metrics().engine_initialized is False
+
+        LiveEngineV0(
+            paper_engine=MagicMock(),
+            exchange_port=MagicMock(),
+            config=LiveEngineConfig(
+                armed=False,
+                mode=SafeMode.LIVE_TRADE,
+                kill_switch_active=False,
+                symbol_whitelist=[],
+            ),
+        )
+
+        assert get_sor_metrics().engine_initialized is True
+
 
 # --- Tests: Sanity checks (PR-B1) -------------------------------------------
 
