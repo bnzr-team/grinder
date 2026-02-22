@@ -3862,3 +3862,11 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
   - `ConsecutiveLossGuard.from_state()`: factory to restore guard from persisted state.
   - RoundtripTracker is NOT persisted (too complex — `_OpenPosition` with Decimal accumulators per (symbol, direction) pair). On restart, tracker rebuilds from new trades. In-flight roundtrips at restart time are lost. Explicit `CONSEC_LOSS_TRACKER_NOT_RESTORED` warning emitted on state load.
   - Remaining out of scope: DEGRADED action (needs FSM input channel), FillModelV0 integration, RoundtripTracker persistence.
+
+- **Update (PR-C3d): RoundtripTracker persistence shipped.**
+  - `RoundtripTracker.to_state_dict()` / `from_state_dict()`: serialize/deserialize open positions. Decimals stored as strings (no float precision loss). Position keys as `"symbol|direction"` for JSON compatibility. Strict validation in `from_state_dict()` (isinstance checks, no coercion).
+  - State file format upgraded: `consecutive_loss_state_v1` -> `consecutive_loss_state_v2`. New `tracker` field in `PersistedServiceState` envelope.
+  - Backward compatibility: v1 files accepted by `from_dict()` with `tracker=None`. Service logs `CONSEC_LOSS_TRACKER_NOT_IN_STATE` (info) and starts with fresh tracker. v2 files restore tracker open positions.
+  - Restart recovery: entry fill before restart + exit fill after restart = closed roundtrip. Guard is updated. Partial exits also survive restart.
+  - Tracker restore failure: if `from_state_dict()` raises ValueError (corrupt tracker data), service logs `CONSEC_LOSS_TRACKER_RESTORE_FAILED` and continues with fresh tracker. Guards and dedup cursor are still restored.
+  - Remaining out of scope: DEGRADED action (needs FSM input channel), FillModelV0 integration.

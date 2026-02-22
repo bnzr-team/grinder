@@ -1,12 +1,14 @@
-"""Tests for ConsecutiveLossService wiring (PR-C3b/C3c).
+"""Tests for ConsecutiveLossService wiring (PR-C3b/C3c/C3d).
 
 Covers: config loading, fill conversion, service end-to-end, metrics,
 operator override, evidence, error handling, disabled guard, sort stability,
-persistence (PR-C3c), per-symbol guards (PR-C3c), state restore (PR-C3c).
+persistence (PR-C3c), per-symbol guards (PR-C3c), state restore (PR-C3c),
+tracker persistence + restart recovery (PR-C3d).
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import time
@@ -28,6 +30,7 @@ from grinder.risk.consecutive_loss_guard import (
 )
 from grinder.risk.consecutive_loss_wiring import (
     STATE_FILE_VERSION,
+    STATE_FILE_VERSION_V1,
     ConsecutiveLossService,
     PersistedServiceState,
     binance_trade_fee,
@@ -457,6 +460,7 @@ class TestPersistence:
         last_trade_id: int = 100,
         trip_count: int = 1,
         guards: dict[str, dict[str, object]] | None = None,
+        tracker: dict[str, object] | None = None,
     ) -> PersistedServiceState:
         """Build a PersistedServiceState for tests."""
         if guards is None:
@@ -474,6 +478,7 @@ class TestPersistence:
             last_trade_id=last_trade_id,
             trip_count=trip_count,
             updated_at_ms=int(time.time() * 1000),
+            tracker=tracker,
         )
 
     def test_save_load_roundtrip(self, tmp_path: Path) -> None:
@@ -682,7 +687,7 @@ class TestServiceStateRestore:
     """W-012: Service state restoration across restarts."""
 
     def test_restore_continues_count(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-        """Load count=2, one more loss → count=3."""
+        """Load count=2, one more loss -> count=3."""
         state_path = str(tmp_path / "state.json")
         monkeypatch.setenv("GRINDER_CONSEC_LOSS_STATE_PATH", state_path)
 
@@ -700,6 +705,7 @@ class TestServiceStateRestore:
             last_trade_id=10,
             trip_count=0,
             updated_at_ms=int(time.time() * 1000),
+            tracker=None,
         )
         save_consec_loss_state(state_path, pre_state)
 
@@ -728,6 +734,7 @@ class TestServiceStateRestore:
             last_trade_id=50,
             trip_count=0,
             updated_at_ms=int(time.time() * 1000),
+            tracker=None,
         )
         save_consec_loss_state(state_path, pre_state)
 
@@ -760,6 +767,7 @@ class TestServiceStateRestore:
             last_trade_id=10,
             trip_count=3,
             updated_at_ms=int(time.time() * 1000),
+            tracker=None,
         )
         save_consec_loss_state(state_path, pre_state)
 
@@ -767,7 +775,204 @@ class TestServiceStateRestore:
         svc = ConsecutiveLossService(config)
         assert svc.trip_count == 3
 
-        # One more loss → trip (count 2→3, threshold=3)
+        # One more loss -> trip (count 2->3, threshold=3)
         trades = _make_roundtrip_trades("BTCUSDT", "100.0", "90.0", "1.0", 2000, 11)
         svc.process_trades(trades)
         assert svc.trip_count == 4  # 3 + 1
+
+
+# ---------------------------------------------------------------------------
+# W-013: Tracker persistence (PR-C3d)
+# ---------------------------------------------------------------------------
+
+
+class TestTrackerPersistence:
+    """W-013: RoundtripTracker state persisted in v2."""
+
+    def test_save_includes_tracker_state(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """save_state_if_dirty writes tracker open positions to state file."""
+        state_path = str(tmp_path / "state.json")
+        monkeypatch.setenv("GRINDER_CONSEC_LOSS_STATE_PATH", state_path)
+
+        config = ConsecutiveLossConfig(enabled=True, threshold=5)
+        svc = ConsecutiveLossService(config)
+
+        # Open a BTC long position (no close yet)
+        entry = _make_trade(trade_id=1, side="BUY", price="50000", qty="0.1", time=1000)
+        svc.process_trades([entry])
+        svc.save_state_if_dirty()
+
+        # Verify state file has tracker data
+        loaded = load_consec_loss_state(state_path)
+        assert loaded is not None
+        assert loaded.version == STATE_FILE_VERSION
+        assert loaded.tracker is not None
+        assert "BTCUSDT|long" in loaded.tracker["positions"]
+
+    def test_v1_file_loads_without_tracker(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """v1 state file (no tracker field) loads with tracker=None + warning."""
+        state_path = str(tmp_path / "state.json")
+        monkeypatch.setenv("GRINDER_CONSEC_LOSS_STATE_PATH", state_path)
+
+        # Write a v1 state file
+        v1_data = {
+            "version": STATE_FILE_VERSION_V1,
+            "guards": {
+                "BTCUSDT": {
+                    "count": 2,
+                    "tripped": False,
+                    "last_row_id": "row-1",
+                    "last_ts_ms": 1700000000,
+                },
+            },
+            "last_trade_id": 10,
+            "trip_count": 1,
+            "updated_at_ms": int(time.time() * 1000),
+        }
+        text = json.dumps(v1_data, indent=2, sort_keys=True) + "\n"
+        digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+        p = tmp_path / "state.json"
+        p.write_text(text, encoding="utf-8")
+        p.with_suffix(".sha256").write_text(f"{digest}  state.json\n", encoding="utf-8")
+
+        # Load via service -- should restore guards but not tracker
+        config = ConsecutiveLossConfig(enabled=True, threshold=5)
+        svc = ConsecutiveLossService(config)
+
+        assert svc._guards["BTCUSDT"].count == 2
+        assert svc._last_trade_id == 10
+        assert svc.trip_count == 1
+        # Tracker is fresh (not restored from v1)
+        assert len(svc.tracker.open_positions) == 0
+
+    def test_restart_entry_then_exit_closes_roundtrip(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """P0-4: entry before restart + exit after restart = closed roundtrip.
+
+        1. Service A: BUY (entry) -> save
+        2. Service B: loads state -> SELL (exit) -> roundtrip emitted -> guard updated
+        """
+        state_path = str(tmp_path / "state.json")
+        monkeypatch.setenv("GRINDER_CONSEC_LOSS_STATE_PATH", state_path)
+
+        # --- Service A: entry fill ---
+        config = ConsecutiveLossConfig(enabled=True, threshold=5)
+        svc_a = ConsecutiveLossService(config)
+
+        entry = _make_trade(trade_id=1, side="BUY", price="50000", qty="0.1", time=1000)
+        svc_a.process_trades([entry])
+
+        # Verify position is open
+        assert ("BTCUSDT", "long") in svc_a.tracker.open_positions
+        assert len(svc_a._guards) == 0  # No roundtrip closed yet
+
+        svc_a.save_state_if_dirty()
+
+        # --- Service B: loads state, receives exit fill ---
+        svc_b = ConsecutiveLossService(config)
+
+        # Verify tracker was restored
+        assert ("BTCUSDT", "long") in svc_b.tracker.open_positions
+        assert svc_b._last_trade_id == 1
+
+        # Exit fill -- closes the roundtrip (loss: 50000 -> 49000)
+        exit_fill = _make_trade(trade_id=2, side="SELL", price="49000", qty="0.1", time=2000)
+        svc_b.process_trades([exit_fill])
+
+        # Roundtrip closed -- guard updated
+        assert "BTCUSDT" in svc_b._guards
+        assert svc_b._guards["BTCUSDT"].count == 1  # One loss
+        assert len(svc_b.tracker.open_positions) == 0  # Position closed
+
+    def test_restart_preserves_partial_exits(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Partial exit before restart is preserved -- remaining exit after restart closes."""
+        state_path = str(tmp_path / "state.json")
+        monkeypatch.setenv("GRINDER_CONSEC_LOSS_STATE_PATH", state_path)
+
+        config = ConsecutiveLossConfig(enabled=True, threshold=5)
+        svc_a = ConsecutiveLossService(config)
+
+        # Entry: buy 0.2 BTC
+        entry = _make_trade(trade_id=1, side="BUY", price="50000", qty="0.2", time=1000)
+        svc_a.process_trades([entry])
+
+        # Partial exit: sell 0.1 BTC (position still open)
+        partial = _make_trade(trade_id=2, side="SELL", price="49500", qty="0.1", time=1500)
+        svc_a.process_trades([partial])
+        assert ("BTCUSDT", "long") in svc_a.tracker.open_positions
+
+        svc_a.save_state_if_dirty()
+
+        # Service B: loads state, sends remaining exit
+        svc_b = ConsecutiveLossService(config)
+        assert ("BTCUSDT", "long") in svc_b.tracker.open_positions
+
+        remaining = _make_trade(trade_id=3, side="SELL", price="49000", qty="0.1", time=2000)
+        svc_b.process_trades([remaining])
+
+        # Roundtrip closed
+        assert "BTCUSDT" in svc_b._guards
+        assert svc_b._guards["BTCUSDT"].count == 1  # Loss
+        assert len(svc_b.tracker.open_positions) == 0
+
+    def test_restart_win_after_entry(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """Entry before restart + profitable exit after restart = win (count stays 0)."""
+        state_path = str(tmp_path / "state.json")
+        monkeypatch.setenv("GRINDER_CONSEC_LOSS_STATE_PATH", state_path)
+
+        config = ConsecutiveLossConfig(enabled=True, threshold=5)
+        svc_a = ConsecutiveLossService(config)
+
+        entry = _make_trade(trade_id=1, side="BUY", price="50000", qty="0.1", time=1000)
+        svc_a.process_trades([entry])
+        svc_a.save_state_if_dirty()
+
+        svc_b = ConsecutiveLossService(config)
+        exit_fill = _make_trade(trade_id=2, side="SELL", price="51000", qty="0.1", time=2000)
+        svc_b.process_trades([exit_fill])
+
+        assert "BTCUSDT" in svc_b._guards
+        assert svc_b._guards["BTCUSDT"].count == 0  # Win resets count
+
+    def test_save_v2_then_load_has_tracker(self, tmp_path: Path) -> None:
+        """v2 state file roundtrip preserves tracker field."""
+        tracker_data = {
+            "source": "live",
+            "positions": {
+                "BTCUSDT|long": {
+                    "direction": "long",
+                    "qty": "0.1",
+                    "cost": "5000.0",
+                    "fee": "0.01",
+                    "fill_count": 1,
+                    "first_ts": 1000,
+                    "exit_qty": "0",
+                    "exit_cost": "0",
+                    "exit_fee": "0",
+                    "exit_fill_count": 0,
+                    "last_exit_ts": 0,
+                },
+            },
+        }
+        state = PersistedServiceState(
+            version=STATE_FILE_VERSION,
+            guards={},
+            last_trade_id=5,
+            trip_count=0,
+            updated_at_ms=int(time.time() * 1000),
+            tracker=tracker_data,
+        )
+        path = str(tmp_path / "state.json")
+        save_consec_loss_state(path, state)
+
+        loaded = load_consec_loss_state(path)
+        assert loaded is not None
+        assert loaded.tracker is not None
+        assert loaded.tracker["positions"]["BTCUSDT|long"]["qty"] == "0.1"
