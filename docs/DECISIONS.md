@@ -3950,3 +3950,36 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
   - `calibration_max_error_bps: int`, `calibration_well_calibrated: bool`
 - **Consequences:** Operators get an evidence-based threshold recommendation before enabling enforcement. The report artifact is auditable (sha256 sidecar). Calibration check reveals if the model needs retraining. Cost ratio is tunable for different risk appetites.
 - **Alternatives:** "Use cross-validation" — deferred (dataset too small for k-fold, in-sample eval is appropriate for v0 calibrated bin-count model where predictions are historical rates). "Integrate into training script" — rejected (eval should be independently runnable on any model+dataset pair, not coupled to training).
+
+## ADR-073 -- Controlled rollout for fill probability enforcement (Track C, PR-C8)
+
+- **Date:** 2026-02-22
+- **Status:** accepted
+- **Context:** PR-C5 shipped the fill probability gate (default OFF). PR-C6 shipped evidence artifacts. PR-C7 shipped offline evaluation with threshold calibration. Operators now need a safe, controlled path to flip enforcement ON in production. Key risks: (1) over-blocking kills revenue (false negatives = good orders blocked), (2) model staleness or miscalibration causes wrong blocks, (3) no automatic safety net if block rate spikes unexpectedly.
+- **Decision:** Three deliverables for safe rollout:
+  - **1. Block rate circuit breaker** in `src/grinder/execution/fill_prob_gate.py`:
+    - New `FillProbCircuitBreaker` class: tracks block count and total decisions in a rolling window.
+    - Config via env vars: `GRINDER_FILL_PROB_CB_WINDOW_SECONDS` (default 300 = 5 min), `GRINDER_FILL_PROB_CB_MAX_BLOCK_RATE_PCT` (default 50 = 50%).
+    - When block rate in the window exceeds max, circuit breaker trips: all subsequent checks return ALLOW (bypass) until window rolls over and rate drops below threshold.
+    - On trip: emits structured log `FILL_PROB_CIRCUIT_BREAKER_TRIPPED` with block_count, total_count, block_rate_pct, window_seconds. Counter metric `grinder_router_fill_prob_cb_trips_total`.
+    - **Safe-by-default**: circuit breaker only activates when enforcement is ON. In shadow mode, no effect.
+    - **Fail-open**: any error in circuit breaker logic → ALLOW.
+    - **No env var needed to enable**: circuit breaker is always active when enforce=True. Operators tune max_block_rate_pct (set to 100 to effectively disable).
+  - **2. Pre-flight check script** `scripts/preflight_fill_prob.py`:
+    - Validates all prerequisites before operator flips `GRINDER_FILL_MODEL_ENFORCE=1`.
+    - Checks: (a) model directory exists and loads successfully, (b) eval report exists, (c) calibration is well-calibrated (max_error < 500 bps), (d) recommended threshold from eval matches configured `GRINDER_FILL_PROB_MIN_BPS` (or warns on mismatch), (e) shadow mode has been running (evidence artifacts exist in artifact dir).
+    - Exit 0 = all checks pass, safe to enable. Exit 1 = at least one check failed.
+    - Human-readable output with PASS/FAIL per check.
+    - Pure offline — reads files only, no live connection required.
+  - **3. Rollout runbook** `docs/runbooks/05_FILL_PROB_ROLLOUT.md`:
+    - Step-by-step operator guide for enabling enforcement.
+    - Pre-flight: run preflight script. Review eval report. Confirm threshold.
+    - Enablement: set env vars, restart service, verify metrics.
+    - Monitoring: watch `grinder_router_fill_prob_blocks_total` rate, `grinder_router_fill_prob_cb_trips_total`, evidence artifacts.
+    - Rollback: set `GRINDER_FILL_MODEL_ENFORCE=0`, restart.
+    - Circuit breaker tuning: adjust `GRINDER_FILL_PROB_CB_MAX_BLOCK_RATE_PCT`.
+- **Integration:** Circuit breaker wired into `LiveEngineV0._check_fill_prob()` — called before `check_fill_prob()`. If tripped, short-circuits to ALLOW without calling the gate.
+- **Metrics:** `grinder_router_fill_prob_cb_trips_total` (counter) in SorMetrics. No new gauge (cb state is transient, not worth a gauge — structured log + counter sufficient).
+- **Alert rule:** `FillProbCircuitBreakerTripped` — fires if `grinder_router_fill_prob_cb_trips_total` increases by > 0 in 5 minutes. Severity: warning. Links to rollout runbook.
+- **Consequences:** Operators get automatic protection against runaway blocking. Pre-flight script prevents premature enablement. Runbook provides repeatable ceremony. Circuit breaker is zero-overhead in shadow mode.
+- **Alternatives:** "Percentage-based canary (enforce on N% of decisions)" — rejected (adds non-determinism, harder to reason about, complicates evidence analysis). "Symbol-based canary" — operators can already achieve this by running separate instances per symbol with different env vars. "Automatic threshold adjustment" — deferred to future PR (requires online calibration loop, too complex for v0 rollout).
