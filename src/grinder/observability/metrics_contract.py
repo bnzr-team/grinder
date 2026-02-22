@@ -240,6 +240,10 @@ REQUIRED_METRICS_PATTERNS = [
     "# HELP grinder_router_fill_prob_cb_trips_total",
     "# TYPE grinder_router_fill_prob_cb_trips_total",
     "grinder_router_fill_prob_cb_trips_total",
+    # PR-C9: Auto-threshold from eval report (gauge, 0 = disabled/failed)
+    "# HELP grinder_router_fill_prob_auto_threshold_bps",
+    "# TYPE grinder_router_fill_prob_auto_threshold_bps",
+    "grinder_router_fill_prob_auto_threshold_bps",
 ]
 
 # PR6: Concrete series patterns requiring fill ingest to be running.
