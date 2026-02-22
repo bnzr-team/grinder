@@ -3921,3 +3921,32 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
   - **Fail-open**: OSError on write → log warning, return None, no crash.
   - **No new metrics**: evidence goes to artifacts + structured logs only.
 - **Consequences:** Operators can diagnose blocked orders immediately. SHADOW artifacts enable offline analysis of near-miss events before enabling enforcement. Zero runtime cost when evidence is disabled (default).
+
+## ADR-072 -- FillModelV0 threshold calibration & offline evaluation (Track C, PR-C7)
+
+- **Date:** 2026-02-22
+- **Status:** accepted
+- **Context:** PR-C5 shipped fill probability gate with a hardcoded default threshold of 2500 bps (25%). This value was chosen conservatively but has no empirical basis. Before enabling enforcement (`GRINDER_FILL_MODEL_ENFORCE=1`), operators need evidence-based threshold selection with quantified trade-offs (false positives = good orders blocked, false negatives = bad orders allowed).
+- **Decision:** New evaluation library `src/grinder/ml/fill_model_eval.py` + CLI script `scripts/eval_fill_model_v0.py`:
+  - **Input:** fill_outcomes_v1 dataset (same as training), trained model artifact.
+  - **Evaluation:** For each roundtrip, predict fill probability using entry-side features. Compare prediction against actual outcome (win/loss/breakeven). Label: outcome == "win" → positive, else → negative (breakeven is negative).
+  - **Threshold sweep:** Evaluate every threshold from 0 to 10000 bps in steps of 100 bps. At each threshold: ALLOW if prob_bps >= threshold, BLOCK if prob_bps < threshold. Confusion matrix: TP (wins allowed), FP (non-wins allowed), TN (non-wins blocked), FN (wins blocked). Precision, recall, F1, block rate computed at each point.
+  - **Cost-weighted score formula:** `cost_score = TP + cost_ratio * TN`. Higher is better. Each TP (win correctly allowed) contributes 1. Each TN (loss correctly blocked) contributes cost_ratio. Default cost_ratio=2.0 means "blocking a loss is 2× as valuable as allowing a win". Recommended threshold = threshold with highest cost_score. Tie-break: lowest threshold (most conservative).
+  - **Calibration check:** Per observed bin (not per model bin): `actual_bps = (wins * 10000 + total // 2) // total` (same integer formula as training). `predicted_bps = model.bins[key]` (or global_prior for unseen). `error_bps = abs(predicted - actual)`. Empty bins (0 samples in evaluation data) skipped. `calibration_well_calibrated = (max_error < 500)`.
+  - **Output:** Deterministic JSON report artifact (`eval_report.json` + `manifest.json` with sha256). Report includes: threshold sweep table, recommended threshold, calibration diagnostics, dataset/model metadata, provenance sha256s.
+  - **Human-readable summary:** Printed to stdout — recommended threshold, block rate at that threshold, precision/recall, calibration status. Machine-parseable exit code (0 = success).
+  - **Pure offline:** No runtime dependencies, no env vars, no side effects beyond writing the report artifact. Uses same dataset loader pattern as `train_fill_model_v0.py`.
+  - **No new library deps:** Pure Python (integer arithmetic for confusion matrix, float only for precision/recall/F1/cost_score display). pyarrow required (already in `[dev]` and `[ml]` extras).
+- **Report schema** (`fill_model_eval_v0`):
+  - `schema_version: "fill_model_eval_v0"`
+  - `dataset_path: str`, `model_path: str` — paths used
+  - `dataset_manifest_sha256: str`, `model_manifest_sha256: str` — provenance
+  - `n_rows: int`, `n_wins: int`, `n_losses: int`, `n_breakeven: int`
+  - `global_prior_bps: int` — model's global prior
+  - `cost_ratio: float`, `sweep_step_bps: int` — parameters used
+  - `threshold_sweep: list[{threshold_bps, tp, fp, tn, fn, precision_pct, recall_pct, f1_pct, block_rate_pct, cost_score}]`
+  - `recommended_threshold_bps: int` — threshold with best cost_score (tie-break: lowest)
+  - `calibration: list[{bin_key, predicted_bps, actual_bps, n_samples, error_bps}]` — sorted lexicographic by bin_key
+  - `calibration_max_error_bps: int`, `calibration_well_calibrated: bool`
+- **Consequences:** Operators get an evidence-based threshold recommendation before enabling enforcement. The report artifact is auditable (sha256 sidecar). Calibration check reveals if the model needs retraining. Cost ratio is tunable for different risk appetites.
+- **Alternatives:** "Use cross-validation" — deferred (dataset too small for k-fold, in-sample eval is appropriate for v0 calibrated bin-count model where predictions are historical rates). "Integrate into training script" — rejected (eval should be independently runnable on any model+dataset pair, not coupled to training).
