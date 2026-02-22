@@ -3816,7 +3816,7 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
 - **Metrics:** `grinder_ml_fill_prob_bps_last` (gauge, last computed fill probability 0..10000 bps), `grinder_ml_fill_model_loaded` (gauge, 0/1). No `symbol=` label (FORBIDDEN_METRIC_LABELS contract).
 - **Shadow-only guarantee:** `prob_bps` is logged at DEBUG level and emitted as metrics. It is NEVER referenced in any SOR, execution, or decision path.
 - **Fail-open:** Missing dir, SHA256 mismatch, bad JSON → model=None, metrics default to 0, no crash.
-- **Remaining:** SOR enforcement gate (PR-C5, threshold 2500 bps), evidence artifacts (PR-C4b).
+- **Remaining:** ~~SOR enforcement gate (PR-C5)~~ shipped (ADR-071), evidence artifacts (PR-C4b).
 
 ## ADR-070 -- Consecutive loss guard v1 (Track C, PR-C3)
 
@@ -3883,3 +3883,24 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
   - Restart recovery: entry fill before restart + exit fill after restart = closed roundtrip. Guard is updated. Partial exits also survive restart.
   - Tracker restore failure: if `from_state_dict()` raises ValueError (corrupt tracker data), service logs `CONSEC_LOSS_TRACKER_RESTORE_FAILED` and continues with fresh tracker. Guards and dedup cursor are still restored.
   - Remaining out of scope: DEGRADED action (needs FSM input channel), FillModelV0 integration.
+
+## ADR-071 -- Fill probability SOR enforcement gate (Track C, PR-C5)
+
+- **Date:** 2026-02-22
+- **Status:** accepted
+- **Context:** PR-C4a shipped shadow metrics for FillModelV0 (predict + observe, no decision impact). Next step: use predictions to gate risk-increasing orders at SOR level. Low fill probability orders waste budget and increase adverse selection exposure.
+- **Decision:** New module `src/grinder/execution/fill_prob_gate.py` with pure function `check_fill_prob()`:
+  - **Inputs:** model (or None), features, threshold_bps, enforce flag.
+  - **Outputs:** `FillProbResult(verdict, prob_bps, threshold_bps, enforce)`.
+  - **Verdicts:**
+    - `ALLOW`: model=None (fail-open) OR enforce=True + prob >= threshold.
+    - `BLOCK`: enforce=True + prob < threshold.
+    - `SHADOW`: enforce=False (prediction computed, never blocks).
+  - **Integration:** Gate 7 in `LiveEngineV0._process_action()`, after FSM gate (Gate 6), before SOR routing. Only applies to PLACE/REPLACE actions. CANCEL/NOOP bypass entirely.
+  - **Env vars:** `GRINDER_FILL_MODEL_ENFORCE` (bool, default false), `GRINDER_FILL_PROB_MIN_BPS` (int, default 2500, range 0..10000). Read once at engine init.
+  - **Fail-open:** model=None → gate skipped entirely (no overhead, no log spam).
+  - **Default OFF:** `GRINDER_FILL_MODEL_ENFORCE=0` means shadow mode (SHADOW verdict, never blocks).
+- **Metrics:** `grinder_router_fill_prob_blocks_total` (counter), `grinder_router_fill_prob_enforce_enabled` (gauge 0/1). In `SorMetrics` (same singleton as SOR decision metrics). No `symbol=` label (FORBIDDEN_METRIC_LABELS contract).
+- **Block reason:** `BlockReason.FILL_PROB_LOW` in `LiveEngineV0`.
+- **Consequences:** Orders with fill probability below 25% (2500 bps) can be blocked when enforcement is enabled. Shadow mode allows operators to observe gate behavior before enabling. Model predictions are entry-side only (direction + notional bucket, conservative defaults: fill_count=1, holding_ms=0).
+- **Alternatives:** "Gate at level filtering" — deferred to PR-C5b (more nuanced, per-level filtering). "Embed in SOR route() function" — rejected because route() is pure/stateless and shouldn't depend on ML model.

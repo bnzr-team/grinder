@@ -229,6 +229,13 @@ REQUIRED_METRICS_PATTERNS = [
     "# HELP grinder_ml_fill_model_loaded",
     "# TYPE grinder_ml_fill_model_loaded",
     "grinder_ml_fill_model_loaded",
+    # PR-C5: Fill probability gate metrics (always emitted, default 0)
+    "# HELP grinder_router_fill_prob_blocks_total",
+    "# TYPE grinder_router_fill_prob_blocks_total",
+    "grinder_router_fill_prob_blocks_total",
+    "# HELP grinder_router_fill_prob_enforce_enabled",
+    "# TYPE grinder_router_fill_prob_enforce_enabled",
+    "grinder_router_fill_prob_enforce_enabled",
 ]
 
 # PR6: Concrete series patterns requiring fill ingest to be running.
