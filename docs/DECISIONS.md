@@ -3856,7 +3856,7 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
 
 - **Update (PR-C3c): Per-symbol guards + persistent state shipped.**
   - Per-symbol independent streaks: `dict[str, ConsecutiveLossGuard]` keyed by symbol. Guards are lazily created on first trade for each symbol. One symbol tripping doesn't reset others.
-  - Metrics semantics change: `grinder_risk_consecutive_losses` = max(count) across all symbol guards (label-free, FORBIDDEN_METRIC_LABELS includes `symbol=`). `grinder_risk_consecutive_loss_trips_total` = sum of all trips. Per-symbol detail goes to evidence artifacts + structured logs only.
+  - **Metrics are aggregates only (no per-symbol labels in Prometheus).** `grinder_risk_consecutive_losses` = max(count) across all symbol guards. `grinder_risk_consecutive_loss_trips_total` = sum of all trips. `FORBIDDEN_METRIC_LABELS` includes `symbol=`. **Per-symbol detail is available only in evidence artifacts and structured logs** -- not in Prometheus.
   - Persistent state: JSON + sha256 sidecar via `GRINDER_CONSEC_LOSS_STATE_PATH`. State file format `consecutive_loss_state_v1` with `PersistedServiceState` envelope. Atomic write (tmp + replace). Monotonicity guard rejects backward cursor writes.
   - `ConsecutiveLossState.from_dict()`: strict validation (isinstance checks, no coercion). Rejects negative count, string tripped, invalid types with ValueError.
   - `ConsecutiveLossGuard.from_state()`: factory to restore guard from persisted state.

@@ -311,7 +311,11 @@ def save_consec_loss_state(
                 )
                 return
             if state.last_trade_id == existing_trade_id:
-                return  # idempotent, skip
+                # In normal flow this shouldn't happen: _state_dirty is only
+                # set when _last_trade_id advances (dedup skips equal IDs).
+                # This branch is a safety net against double-save or external
+                # callers — avoids rewriting the same state with a new timestamp.
+                return
 
     text = json.dumps(state.to_dict(), indent=2, sort_keys=True) + "\n"
     digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
