@@ -38,7 +38,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from grinder.ml.threshold_resolver import resolve_threshold
+from grinder.ml.threshold_resolver import resolve_threshold_result
 
 
 def _sha256_file(path: Path) -> str:
@@ -139,17 +139,18 @@ def _check_threshold(report: dict[str, Any], configured_bps: int) -> tuple[bool,
 
 
 def _check_auto_threshold(model_dir: Path, eval_dir: Path) -> tuple[bool, str]:
-    """Check 6: auto-threshold resolution succeeds (PR-C9).
+    """Check 6: auto-threshold resolution succeeds (PR-C9, hardened PR-B1).
 
-    Validates that resolve_threshold() can extract recommended_threshold_bps
-    from the eval report with full 3-layer validation (sha256, schema, provenance).
+    Validates that resolve_threshold_result() can extract recommended_threshold_bps
+    from the eval report with full 3-layer validation (sha256, schema, provenance)
+    plus optional freshness check.
     Only run when --auto-threshold flag is passed.
     """
-    resolution = resolve_threshold(eval_dir, model_dir)
-    if resolution is None:
-        return False, "Auto-threshold resolution failed (check logs for reason)"
+    result = resolve_threshold_result(eval_dir, model_dir)
+    if result.resolution is None:
+        return False, (f"resolution=FAILED reason_code={result.reason_code} detail={result.detail}")
 
-    return True, f"Resolved: recommended_threshold_bps={resolution.threshold_bps}"
+    return True, f"Resolved: recommended_threshold_bps={result.resolution.threshold_bps}"
 
 
 def _check_evidence(evidence_dir: Path) -> tuple[bool, str]:
