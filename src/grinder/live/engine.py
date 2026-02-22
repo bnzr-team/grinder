@@ -45,6 +45,7 @@ from grinder.connectors.errors import (
 from grinder.connectors.live_connector import SafeMode
 from grinder.connectors.retries import RetryPolicy, is_retryable
 from grinder.env_parse import parse_bool, parse_enum, parse_int
+from grinder.execution.fill_prob_evidence import maybe_emit_fill_prob_evidence
 from grinder.execution.fill_prob_gate import FillProbVerdict, check_fill_prob
 from grinder.execution.smart_order_router import (
     ExchangeFilters,
@@ -635,27 +636,29 @@ class LiveEngineV0:
         # Record metrics
         sor_metrics = get_sor_metrics()
 
+        # Evidence: emit on BLOCK/SHADOW (log + optional artifact)
+        if result.verdict in (FillProbVerdict.BLOCK, FillProbVerdict.SHADOW):
+            action_meta = {
+                "action_type": action.action_type.value,
+                "symbol": action.symbol,
+                "side": action.side.value,
+                "price": str(action.price),
+                "qty": str(action.quantity),
+            }
+            maybe_emit_fill_prob_evidence(
+                result=result,
+                features=features,
+                model=self._fill_model,
+                action_meta=action_meta,
+            )
+
         if result.verdict == FillProbVerdict.BLOCK:
             sor_metrics.record_fill_prob_block()
-            logger.info(
-                "FILL_PROB_BLOCKED prob_bps=%d threshold=%d action=%s",
-                result.prob_bps,
-                result.threshold_bps,
-                action.action_type.value,
-            )
             return LiveAction(
                 action=action,
                 status=LiveActionStatus.BLOCKED,
                 block_reason=BlockReason.FILL_PROB_LOW,
                 intent=intent,
-            )
-
-        if result.verdict == FillProbVerdict.SHADOW:
-            logger.debug(
-                "FILL_PROB_SHADOW prob_bps=%d threshold=%d action=%s",
-                result.prob_bps,
-                result.threshold_bps,
-                action.action_type.value,
             )
 
         # ALLOW or SHADOW: continue normal processing
