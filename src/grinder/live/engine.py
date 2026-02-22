@@ -292,6 +292,9 @@ class LiveEngineV0:
         # Auto-threshold resolution from eval report (PR-C9, ADR-074)
         self._resolve_auto_threshold()
 
+        # PR-C4: Signal that engine init completed (observable via /metrics)
+        sor_metrics.set_engine_initialized()
+
     def _resolve_auto_threshold(self) -> None:
         """Resolve threshold from eval report at startup (PR-C9).
 

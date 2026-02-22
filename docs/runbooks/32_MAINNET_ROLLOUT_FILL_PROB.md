@@ -5,6 +5,11 @@ End-to-end operator ceremony for enabling fill probability enforcement on mainne
 **Prerequisites:** Complete Runbook 31 (shadow mode, preflight, eval report, model trained).
 **SSOT for env vars:** [Runbook 31 Environment Variables Reference](31_FILL_PROB_ROLLOUT.md#environment-variables-reference).
 
+> **Runtime precondition (PR-C4):** This ceremony assumes a runtime entrypoint that instantiates
+> `LiveEngineV0` and calls `process_snapshot()` on live data. Verify `grinder_live_engine_initialized == 1`
+> in `/metrics` before proceeding past Phase 0. If gauge is 0, the current entrypoint (`run_live.py`)
+> is an observability shell only — see [GAPS.md](../GAPS.md) for tracking.
+
 ---
 
 ## Phase 0: Preconditions (must-pass before any enforcement)
