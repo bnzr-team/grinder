@@ -16,10 +16,10 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
 
 ## Works now
 - `grinder --help` / `grinder-paper --help` / `grinder-backtest --help` -- CLI entrypoints work.
-- `python -m scripts.run_live` starts `/healthz` and `/metrics`:
+- `python3 -m scripts.run_live` starts `/healthz` and `/metrics`:
   - `/healthz`: JSON health check (status, uptime)
   - `/metrics`: Prometheus format including system metrics + gating metrics
-- `python -m scripts.run_soak` generates synthetic soak metrics JSON.
+- `python3 -m scripts.run_soak` generates synthetic soak metrics JSON.
 - **Test fixtures** (`tests/fixtures/`):
   - `sample_day/`: BTC/ETH prices, orders blocked by gating (notional too high)
     - Replay digest: `453ebd0f655e4920`
@@ -48,11 +48,11 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - Schema version: v1 (see ADR-008)
 - **End-to-end replay**:
   - CLI: `grinder replay --fixture <path> [-v] [--out <path>]`
-  - Script: `python -m scripts.run_replay --fixture <path> [-v] [--out <path>]`
-  - Determinism check: `python -m scripts.verify_replay_determinism --fixture <path>`
+  - Script: `python3 -m scripts.run_replay --fixture <path> [-v] [--out <path>]`
+  - Determinism check: `python3 -m scripts.verify_replay_determinism --fixture <path>`
   - Output format: `Replay completed. Events processed: N\nOutput digest: <16-char-hex>`
-- `python -m scripts.secret_guard` checks repo for secret leaks.
-- `python -m scripts.check_unicode` scans docs for dangerous Unicode (bidi, zero-width). See ADR-005.
+- `python3 -m scripts.secret_guard` checks repo for secret leaks.
+- `python3 -m scripts.check_unicode` scans docs for dangerous Unicode (bidi, zero-width). See ADR-005.
 - Docker build + healthcheck work (Dockerfile uses `urllib.request` instead of `curl`).
 - Grafana provisioning: `monitoring/grafana/provisioning/` contains datasource + dashboard.
 - Branch protection on `main`: all PRs require 5 green checks.
@@ -164,7 +164,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - See ADR-011 for design decisions
   - **Limitations:** no EMA-based adaptive step, no trend detection, no DRAWDOWN mode
 - **Backtest protocol v1** (`scripts/run_backtest.py`):
-  - CLI: `python -m scripts.run_backtest [--out <path>] [--quiet]`
+  - CLI: `python3 -m scripts.run_backtest [--out <path>] [--quiet]`
   - Runs paper trading on registered fixtures and generates JSON report
   - **Registered fixtures:** `sample_day`, `sample_day_allowed`, `sample_day_toxic`, `sample_day_multisymbol`
   - **Report schema v1:** `report_schema_version`, `paper_schema_version`, `fixtures_run`, `fixtures_passed`, `fixtures_failed`, `all_digests_match`, `results`, `report_digest`
@@ -241,7 +241,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - For each fixture: run paper twice, assert identical digest
     - For each fixture: assert digests match expected values in `config.json`
     - Run backtest twice, assert identical `report_digest`
-  - **CLI:** `python -m scripts.verify_determinism_suite [-v] [-q]`
+  - **CLI:** `python3 -m scripts.verify_determinism_suite [-v] [-q]`
   - **Exit codes:** 0 if all pass, 1 on any mismatch/drift
   - **CI:** `determinism_suite.yml` runs on PRs touching `src/**`, `scripts/**`, `tests/**`, `docs/DECISIONS.md`, `docs/STATE.md`
   - **Fixture discovery:** auto-discovers fixtures with `config.json` under `tests/fixtures/`
@@ -798,7 +798,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - **How to enable:**
     ```bash
     GRINDER_AUDIT_ENABLED=1 GRINDER_AUDIT_PATH=/path/to/audit.jsonl \
-        PYTHONPATH=src python -m your_app
+        PYTHONPATH=src python3 -m your_app
     ```
   - **Unit tests:** `tests/unit/test_audit.py` (33 tests)
   - See ADR-046 for design decisions
@@ -1008,10 +1008,10 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - **Usage:**
     ```bash
     # Validate against live service
-    python -m scripts.smoke_metrics_contract --url http://localhost:9090/metrics
+    python3 -m scripts.smoke_metrics_contract --url http://localhost:9090/metrics
 
     # Validate from file
-    python -m scripts.smoke_metrics_contract --file /tmp/metrics.txt -v
+    python3 -m scripts.smoke_metrics_contract --file /tmp/metrics.txt -v
     ```
 
 - **Live Smoke Harness** (`scripts/smoke_live_testnet.py`):
@@ -1040,18 +1040,18 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - **How to verify:**
     ```bash
     # Dry-run (default) -- no credentials needed
-    PYTHONPATH=src python -m scripts.smoke_live_testnet
+    PYTHONPATH=src python3 -m scripts.smoke_live_testnet
 
     # Kill-switch test -- no credentials needed
-    PYTHONPATH=src python -m scripts.smoke_live_testnet --kill-switch
+    PYTHONPATH=src python3 -m scripts.smoke_live_testnet --kill-switch
 
     # Real testnet order
     BINANCE_API_KEY=xxx BINANCE_API_SECRET=yyy ARMED=1 ALLOW_TESTNET_TRADE=1 \
-        PYTHONPATH=src python -m scripts.smoke_live_testnet --confirm TESTNET
+        PYTHONPATH=src python3 -m scripts.smoke_live_testnet --confirm TESTNET
 
     # Real mainnet order (budgeted)
     BINANCE_API_KEY=xxx BINANCE_API_SECRET=yyy ARMED=1 ALLOW_MAINNET_TRADE=1 \
-        PYTHONPATH=src python -m scripts.smoke_live_testnet --confirm MAINNET_TRADE
+        PYTHONPATH=src python3 -m scripts.smoke_live_testnet --confirm MAINNET_TRADE
     ```
   - **Runbooks:**
     - `docs/runbooks/08_SMOKE_TEST_TESTNET.md` -- testnet procedure
@@ -1081,11 +1081,11 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - **How to verify:**
     ```bash
     # Dry-run (default) -- no credentials needed
-    PYTHONPATH=src python -m scripts.smoke_futures_mainnet
+    PYTHONPATH=src python3 -m scripts.smoke_futures_mainnet
 
     # Real futures mainnet order (budgeted)
     BINANCE_API_KEY=xxx BINANCE_API_SECRET=yyy ARMED=1 ALLOW_MAINNET_TRADE=1 \
-        PYTHONPATH=src python -m scripts.smoke_futures_mainnet --confirm FUTURES_MAINNET_TRADE
+        PYTHONPATH=src python3 -m scripts.smoke_futures_mainnet --confirm FUTURES_MAINNET_TRADE
     ```
   - **Runbook:** `docs/runbooks/10_FUTURES_MAINNET_TRADE_SMOKE.md`
   - See ADR-040 for design decisions
@@ -1195,9 +1195,9 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - `soak_gate.yml`: runs on PRs touching src/scripts/tests/monitoring
     - `nightly_soak.yml`: runs daily with synthetic soak (existing)
   - **Commands:**
-    - `python -m scripts.run_soak_fixtures --output report.json` -- run soak test
-    - `python -m scripts.check_soak_gate --report report.json --thresholds monitoring/soak_thresholds.yml --mode baseline` -- PR gate (deterministic only)
-    - `python -m scripts.check_soak_thresholds --baseline report.json --overload report.json --thresholds monitoring/soak_thresholds.yml` -- nightly gate (full)
+    - `python3 -m scripts.run_soak_fixtures --output report.json` -- run soak test
+    - `python3 -m scripts.check_soak_gate --report report.json --thresholds monitoring/soak_thresholds.yml --mode baseline` -- PR gate (deterministic only)
+    - `python3 -m scripts.check_soak_thresholds --baseline report.json --overload report.json --thresholds monitoring/soak_thresholds.yml` -- nightly gate (full)
   - **Unit tests:** `tests/unit/test_soak_thresholds.py`
   - **Test fixtures:** Uses registered fixtures including `sample_day_drawdown` for kill-switch
 - **Operations v0** (`docs/runbooks/`, `docs/HOW_TO_OPERATE.md`):
@@ -1349,7 +1349,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
 | v2.0 | `docs/smart_grid/SPEC_V2_0.md` | [DONE] Implemented | M7-03..M7-09 code+ADRs+fixtures (PR #137) |
 | v3.0 | `docs/smart_grid/SPEC_V3_0.md` | [PLANNED] Planned | -- |
 
-**Verification:** `python -m scripts.verify_determinism_suite` (11/11 fixtures PASS)
+**Verification:** `python3 -m scripts.verify_determinism_suite` (11/11 fixtures PASS)
 **Current target:** `docs/smart_grid/SPEC_V1_3.md`
 **Roadmap:** `docs/smart_grid/ROADMAP.md`
 
