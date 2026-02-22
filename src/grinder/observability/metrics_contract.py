@@ -236,6 +236,10 @@ REQUIRED_METRICS_PATTERNS = [
     "# HELP grinder_router_fill_prob_enforce_enabled",
     "# TYPE grinder_router_fill_prob_enforce_enabled",
     "grinder_router_fill_prob_enforce_enabled",
+    # PR-C8: Fill probability circuit breaker trips
+    "# HELP grinder_router_fill_prob_cb_trips_total",
+    "# TYPE grinder_router_fill_prob_cb_trips_total",
+    "grinder_router_fill_prob_cb_trips_total",
 ]
 
 # PR6: Concrete series patterns requiring fill ingest to be running.

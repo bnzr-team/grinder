@@ -46,7 +46,11 @@ from grinder.connectors.live_connector import SafeMode
 from grinder.connectors.retries import RetryPolicy, is_retryable
 from grinder.env_parse import parse_bool, parse_enum, parse_int
 from grinder.execution.fill_prob_evidence import maybe_emit_fill_prob_evidence
-from grinder.execution.fill_prob_gate import FillProbVerdict, check_fill_prob
+from grinder.execution.fill_prob_gate import (
+    FillProbCircuitBreaker,
+    FillProbVerdict,
+    check_fill_prob,
+)
 from grinder.execution.smart_order_router import (
     ExchangeFilters,
     MarketSnapshot,
@@ -266,6 +270,8 @@ class LiveEngineV0:
             )
             or 2500
         )
+        # Circuit breaker: trips when block rate exceeds threshold (PR-C8, ADR-073)
+        self._fill_prob_cb = FillProbCircuitBreaker()
         # Set enforce_enabled metric at init (always emitted, default 0)
         get_sor_metrics().set_fill_prob_enforce_enabled(self._fill_prob_enforce)
 
@@ -610,6 +616,7 @@ class LiveEngineV0:
         """Check fill probability gate for a PLACE/REPLACE action.
 
         Returns LiveAction on BLOCK, None to continue normal processing.
+        Circuit breaker (PR-C8): if tripped, bypass gate → ALLOW.
 
         Args:
             action: PLACE or REPLACE action from PaperEngine.
@@ -618,6 +625,11 @@ class LiveEngineV0:
         Returns:
             LiveAction if gate blocks, None to proceed.
         """
+        # Circuit breaker: if tripped, bypass gate entirely (fail-open)
+        if self._fill_prob_cb.is_tripped():
+            get_sor_metrics().record_cb_trip()
+            return None
+
         assert action.price is not None
         assert action.quantity is not None
         assert action.side is not None
@@ -632,6 +644,9 @@ class LiveEngineV0:
             threshold_bps=self._fill_prob_min_bps,
             enforce=self._fill_prob_enforce,
         )
+
+        # Record verdict in circuit breaker (no-op in shadow mode)
+        self._fill_prob_cb.record(result.verdict, enforce=self._fill_prob_enforce)
 
         # Record metrics
         sor_metrics = get_sor_metrics()

@@ -711,3 +711,20 @@ groups:
           summary: "Account sync mismatches detected"
           description: "{{ $value | printf \"%.0f\" }} account sync mismatches in 5 minutes. Expected vs observed state diverged."
           runbook_url: "docs/runbooks/30_ACCOUNT_SYNC_FIRE_DRILL.md#accountsyncmismatchspike"
+
+  # PR-C8: Fill Probability Circuit Breaker
+  # Metric from src/grinder/execution/sor_metrics.py.
+  # No labels (counter, label-free).
+  - name: grinder_fill_prob_cb
+    rules:
+      # Warning: Circuit breaker tripped (block rate exceeded threshold)
+      - alert: FillProbCircuitBreakerTripped
+        expr: |
+          increase(grinder_router_fill_prob_cb_trips_total[5m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Fill probability circuit breaker tripped"
+          description: "Fill probability gate block rate exceeded threshold. Circuit breaker bypassed the gate to prevent over-blocking. Review model calibration and threshold."
+          runbook_url: "docs/runbooks/31_FILL_PROB_ROLLOUT.md#circuit-breaker-tuning"

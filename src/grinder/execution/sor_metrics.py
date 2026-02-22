@@ -18,6 +18,7 @@ METRIC_ROUTER_DECISION = "grinder_router_decision_total"
 METRIC_ROUTER_AMEND_SAVINGS = "grinder_router_amend_savings_total"
 METRIC_FILL_PROB_BLOCKS = "grinder_router_fill_prob_blocks_total"
 METRIC_FILL_PROB_ENFORCE = "grinder_router_fill_prob_enforce_enabled"
+METRIC_FILL_PROB_CB_TRIPS = "grinder_router_fill_prob_cb_trips_total"
 
 
 @dataclass
@@ -36,6 +37,7 @@ class SorMetrics:
     amend_savings: int = 0
     fill_prob_blocks: int = 0
     fill_prob_enforce_enabled: bool = False
+    fill_prob_cb_trips: int = 0
 
     def record_decision(self, decision: str, reason: str) -> None:
         """Record a router decision.
@@ -58,6 +60,10 @@ class SorMetrics:
     def set_fill_prob_enforce_enabled(self, enabled: bool) -> None:
         """Set fill probability enforcement state (PR-C5)."""
         self.fill_prob_enforce_enabled = enabled
+
+    def record_cb_trip(self) -> None:
+        """Record a fill probability circuit breaker trip (PR-C8)."""
+        self.fill_prob_cb_trips += 1
 
     def to_prometheus_lines(self) -> list[str]:
         """Generate Prometheus text format lines.
@@ -100,6 +106,9 @@ class SorMetrics:
                 f"# HELP {METRIC_FILL_PROB_ENFORCE} Whether fill probability enforcement is enabled (1=yes, 0=no)",
                 f"# TYPE {METRIC_FILL_PROB_ENFORCE} gauge",
                 f"{METRIC_FILL_PROB_ENFORCE} {1 if self.fill_prob_enforce_enabled else 0}",
+                f"# HELP {METRIC_FILL_PROB_CB_TRIPS} Fill probability circuit breaker trips",
+                f"# TYPE {METRIC_FILL_PROB_CB_TRIPS} counter",
+                f"{METRIC_FILL_PROB_CB_TRIPS} {self.fill_prob_cb_trips}",
             ]
         )
 
