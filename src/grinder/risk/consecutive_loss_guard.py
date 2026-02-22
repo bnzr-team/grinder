@@ -97,6 +97,34 @@ class ConsecutiveLossState:
             "last_ts_ms": self.last_ts_ms,
         }
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ConsecutiveLossState:
+        """Deserialize from dict (persistence/recovery).
+
+        Strict validation — rejects invalid types/ranges with ValueError.
+        Caller (loader) catches and returns None.
+        """
+        raw_count = data.get("count", 0)
+        raw_tripped = data.get("tripped", False)
+        raw_row_id = data.get("last_row_id")
+        raw_ts_ms = data.get("last_ts_ms")
+
+        if not isinstance(raw_count, int) or raw_count < 0:
+            raise ValueError(f"count must be int >= 0, got {raw_count!r}")
+        if not isinstance(raw_tripped, bool):
+            raise ValueError(f"tripped must be bool, got {type(raw_tripped).__name__}")
+        if raw_row_id is not None and not isinstance(raw_row_id, str):
+            raise ValueError(f"last_row_id must be str | None, got {type(raw_row_id).__name__}")
+        if raw_ts_ms is not None and (not isinstance(raw_ts_ms, int) or raw_ts_ms < 0):
+            raise ValueError(f"last_ts_ms must be int >= 0 | None, got {raw_ts_ms!r}")
+
+        return cls(
+            count=raw_count,
+            tripped=raw_tripped,
+            last_row_id=raw_row_id,
+            last_ts_ms=raw_ts_ms,
+        )
+
 
 # --- Guard -----------------------------------------------------------------
 
@@ -203,3 +231,14 @@ class ConsecutiveLossGuard:
         reset or new session start.
         """
         self._state = ConsecutiveLossState()
+
+    @classmethod
+    def from_state(
+        cls,
+        config: ConsecutiveLossConfig,
+        state: ConsecutiveLossState,
+    ) -> ConsecutiveLossGuard:
+        """Create guard with restored state (for persistence recovery)."""
+        guard = cls(config=config)
+        guard._state = state
+        return guard

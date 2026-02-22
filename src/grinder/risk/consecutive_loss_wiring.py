@@ -1,10 +1,16 @@
-"""Wire ConsecutiveLossGuard into the live reconciliation pipeline (PR-C3b).
+"""Wire ConsecutiveLossGuard into the live reconciliation pipeline (PR-C3b/C3c).
 
 Side-effect layer: env config, Binance trade conversion, evidence writing,
-operator PAUSE action, and metrics push.  The guard itself stays pure.
+operator PAUSE action, metrics push, state persistence, per-symbol routing.
+The guard itself stays pure.
 
 Integration point: ``scripts/run_live_reconcile.py`` only.
 Other entrypoints do NOT activate this guard.
+
+PR-C3c additions:
+- Per-symbol independent streak tracking (dict[symbol, ConsecutiveLossGuard])
+- Persistent state to JSON + sha256 sidecar (atomic write, monotonicity guard)
+- RoundtripTracker is NOT persisted (limitation — see ADR-070)
 
 SSOT: this module.  ADR-070 in docs/DECISIONS.md.
 """
@@ -15,6 +21,8 @@ import hashlib
 import json
 import logging
 import os
+import time
+from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
@@ -26,15 +34,18 @@ from grinder.risk.consecutive_loss_guard import (
     ConsecutiveLossAction,
     ConsecutiveLossConfig,
     ConsecutiveLossGuard,
+    ConsecutiveLossState,
 )
 
 logger = logging.getLogger(__name__)
 
 ARTIFACT_VERSION = "consecutive_loss_evidence_v1"
+STATE_FILE_VERSION = "consecutive_loss_state_v1"
 ENV_ENABLE = "GRINDER_CONSEC_LOSS_ENABLED"
 ENV_THRESHOLD = "GRINDER_CONSEC_LOSS_THRESHOLD"
 ENV_EVIDENCE = "GRINDER_CONSEC_LOSS_EVIDENCE"
 ENV_ARTIFACT_DIR = "GRINDER_ARTIFACT_DIR"
+ENV_STATE_PATH = "GRINDER_CONSEC_LOSS_STATE_PATH"
 
 
 # --- Config ----------------------------------------------------------------
@@ -158,6 +169,162 @@ def set_operator_pause(count: int, threshold: int) -> None:
     )
 
 
+# --- State persistence (PR-C3c) -------------------------------------------
+
+
+@dataclass(frozen=True)
+class PersistedServiceState:
+    """Full persisted state envelope for the consecutive loss service."""
+
+    version: str
+    guards: dict[str, dict[str, Any]]  # {symbol: ConsecutiveLossState.to_dict()}
+    last_trade_id: int
+    trip_count: int
+    updated_at_ms: int
+
+    def to_dict(self) -> dict[str, Any]:
+        """JSON-serializable dict."""
+        return {
+            "version": self.version,
+            "guards": self.guards,
+            "last_trade_id": self.last_trade_id,
+            "trip_count": self.trip_count,
+            "updated_at_ms": self.updated_at_ms,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> PersistedServiceState:
+        """Strict parsing.  Raises ValueError on invalid data."""
+        version = data.get("version", "")
+        if version != STATE_FILE_VERSION:
+            raise ValueError(f"unsupported state version: {version!r}")
+
+        raw_guards = data.get("guards", {})
+        if not isinstance(raw_guards, dict):
+            raise ValueError(f"guards must be dict, got {type(raw_guards).__name__}")
+        for sym, gdata in raw_guards.items():
+            if not isinstance(sym, str):
+                raise ValueError(f"guard key must be str, got {type(sym).__name__}")
+            if not isinstance(gdata, dict):
+                raise ValueError(
+                    f"guard value for {sym!r} must be dict, got {type(gdata).__name__}"
+                )
+
+        last_trade_id = data.get("last_trade_id", 0)
+        if not isinstance(last_trade_id, int) or last_trade_id < 0:
+            raise ValueError(f"last_trade_id must be int >= 0, got {last_trade_id!r}")
+
+        trip_count = data.get("trip_count", 0)
+        if not isinstance(trip_count, int) or trip_count < 0:
+            raise ValueError(f"trip_count must be int >= 0, got {trip_count!r}")
+
+        updated_at_ms = data.get("updated_at_ms", 0)
+        if not isinstance(updated_at_ms, int) or updated_at_ms < 0:
+            raise ValueError(f"updated_at_ms must be int >= 0, got {updated_at_ms!r}")
+
+        return cls(
+            version=version,
+            guards=raw_guards,
+            last_trade_id=last_trade_id,
+            trip_count=trip_count,
+            updated_at_ms=updated_at_ms,
+        )
+
+
+def load_consec_loss_state(path: str) -> PersistedServiceState | None:
+    """Load persisted state from disk.  Returns None if missing/corrupt."""
+    p = Path(path)
+    if not p.exists():
+        logger.info("CONSEC_LOSS_STATE_NOT_FOUND", extra={"path": path})
+        return None
+    try:
+        raw_text = p.read_text(encoding="utf-8")
+        data = json.loads(raw_text)
+        state = PersistedServiceState.from_dict(data)
+
+        # SHA256 sidecar validation
+        sha_path = p.with_suffix(".sha256")
+        if sha_path.exists():
+            expected_digest = sha_path.read_text(encoding="utf-8").split()[0]
+            actual_digest = hashlib.sha256(raw_text.encode("utf-8")).hexdigest()
+            if expected_digest != actual_digest:
+                logger.warning(
+                    "CONSEC_LOSS_STATE_SHA_MISMATCH",
+                    extra={"path": path},
+                )
+                return None
+
+        logger.info(
+            "CONSEC_LOSS_STATE_LOADED",
+            extra={
+                "path": path,
+                "symbols": list(state.guards.keys()),
+                "last_trade_id": state.last_trade_id,
+                "trip_count": state.trip_count,
+            },
+        )
+        return state
+    except (json.JSONDecodeError, KeyError, ValueError, TypeError) as exc:
+        logger.warning(
+            "CONSEC_LOSS_STATE_LOAD_ERROR",
+            extra={"path": path, "error": str(exc)},
+        )
+        return None
+
+
+def save_consec_loss_state(
+    path: str,
+    state: PersistedServiceState,
+) -> None:
+    """Persist state to disk.  Atomic write + sha256 sidecar.
+
+    Monotonicity guard (P0-2):
+    - Missing file → write
+    - Corrupt file → log CONSEC_LOSS_STATE_EXISTING_CORRUPT_OVERWRITE, write
+    - new.last_trade_id < old.last_trade_id → reject (non-monotonic)
+    - new.last_trade_id == old.last_trade_id → skip (idempotent)
+    - new.last_trade_id > old.last_trade_id → write
+    """
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+
+    if p.exists():
+        try:
+            existing_data = json.loads(p.read_text(encoding="utf-8"))
+            existing_trade_id = int(existing_data.get("last_trade_id", 0))
+        except (json.JSONDecodeError, KeyError, ValueError, TypeError):
+            logger.warning(
+                "CONSEC_LOSS_STATE_EXISTING_CORRUPT_OVERWRITE",
+                extra={"path": path},
+            )
+            existing_trade_id = -1  # force write
+
+        if existing_trade_id >= 0:
+            if state.last_trade_id < existing_trade_id:
+                logger.warning(
+                    "CONSEC_LOSS_STATE_REJECTED_NON_MONOTONIC",
+                    extra={
+                        "path": path,
+                        "existing_trade_id": existing_trade_id,
+                        "new_trade_id": state.last_trade_id,
+                    },
+                )
+                return
+            if state.last_trade_id == existing_trade_id:
+                # In normal flow this shouldn't happen: _state_dirty is only
+                # set when _last_trade_id advances (dedup skips equal IDs).
+                # This branch is a safety net against double-save or external
+                # callers — avoids rewriting the same state with a new timestamp.
+                return
+
+    text = json.dumps(state.to_dict(), indent=2, sort_keys=True) + "\n"
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+    _atomic_write_text(p, text)
+    sha_path = p.with_suffix(".sha256")
+    _atomic_write_text(sha_path, f"{digest}  {p.name}\n")
+
+
 # --- Service ---------------------------------------------------------------
 
 
@@ -165,30 +332,78 @@ class ConsecutiveLossService:
     """Wires ConsecutiveLossGuard to the live reconciliation pipeline.
 
     Processes raw Binance userTrade dicts, tracks roundtrips via
-    ``RoundtripTracker``, and updates the guard on each completed roundtrip.
+    ``RoundtripTracker``, and updates per-symbol guards on each
+    completed roundtrip.
 
     On guard trip: writes evidence, sets GRINDER_OPERATOR_OVERRIDE=PAUSE.
+
+    PR-C3c: per-symbol independent streaks + persistent state.
     """
 
     def __init__(self, config: ConsecutiveLossConfig | None = None) -> None:
-        if config is None:
-            config = load_consecutive_loss_config()
-        self.guard = ConsecutiveLossGuard(config)
+        self._config = config if config is not None else load_consecutive_loss_config()
+        self._guards: dict[str, ConsecutiveLossGuard] = {}
         self.tracker = RoundtripTracker(source="live")
         self.trip_count: int = 0
         self._last_trade_id: int = 0
+        self._state_path: str | None = os.environ.get(ENV_STATE_PATH, "").strip() or None
+        self._state_dirty: bool = False
+
+        # Load persisted state if path is configured
+        if self._state_path:
+            persisted = load_consec_loss_state(self._state_path)
+            if persisted is not None:
+                self._last_trade_id = persisted.last_trade_id
+                self.trip_count = persisted.trip_count
+                for symbol, guard_data in persisted.guards.items():
+                    guard_state = ConsecutiveLossState.from_dict(guard_data)
+                    self._guards[symbol] = ConsecutiveLossGuard.from_state(
+                        self._config,
+                        guard_state,
+                    )
+                # Staleness warning (informational)
+                age_h = (int(time.time() * 1000) - persisted.updated_at_ms) / 3_600_000
+                if age_h > 24:
+                    logger.warning(
+                        "CONSEC_LOSS_STATE_STALE",
+                        extra={
+                            "path": self._state_path,
+                            "age_hours": round(age_h, 1),
+                        },
+                    )
+                # P1-1: tracker not restored — explicit limitation
+                logger.warning(
+                    "CONSEC_LOSS_TRACKER_NOT_RESTORED",
+                    extra={
+                        "symbol_count": len(self._guards),
+                        "last_trade_id": self._last_trade_id,
+                    },
+                )
+
+    @property
+    def guard(self) -> ConsecutiveLossGuard:
+        """Backward-compat: returns first symbol guard or a default."""
+        if self._guards:
+            return next(iter(self._guards.values()))
+        return ConsecutiveLossGuard(self._config)
 
     @property
     def enabled(self) -> bool:
         """Whether the guard is enabled."""
-        return self.guard.config.enabled
+        return self._config.enabled
+
+    def _get_guard(self, symbol: str) -> ConsecutiveLossGuard:
+        """Get or create a per-symbol guard."""
+        if symbol not in self._guards:
+            self._guards[symbol] = ConsecutiveLossGuard(self._config)
+        return self._guards[symbol]
 
     def process_trades(self, raw_trades: list[dict[str, Any]]) -> None:
-        """Process raw Binance userTrade dicts through the guard.
+        """Process raw Binance userTrade dicts through per-symbol guards.
 
         * Sorts by trade ID for monotonic dedup (handles out-of-order).
         * Deduplicates via ``_last_trade_id``.
-        * Converts to Fill + fee → RoundtripTracker → guard.
+        * Converts to Fill + fee → RoundtripTracker → per-symbol guard.
         * On trip: evidence + operator PAUSE.
 
         Safe when disabled: returns immediately.
@@ -234,6 +449,7 @@ class ConsecutiveLossService:
                 # Update _last_trade_id even on parse error to avoid
                 # retrying the same broken trade forever
                 self._last_trade_id = trade_id
+                self._state_dirty = True
                 continue
 
             # Record in RoundtripTracker
@@ -241,10 +457,13 @@ class ConsecutiveLossService:
 
             # Update _last_trade_id after successful processing
             self._last_trade_id = trade_id
+            self._state_dirty = True
 
-            # If a roundtrip closed, update the guard
+            # If a roundtrip closed, update the per-symbol guard
             if outcome_row is not None:
-                tripped = self.guard.update(
+                symbol = outcome_row.symbol
+                guard = self._get_guard(symbol)
+                tripped = guard.update(
                     outcome_row.outcome,
                     row_id=outcome_row.row_id,
                     ts_ms=outcome_row.exit_ts,
@@ -255,26 +474,49 @@ class ConsecutiveLossService:
                     logger.warning(
                         "CONSECUTIVE_LOSS_GUARD_TRIPPED",
                         extra={
-                            "count": self.guard.count,
-                            "threshold": self.guard.config.threshold,
+                            "symbol": symbol,
+                            "count": guard.count,
+                            "threshold": guard.config.threshold,
                             "row_id": outcome_row.row_id,
                             "outcome": outcome_row.outcome,
                         },
                     )
                     write_trip_evidence(
-                        self.guard,
+                        guard,
                         outcome_row,
                         outcome_row.exit_ts,
-                        self.guard.config,
+                        guard.config,
                     )
                     set_operator_pause(
-                        self.guard.count,
-                        self.guard.config.threshold,
+                        guard.count,
+                        guard.config.threshold,
                     )
 
     def get_metrics_state(self) -> tuple[int, int]:
-        """Return (consecutive_loss_count, trip_count) for metrics."""
-        return self.guard.count, self.trip_count
+        """Return (max_consecutive_loss_count, total_trip_count) for metrics.
+
+        Count is max across all symbol guards (label-free).
+        """
+        if not self._guards:
+            return 0, self.trip_count
+        max_count = max(g.count for g in self._guards.values())
+        return max_count, self.trip_count
+
+    def save_state_if_dirty(self) -> None:
+        """Persist state to disk if any state changed since last save."""
+        if not self._state_path or not self._state_dirty:
+            return
+        now_ms = int(time.time() * 1000)
+        guards_dict = {symbol: guard.state.to_dict() for symbol, guard in self._guards.items()}
+        persisted = PersistedServiceState(
+            version=STATE_FILE_VERSION,
+            guards=guards_dict,
+            last_trade_id=self._last_trade_id,
+            trip_count=self.trip_count,
+            updated_at_ms=now_ms,
+        )
+        save_consec_loss_state(self._state_path, persisted)
+        self._state_dirty = False
 
 
 def _extract_trade_id_for_sort(raw: dict[str, Any]) -> int:
