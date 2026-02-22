@@ -663,3 +663,61 @@ export GRINDER_FILL_PROB_ENFORCE_SYMBOLS="BTCUSDT"
 export GRINDER_FILL_MODEL_ENFORCE=0
 # Restart instance
 ```
+
+---
+
+## Canary Decision Tree (PR-C3)
+
+### Choosing a canary strategy
+
+| Question | By Instance (C1) | By Allowlist (C2) |
+|----------|-------------------|-------------------|
+| Need parallel canary vs control comparison? | **Yes** — two processes, disjoint symbols, side-by-side metrics | No — single process, no control baseline |
+| Want process-level isolation (separate PIDs, artifact dirs)? | **Yes** — each instance has its own `GRINDER_ARTIFACT_DIR` | No — single artifact dir |
+| Have orchestrator / resources for 2 instances? | **Required** | Not needed |
+| Want simplest ops (one process, one deploy)? | No | **Yes** |
+| Want to add/remove symbols without restarting a second process? | No | **Yes** — edit `GRINDER_FILL_PROB_ENFORCE_SYMBOLS`, restart once |
+
+**Recommended rollout path:**
+
+1. **Shadow + recommend-only** (A1 ceremony): all symbols, `GRINDER_FILL_MODEL_ENFORCE=0`. Validate model predictions in logs/evidence for 24-48h.
+2. **Instance canary** (C1) on 1-2 symbols **or** skip to **allowlist** (C2) if confident from shadow data.
+3. **Promote**: expand allowlist (C2) or move more symbols to canary instance (C1).
+4. **Full enablement**: unset `GRINDER_FILL_PROB_ENFORCE_SYMBOLS` (all symbols enforced).
+5. **Optional**: enable auto-apply threshold (`GRINDER_FILL_PROB_AUTO_THRESHOLD=1`).
+
+### Migrating from instance canary to single-instance allowlist
+
+If you started with two instances (C1) and want to consolidate to one instance with allowlist (C2):
+
+1. **Verify env parity**: both instances must use the same model dir, eval dir, and threshold config.
+   ```bash
+   # Compare key env vars between canary and control
+   # GRINDER_FILL_MODEL_DIR, GRINDER_FILL_PROB_EVAL_DIR, GRINDER_FILL_PROB_MIN_BPS
+   ```
+2. **On canary instance**: set `GRINDER_FILL_PROB_ENFORCE_SYMBOLS` to the canary symbols.
+   ```bash
+   export GRINDER_FILL_PROB_ENFORCE_SYMBOLS="BTCUSDT,ETHUSDT"
+   export GRINDER_FILL_MODEL_ENFORCE=1
+   ```
+3. **Add control symbols** to the same instance's `--symbols` flag (so it trades all symbols).
+   ```bash
+   python3 -m scripts.run_live --symbols BTCUSDT,ETHUSDT,SOLUSDT,XRPUSDT --metrics-port 9090
+   ```
+4. **Stop control instance**.
+5. **Verify metrics**: `enforce_allowlist_enabled 1`, `enforce_enabled 1`, blocks only from allowlisted symbols.
+6. **Promote gradually**: expand `GRINDER_FILL_PROB_ENFORCE_SYMBOLS` until all symbols are listed, then unset it.
+
+### Failure modes and triage
+
+| Symptom | Likely cause | Action |
+|---------|-------------|--------|
+| Log: `FILL_PROB_THRESHOLD_RESOLUTION_FAILED reason_code=sha256_mismatch` | Eval report doesn't match manifest (stale or corrupted) | Rerun `eval_fill_model_v0.py`, verify `manifest.json` |
+| Log: `FILL_PROB_THRESHOLD_RESOLUTION_FAILED reason_code=model_provenance_mismatch` | Eval was run against a different model version | Retrain eval with current model, check `GRINDER_FILL_MODEL_DIR` |
+| Log: `FILL_PROB_THRESHOLD_RESOLUTION_FAILED reason_code=timestamp_too_old` | Eval report older than `GRINDER_FILL_PROB_EVAL_MAX_AGE_HOURS` | Rerun eval, or increase/unset max age |
+| Log: `FILL_PROB_THRESHOLD_RESOLUTION_FAILED reason_code=missing_field` | Eval report missing required fields | Run `preflight_fill_prob.py` to diagnose, regenerate eval |
+| Log: `FILL_PROB_CIRCUIT_BREAKER_TRIPPED` / rising `cb_trips_total` | Threshold too aggressive or market regime shift | Rollback enforce (`GRINDER_FILL_MODEL_ENFORCE=0`), check calibration, raise `GRINDER_FILL_PROB_MIN_BPS` |
+| `enforce_allowlist_enabled` = 1 but `blocks_total` stays 0 | Allowlist doesn't contain actively-traded symbols, or `enforce_enabled` = 0 | Verify `GRINDER_FILL_PROB_ENFORCE_SYMBOLS` contains correct symbols, check `enforce_enabled` gauge |
+| `blocks_total` growing faster than expected | Threshold too high or stale eval | Rollback, rerun eval, compare recommended vs configured threshold |
+| Evidence files missing under `GRINDER_ARTIFACT_DIR` | `GRINDER_ARTIFACT_DIR` not set or permissions issue | Set dir, check permissions, restart |
+| Log: `THRESHOLD_RESOLVE_SKIPPED reason=model_dir_unset` | `GRINDER_FILL_MODEL_DIR` not set but `GRINDER_FILL_PROB_EVAL_DIR` is | Set both env vars or unset eval dir |
