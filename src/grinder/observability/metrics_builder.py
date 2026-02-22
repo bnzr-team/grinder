@@ -22,6 +22,7 @@ from grinder.execution.sor_metrics import get_sor_metrics
 from grinder.gating import get_gating_metrics
 from grinder.ha.role import HARole, get_ha_state
 from grinder.live.fsm_metrics import get_fsm_metrics
+from grinder.ml.fill_model_loader import fill_model_metrics_to_prometheus_lines
 from grinder.ml.metrics import ml_metrics_to_prometheus_lines
 from grinder.observability.fill_metrics import get_fill_metrics
 from grinder.observability.latency_metrics import get_http_metrics
@@ -139,6 +140,9 @@ class MetricsBuilder:
 
         # Account sync metrics (Launch-15)
         lines.extend(self._build_account_sync_metrics())
+
+        # Fill model shadow metrics (PR-C4a)
+        lines.extend(self._build_fill_model_metrics())
 
         return "\n".join(lines)
 
@@ -293,6 +297,10 @@ class MetricsBuilder:
         """Build account sync metrics (Launch-15)."""
         account_metrics = get_account_sync_metrics()
         return account_metrics.to_prometheus_lines()
+
+    def _build_fill_model_metrics(self) -> list[str]:
+        """Build fill model shadow metrics (PR-C4a)."""
+        return fill_model_metrics_to_prometheus_lines()
 
 
 class _BuilderHolder:

@@ -222,6 +222,13 @@ REQUIRED_METRICS_PATTERNS = [
     "# HELP grinder_account_sync_pending_notional",
     "# TYPE grinder_account_sync_pending_notional",
     "grinder_account_sync_pending_notional",
+    # PR-C4a: Fill model shadow metrics (always emitted, default 0)
+    "# HELP grinder_ml_fill_prob_bps_last",
+    "# TYPE grinder_ml_fill_prob_bps_last",
+    "grinder_ml_fill_prob_bps_last",
+    "# HELP grinder_ml_fill_model_loaded",
+    "# TYPE grinder_ml_fill_model_loaded",
+    "grinder_ml_fill_model_loaded",
 ]
 
 # PR6: Concrete series patterns requiring fill ingest to be running.

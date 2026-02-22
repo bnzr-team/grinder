@@ -397,7 +397,7 @@ class TestFillHealthMetricsContract:
         lines = m.to_prometheus_lines()
         text = "\n".join(lines)
 
-        fill_patterns = [p for p in REQUIRED_METRICS_PATTERNS if "fill" in p.lower()]
+        fill_patterns = [p for p in REQUIRED_METRICS_PATTERNS if "grinder_fill" in p.lower()]
         for pattern in fill_patterns:
             assert pattern in text, f"Missing contract pattern: {pattern}"
 
@@ -423,7 +423,7 @@ class TestFillHealthMetricsContract:
         lines = m.to_prometheus_lines()
         text = "\n".join(lines)
 
-        fill_patterns = [p for p in REQUIRED_METRICS_PATTERNS if "fill" in p.lower()]
+        fill_patterns = [p for p in REQUIRED_METRICS_PATTERNS if "grinder_fill" in p.lower()]
         for pattern in fill_patterns:
             assert pattern in text, f"Missing contract pattern: {pattern}"
 

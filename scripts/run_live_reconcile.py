@@ -65,6 +65,8 @@ Environment Variables:
     GRINDER_CONSEC_LOSS_THRESHOLD Consecutive loss threshold before PAUSE (default: 5, min: 1)
     GRINDER_CONSEC_LOSS_STATE_PATH Path to persist guard state (default: None = in-memory only)
     GRINDER_CONSEC_LOSS_EVIDENCE  "1" to write evidence artifacts on trip (default: off)
+    GRINDER_FILL_MODEL_ENABLED    "1" to enable fill model shadow metrics (default: off)
+    GRINDER_FILL_MODEL_DIR        Path to model directory (manifest.json + model.json)
 
 See ADR-052 for LC-18 design decisions.
 """
@@ -103,6 +105,11 @@ from grinder.execution.fill_cursor import FillCursor, load_fill_cursor, save_fil
 from grinder.execution.fill_ingest import ingest_fills, push_tracker_to_metrics
 from grinder.execution.fill_tracker import FillTracker
 from grinder.live.reconcile_loop import ReconcileLoop, ReconcileLoopConfig
+from grinder.ml.fill_model_loader import (
+    extract_online_features,
+    load_fill_model_v0,
+    set_fill_model_metrics,
+)
 from grinder.observability.fill_metrics import get_fill_metrics
 from grinder.observability.metrics_builder import set_consecutive_loss_metrics
 from grinder.ops.artifacts import (
@@ -817,6 +824,25 @@ def main() -> int:  # noqa: PLR0915, PLR0912
     else:
         logger.info("Consecutive loss guard DISABLED")
 
+    # --- Fill model shadow setup (PR-C4a) ---
+    fill_model_enabled = os.environ.get("GRINDER_FILL_MODEL_ENABLED", "") == "1"
+    fill_model = None
+    fill_model_calc_total = 0
+    if fill_model_enabled:
+        model_dir = os.environ.get("GRINDER_FILL_MODEL_DIR", "").strip()
+        if model_dir:
+            fill_model = load_fill_model_v0(model_dir)
+        else:
+            logger.warning("FILL_MODEL_DIR_MISSING enabled=true dir=''")
+        set_fill_model_metrics(0, 0, fill_model is not None)
+        logger.info(
+            "Fill model shadow ENABLED (loaded=%s, dir=%s)",
+            fill_model is not None,
+            model_dir or "none",
+        )
+    else:
+        logger.info("Fill model shadow DISABLED")
+
     # Snapshot callback for REST polling (LC-19)
     def fetch_snapshot() -> None:
         """Fetch REST snapshot (orders + positions + fills) before each reconcile run."""
@@ -880,6 +906,31 @@ def main() -> int:  # noqa: PLR0915, PLR0912
         set_consecutive_loss_metrics(losses, trips)
         # PR-C3c: Persist guard state after every poll
         consec_loss_service.save_state_if_dirty()
+        # PR-C4a: Shadow fill model prediction (metrics only, NO decision impact)
+        if fill_model_enabled and fill_model is not None and all_trades:
+            nonlocal fill_model_calc_total
+            for trade in all_trades:
+                try:
+                    price = trade.get("price", "0")
+                    qty = trade.get("qty", "0")
+                    notional = float(price) * float(qty)
+                    side = str(trade.get("side", "BUY")).upper()
+                    direction = "long" if side == "BUY" else "short"
+                    features = extract_online_features(
+                        direction=direction,
+                        notional=notional,
+                    )
+                    prob_bps = fill_model.predict(features)
+                    fill_model_calc_total += 1
+                    set_fill_model_metrics(prob_bps, fill_model_calc_total, True)
+                    logger.debug(
+                        "FILL_MODEL_SHADOW prob_bps=%d direction=%s notional=%.2f",
+                        prob_bps,
+                        direction,
+                        notional,
+                    )
+                except (ValueError, TypeError, KeyError):
+                    logger.debug("FILL_MODEL_SHADOW_SKIP trade_id=%s", trade.get("id"))
         # PR6: save cursor on every successful poll (not just count > 0).
         # updated_at_ms gets now_ms, keeping cursor file fresh during quiet
         # markets.  This prevents FillCursorStuck false-positives.
