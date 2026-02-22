@@ -6,6 +6,7 @@ Step-by-step operator guide for enabling fill probability enforcement.
 The gate blocks orders with low predicted fill probability (below threshold).
 
 **Related:** ADR-073 in docs/DECISIONS.md.
+**End-to-end mainnet ceremony:** [Runbook 32: Mainnet Rollout Ceremony](32_MAINNET_ROLLOUT_FILL_PROB.md).
 
 ---
 
