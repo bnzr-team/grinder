@@ -3796,7 +3796,7 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
   - `created_at_utc` is manifest metadata only, not in sha256
 
 - **Out of scope (deferred):**
-  - Wiring into execution / risk / grid level filtering
+  - ~~Wiring into execution / risk / grid level filtering~~ (partially addressed: shadow wiring in PR-C4a; enforcement deferred to PR-C5)
   - Online learning or incremental updates
   - Drift detection or monitoring metrics
   - sklearn/numpy dependency (v0 is pure Python)
@@ -3804,6 +3804,19 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
 
 - **Consequences:** PR-C3 (consecutive loss limit) can consume model predictions. No new deps (pyarrow already in `[dev]`/`[ml]`; core module is pure Python). `docs/GAPS.md` fill probability row updated PLANNED → PARTIAL.
 - **Alternatives:** "Use sklearn logistic regression" — rejected for v0 because it adds heavy dependency and makes core untestable without `[ml]` extras. "Train on pnl_bps as feature" — rejected due to label leakage (pnl_bps is outcome data, not entry-side).
+
+### PR-C4a update: shadow loader + metrics (2026-02-22)
+
+- **Scope:** Wire FillModelV0 into live reconcile pipeline as shadow-only (observe, no decision impact).
+- **New module:** `src/grinder/ml/fill_model_loader.py`
+  - `load_fill_model_v0(model_dir)` → `FillModelV0 | None` (fail-open on any error)
+  - `extract_online_features()` → `FillModelFeaturesV0` from live pipeline fields (entry-side only, `entry_fill_count=1` conservative, `holding_ms=0` at planning time)
+  - Module-level shadow metrics state: `set_fill_model_metrics()` / `get_fill_model_metrics()` / `fill_model_metrics_to_prometheus_lines()`
+- **Env vars:** `GRINDER_FILL_MODEL_ENABLED` (default off), `GRINDER_FILL_MODEL_DIR` (model directory path)
+- **Metrics:** `grinder_ml_fill_prob_bps_last` (gauge, last computed fill probability 0..10000 bps), `grinder_ml_fill_model_loaded` (gauge, 0/1). No `symbol=` label (FORBIDDEN_METRIC_LABELS contract).
+- **Shadow-only guarantee:** `prob_bps` is logged at DEBUG level and emitted as metrics. It is NEVER referenced in any SOR, execution, or decision path.
+- **Fail-open:** Missing dir, SHA256 mismatch, bad JSON → model=None, metrics default to 0, no crash.
+- **Remaining:** SOR enforcement gate (PR-C5, threshold 2500 bps), evidence artifacts (PR-C4b).
 
 ## ADR-070 -- Consecutive loss guard v1 (Track C, PR-C3)
 
