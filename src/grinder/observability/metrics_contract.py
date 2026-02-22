@@ -244,6 +244,10 @@ REQUIRED_METRICS_PATTERNS = [
     "# HELP grinder_router_fill_prob_auto_threshold_bps",
     "# TYPE grinder_router_fill_prob_auto_threshold_bps",
     "grinder_router_fill_prob_auto_threshold_bps",
+    # PR-C2: Symbol allowlist for fill-prob enforcement (gauge, 0 = all symbols)
+    "# HELP grinder_router_fill_prob_enforce_allowlist_enabled",
+    "# TYPE grinder_router_fill_prob_enforce_allowlist_enabled",
+    "grinder_router_fill_prob_enforce_allowlist_enabled",
 ]
 
 # PR6: Concrete series patterns requiring fill ingest to be running.

@@ -186,6 +186,7 @@ Instead of manually setting `GRINDER_FILL_PROB_MIN_BPS`, the engine can read the
 | `GRINDER_FILL_PROB_MIN_BPS` | int | `2500` | Configured threshold. Used as fallback when auto-threshold fails or is disabled. |
 | `GRINDER_ARTIFACT_DIR` | str | _(unset)_ | If set, evidence artifact `threshold_resolution_{ts}.json` written on resolution. |
 | `GRINDER_FILL_MODEL_ENFORCE` | bool | `0` | Must be `1` for enforcement. Auto-threshold only affects threshold value, not enforcement on/off. |
+| `GRINDER_FILL_PROB_ENFORCE_SYMBOLS` | CSV | _(unset)_ | Symbol allowlist for enforcement (**behavioral control**). Unset = all symbols enforced. When set, only listed symbols go through the gate; others bypass (ALLOW). Uppercase-normalized, whitespace-trimmed. See PR-C2. |
 | `GRINDER_FILL_PROB_EVAL_MAX_AGE_HOURS` | float | _(unset)_ | Eval report freshness gate (**behavioral control**). Unset = disabled. When set, reports older than N hours cause fail-open. Only checked if report contains timestamp (`ts_ms`, `created_at`, `generated_at`). See ADR-074a. |
 
 **Safe defaults:** with all env vars unset, auto-threshold is fully disabled. No eval reads, no threshold changes, no freshness checks.
@@ -592,4 +593,73 @@ python3 -m scripts.run_live \
 # Stop canary container/process
 # Control continues handling its symbols unaffected
 # Start replacement instance for canary symbols with enforce=0
+```
+
+---
+
+## Canary by Symbol Allowlist (PR-C2)
+
+Run a **single instance** with enforcement limited to a subset of symbols via `GRINDER_FILL_PROB_ENFORCE_SYMBOLS`. Symbols not in the allowlist bypass the fill-prob gate entirely (ALLOW). This is simpler than canary-by-instance when you want per-symbol rollout without a second process.
+
+**Key principle:** unset = all symbols enforced (backward compatible). Set = only listed symbols go through the gate. Uppercase-normalized, whitespace-trimmed.
+
+**When to use:** You've validated the model in shadow mode across all symbols and want to enable enforcement on a few symbols first before rolling out to all.
+
+---
+
+### Symbol Allowlist Configuration
+
+| Env Var | Value | Effect |
+|---------|-------|--------|
+| _(unset)_ | — | All symbols enforced (default, backward compat) |
+| `""` | empty | Same as unset — all symbols enforced |
+| `"BTCUSDT"` | single | Only BTCUSDT goes through gate; others bypass |
+| `"BTCUSDT,ETHUSDT"` | CSV | BTCUSDT and ETHUSDT enforced; others bypass |
+| `"btcusdt"` | lowercase | Normalized to uppercase — matches BTCUSDT |
+
+### Launch: Single Instance with Allowlist
+
+```bash
+# Phase 1: Enforce on BTCUSDT only, shadow on all others
+export GRINDER_FILL_MODEL_ENFORCE=1
+export GRINDER_FILL_PROB_ENFORCE_SYMBOLS="BTCUSDT"
+export GRINDER_FILL_PROB_MIN_BPS=2500
+
+python3 -m scripts.run_live --symbols BTCUSDT,ETHUSDT,SOLUSDT --metrics-port 9090
+```
+
+### Monitoring
+
+```bash
+# Verify allowlist gauge is active
+curl -fsS http://localhost:9090/metrics | grep fill_prob_enforce_allowlist
+# Expected: grinder_router_fill_prob_enforce_allowlist_enabled 1
+
+# Check blocks — should only come from allowlisted symbols
+curl -fsS http://localhost:9090/metrics | grep fill_prob_blocks
+```
+
+### Promote: Add More Symbols
+
+```bash
+# Phase 2: Add ETHUSDT
+export GRINDER_FILL_PROB_ENFORCE_SYMBOLS="BTCUSDT,ETHUSDT"
+# Restart instance
+
+# Phase 3: All symbols — remove allowlist
+unset GRINDER_FILL_PROB_ENFORCE_SYMBOLS
+# Restart instance
+# Verify: grinder_router_fill_prob_enforce_allowlist_enabled 0
+```
+
+### Rollback
+
+```bash
+# Quick: shrink allowlist back to fewer symbols
+export GRINDER_FILL_PROB_ENFORCE_SYMBOLS="BTCUSDT"
+# Restart instance
+
+# Full: disable enforcement entirely
+export GRINDER_FILL_MODEL_ENFORCE=0
+# Restart instance
 ```

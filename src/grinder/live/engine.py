@@ -45,7 +45,7 @@ from grinder.connectors.errors import (
 )
 from grinder.connectors.live_connector import SafeMode
 from grinder.connectors.retries import RetryPolicy, is_retryable
-from grinder.env_parse import parse_bool, parse_enum, parse_int
+from grinder.env_parse import parse_bool, parse_csv, parse_enum, parse_int
 from grinder.execution.fill_prob_evidence import maybe_emit_fill_prob_evidence
 from grinder.execution.fill_prob_gate import (
     FillProbCircuitBreaker,
@@ -277,8 +277,17 @@ class LiveEngineV0:
         )
         # Circuit breaker: trips when block rate exceeds threshold (PR-C8, ADR-073)
         self._fill_prob_cb = FillProbCircuitBreaker()
+        # Symbol allowlist for canary rollout (PR-C2): uppercase-normalized
+        raw_allowlist = parse_csv("GRINDER_FILL_PROB_ENFORCE_SYMBOLS")
+        self._fill_prob_enforce_symbols: frozenset[str] | None = (
+            frozenset(s.upper() for s in raw_allowlist) if raw_allowlist else None
+        )
         # Set enforce_enabled metric at init (always emitted, default 0)
-        get_sor_metrics().set_fill_prob_enforce_enabled(self._fill_prob_enforce)
+        sor_metrics = get_sor_metrics()
+        sor_metrics.set_fill_prob_enforce_enabled(self._fill_prob_enforce)
+        sor_metrics.set_fill_prob_enforce_allowlist_enabled(
+            self._fill_prob_enforce_symbols is not None
+        )
 
         # Auto-threshold resolution from eval report (PR-C9, ADR-074)
         self._resolve_auto_threshold()
@@ -699,6 +708,13 @@ class LiveEngineV0:
         # Circuit breaker: if tripped, bypass gate entirely (fail-open)
         if self._fill_prob_cb.is_tripped():
             get_sor_metrics().record_cb_trip()
+            return None
+
+        # Symbol allowlist (PR-C2): if set and symbol not in list, skip gate (ALLOW)
+        if (
+            self._fill_prob_enforce_symbols is not None
+            and action.symbol.upper() not in self._fill_prob_enforce_symbols
+        ):
             return None
 
         assert action.price is not None

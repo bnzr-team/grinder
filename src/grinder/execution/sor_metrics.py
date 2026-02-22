@@ -20,6 +20,7 @@ METRIC_FILL_PROB_BLOCKS = "grinder_router_fill_prob_blocks_total"
 METRIC_FILL_PROB_ENFORCE = "grinder_router_fill_prob_enforce_enabled"
 METRIC_FILL_PROB_CB_TRIPS = "grinder_router_fill_prob_cb_trips_total"
 METRIC_FILL_PROB_AUTO_THRESHOLD = "grinder_router_fill_prob_auto_threshold_bps"
+METRIC_FILL_PROB_ENFORCE_ALLOWLIST = "grinder_router_fill_prob_enforce_allowlist_enabled"
 
 
 @dataclass
@@ -40,6 +41,7 @@ class SorMetrics:
     fill_prob_enforce_enabled: bool = False
     fill_prob_cb_trips: int = 0
     fill_prob_auto_threshold_bps: int = 0
+    fill_prob_enforce_allowlist_enabled: bool = False
 
     def record_decision(self, decision: str, reason: str) -> None:
         """Record a router decision.
@@ -70,6 +72,10 @@ class SorMetrics:
     def set_fill_prob_auto_threshold(self, threshold_bps: int) -> None:
         """Set resolved auto-threshold value (PR-C9). 0 = disabled/failed."""
         self.fill_prob_auto_threshold_bps = threshold_bps
+
+    def set_fill_prob_enforce_allowlist_enabled(self, enabled: bool) -> None:
+        """Set whether symbol allowlist is active (PR-C2)."""
+        self.fill_prob_enforce_allowlist_enabled = enabled
 
     def to_prometheus_lines(self) -> list[str]:
         """Generate Prometheus text format lines.
@@ -119,6 +125,10 @@ class SorMetrics:
                 f"# HELP {METRIC_FILL_PROB_AUTO_THRESHOLD} Resolved auto-threshold from eval report (bps, 0=disabled)",
                 f"# TYPE {METRIC_FILL_PROB_AUTO_THRESHOLD} gauge",
                 f"{METRIC_FILL_PROB_AUTO_THRESHOLD} {self.fill_prob_auto_threshold_bps}",
+                # PR-C2: Symbol allowlist gauge (1 = allowlist active, 0 = all symbols)
+                f"# HELP {METRIC_FILL_PROB_ENFORCE_ALLOWLIST} Whether symbol allowlist is active for fill-prob enforcement (1=yes, 0=no)",
+                f"# TYPE {METRIC_FILL_PROB_ENFORCE_ALLOWLIST} gauge",
+                f"{METRIC_FILL_PROB_ENFORCE_ALLOWLIST} {1 if self.fill_prob_enforce_allowlist_enabled else 0}",
             ]
         )
 

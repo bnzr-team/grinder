@@ -84,12 +84,15 @@ def _make_paper_engine(actions: list[ExecutionAction]) -> MagicMock:
 
 
 def _place_action(
-    price: str = "49000.00", qty: str = "0.01", side: OrderSide = OrderSide.BUY
+    price: str = "49000.00",
+    qty: str = "0.01",
+    side: OrderSide = OrderSide.BUY,
+    symbol: str = "BTCUSDT",
 ) -> ExecutionAction:
     """Create a PLACE action."""
     return ExecutionAction(
         action_type=ActionType.PLACE,
-        symbol="BTCUSDT",
+        symbol=symbol,
         side=side,
         price=Decimal(price),
         quantity=Decimal(qty),
@@ -417,3 +420,183 @@ class TestContract:
 
     def teardown_method(self) -> None:
         reset_sor_metrics()
+
+
+# --- Tests: Symbol allowlist (PR-C2) -----------------------------------------
+
+
+class TestSymbolAllowlist:
+    """A-001..A-008: GRINDER_FILL_PROB_ENFORCE_SYMBOLS allowlist in LiveEngineV0."""
+
+    def setup_method(self) -> None:
+        reset_sor_metrics()
+
+    def teardown_method(self) -> None:
+        reset_sor_metrics()
+
+    def test_allowlist_unset_all_symbols_enforced(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A-001: allowlist unset → all symbols go through gate (enforce blocks)."""
+        monkeypatch.delenv("GRINDER_FILL_PROB_ENFORCE_SYMBOLS", raising=False)
+        monkeypatch.setenv("GRINDER_FILL_MODEL_ENFORCE", "1")
+        monkeypatch.setenv("GRINDER_FILL_PROB_MIN_BPS", "5000")
+
+        model = _make_model(tmp_path, bins={"long|1|1|0": 1000})
+        action = _place_action(price="49000.00", qty="0.01", symbol="BTCUSDT")
+
+        port = MagicMock()
+        engine = LiveEngineV0(
+            paper_engine=_make_paper_engine([action]),
+            exchange_port=port,
+            config=_live_config(),
+            fill_model=model,
+        )
+
+        output = engine.process_snapshot(_make_snapshot())
+        assert output.live_actions[0].status == LiveActionStatus.BLOCKED
+
+    def test_allowlist_includes_symbol_enforced(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A-002: symbol in allowlist → gate applies (block on low prob)."""
+        monkeypatch.setenv("GRINDER_FILL_PROB_ENFORCE_SYMBOLS", "BTCUSDT,ETHUSDT")
+        monkeypatch.setenv("GRINDER_FILL_MODEL_ENFORCE", "1")
+        monkeypatch.setenv("GRINDER_FILL_PROB_MIN_BPS", "5000")
+
+        model = _make_model(tmp_path, bins={"long|1|1|0": 1000})
+        action = _place_action(price="49000.00", qty="0.01", symbol="BTCUSDT")
+
+        port = MagicMock()
+        engine = LiveEngineV0(
+            paper_engine=_make_paper_engine([action]),
+            exchange_port=port,
+            config=_live_config(),
+            fill_model=model,
+        )
+
+        output = engine.process_snapshot(_make_snapshot())
+        assert output.live_actions[0].status == LiveActionStatus.BLOCKED
+
+    def test_allowlist_excludes_symbol_allowed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A-003: symbol NOT in allowlist → gate bypassed (ALLOW)."""
+        monkeypatch.setenv("GRINDER_FILL_PROB_ENFORCE_SYMBOLS", "ETHUSDT")
+        monkeypatch.setenv("GRINDER_FILL_MODEL_ENFORCE", "1")
+        monkeypatch.setenv("GRINDER_FILL_PROB_MIN_BPS", "5000")
+
+        model = _make_model(tmp_path, bins={"long|1|1|0": 1000})
+        action = _place_action(price="49000.00", qty="0.01", symbol="BTCUSDT")
+
+        port = MagicMock()
+        port.place_order.return_value = "ORDER_1"
+        engine = LiveEngineV0(
+            paper_engine=_make_paper_engine([action]),
+            exchange_port=port,
+            config=_live_config(),
+            fill_model=model,
+        )
+
+        output = engine.process_snapshot(_make_snapshot())
+        assert output.live_actions[0].status == LiveActionStatus.EXECUTED
+
+    def test_allowlist_case_insensitive(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A-004: allowlist is case-insensitive (lowercase input, uppercase action)."""
+        monkeypatch.setenv("GRINDER_FILL_PROB_ENFORCE_SYMBOLS", "btcusdt")
+        monkeypatch.setenv("GRINDER_FILL_MODEL_ENFORCE", "1")
+        monkeypatch.setenv("GRINDER_FILL_PROB_MIN_BPS", "5000")
+
+        model = _make_model(tmp_path, bins={"long|1|1|0": 1000})
+        action = _place_action(price="49000.00", qty="0.01", symbol="BTCUSDT")
+
+        port = MagicMock()
+        engine = LiveEngineV0(
+            paper_engine=_make_paper_engine([action]),
+            exchange_port=port,
+            config=_live_config(),
+            fill_model=model,
+        )
+
+        output = engine.process_snapshot(_make_snapshot())
+        assert output.live_actions[0].status == LiveActionStatus.BLOCKED
+
+    def test_allowlist_empty_string_treated_as_unset(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A-005: empty string → allowlist disabled (all symbols enforced)."""
+        monkeypatch.setenv("GRINDER_FILL_PROB_ENFORCE_SYMBOLS", "")
+        monkeypatch.setenv("GRINDER_FILL_MODEL_ENFORCE", "1")
+        monkeypatch.setenv("GRINDER_FILL_PROB_MIN_BPS", "5000")
+
+        model = _make_model(tmp_path, bins={"long|1|1|0": 1000})
+        action = _place_action(price="49000.00", qty="0.01", symbol="BTCUSDT")
+
+        port = MagicMock()
+        engine = LiveEngineV0(
+            paper_engine=_make_paper_engine([action]),
+            exchange_port=port,
+            config=_live_config(),
+            fill_model=model,
+        )
+
+        output = engine.process_snapshot(_make_snapshot())
+        assert output.live_actions[0].status == LiveActionStatus.BLOCKED
+
+    def test_allowlist_whitespace_tokens_ignored(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A-006: whitespace-only tokens dropped; valid tokens kept."""
+        monkeypatch.setenv("GRINDER_FILL_PROB_ENFORCE_SYMBOLS", " , ETHUSDT , ")
+        monkeypatch.setenv("GRINDER_FILL_MODEL_ENFORCE", "1")
+        monkeypatch.setenv("GRINDER_FILL_PROB_MIN_BPS", "5000")
+
+        model = _make_model(tmp_path, bins={"long|1|1|0": 1000})
+        action = _place_action(price="49000.00", qty="0.01", symbol="BTCUSDT")
+
+        port = MagicMock()
+        port.place_order.return_value = "ORDER_1"
+        engine = LiveEngineV0(
+            paper_engine=_make_paper_engine([action]),
+            exchange_port=port,
+            config=_live_config(),
+            fill_model=model,
+        )
+
+        # BTCUSDT not in allowlist (only ETHUSDT) → gate bypassed
+        output = engine.process_snapshot(_make_snapshot())
+        assert output.live_actions[0].status == LiveActionStatus.EXECUTED
+
+    def test_allowlist_metric_enabled_when_set(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A-007: allowlist set → gauge = 1."""
+        monkeypatch.setenv("GRINDER_FILL_PROB_ENFORCE_SYMBOLS", "BTCUSDT")
+
+        LiveEngineV0(
+            paper_engine=_make_paper_engine([]),
+            exchange_port=MagicMock(),
+            config=_live_config(),
+        )
+
+        metrics = get_sor_metrics()
+        assert metrics.fill_prob_enforce_allowlist_enabled is True
+        lines = metrics.to_prometheus_lines()
+        text = "\n".join(lines)
+        assert "grinder_router_fill_prob_enforce_allowlist_enabled 1" in text
+
+    def test_allowlist_metric_disabled_when_unset(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """A-008: allowlist unset → gauge = 0."""
+        monkeypatch.delenv("GRINDER_FILL_PROB_ENFORCE_SYMBOLS", raising=False)
+
+        LiveEngineV0(
+            paper_engine=_make_paper_engine([]),
+            exchange_port=MagicMock(),
+            config=_live_config(),
+        )
+
+        metrics = get_sor_metrics()
+        assert metrics.fill_prob_enforce_allowlist_enabled is False
+        lines = metrics.to_prometheus_lines()
+        text = "\n".join(lines)
+        assert "grinder_router_fill_prob_enforce_allowlist_enabled 0" in text
