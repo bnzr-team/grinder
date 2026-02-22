@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -163,6 +164,42 @@ def _check_evidence(evidence_dir: Path) -> tuple[bool, str]:
     return True, f"Found {len(artifacts)} evidence artifact(s)"
 
 
+def _print_threshold_summary(
+    configured_bps: int,
+    eval_report: dict[str, Any] | None,
+) -> None:
+    """Print threshold summary block (always, regardless of --auto-threshold)."""
+    recommended_bps: int | str = "N/A"
+    if eval_report is not None:
+        rec = eval_report.get("recommended_threshold_bps")
+        if isinstance(rec, int):
+            recommended_bps = rec
+
+    auto_threshold_env = os.environ.get("GRINDER_FILL_PROB_AUTO_THRESHOLD", "0").strip()
+    auto_apply = auto_threshold_env in ("1", "true", "yes")
+    mode = "auto_apply" if auto_apply else "recommend_only"
+
+    if auto_apply and isinstance(recommended_bps, int):
+        effective_bps: int | str = recommended_bps
+        effective_note = ""
+    else:
+        effective_bps = configured_bps
+        if isinstance(recommended_bps, int):
+            effective_note = " (recommend-only: no override)"
+        else:
+            effective_note = " (no recommendation available)"
+
+    print()
+    print("=" * 60)
+    print("Threshold Summary")
+    print("=" * 60)
+    print(f"  configured_threshold_bps : {configured_bps}")
+    print(f"  recommended_threshold_bps: {recommended_bps}")
+    print(f"  effective_threshold_bps  : {effective_bps}{effective_note}")
+    print(f"  mode                     : {mode}")
+    print("=" * 60)
+
+
 def main() -> int:
     """Run all pre-flight checks."""
     parser = argparse.ArgumentParser(
@@ -246,6 +283,8 @@ def main() -> int:
         print(f"  [{status}] {name}: {detail}")
         if not passed:
             all_pass = False
+
+    _print_threshold_summary(args.threshold_bps, eval_report)
 
     print()
     if all_pass:
