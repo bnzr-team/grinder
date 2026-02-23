@@ -56,6 +56,7 @@ for i in range(80):
 " > "$FIXTURE"
 
 # Start trading loop with HA enabled + dead Redis (port 6390 — nothing there)
+PYTHONUNBUFFERED=1 \
 GRINDER_HA_ENABLED=true \
 GRINDER_REDIS_URL="redis://127.0.0.1:6390/0" \
 python3 -m scripts.run_trading \
