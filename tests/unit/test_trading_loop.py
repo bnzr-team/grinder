@@ -1,19 +1,26 @@
-"""Unit tests for trading loop entrypoint (PR-P2-LOOP-0).
+"""Unit tests for trading loop entrypoint.
 
 Tests cover:
 - Engine initialization gauge in read_only mode
 - validate_env() safety gates (ACK required for paper/live_trade)
+- build_engine() rehearsal knobs (--armed, --paper-size-per-level, fill model)
 - Full loop integration with FakeWsTransport fixture
 """
 
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import time as time_module
+from decimal import Decimal
+from typing import TYPE_CHECKING
 
 import pytest
-from scripts.run_trading import build_connector, validate_env
+from scripts.run_trading import build_connector, build_engine, validate_env
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 from grinder.connectors.binance_ws import BINANCE_WS_MAINNET, FakeWsTransport
 from grinder.connectors.live_connector import (
@@ -95,6 +102,63 @@ class TestBuildConnector:
         connector = build_connector(["BTCUSDT"], SafeMode.READ_ONLY, None, use_testnet=False)
         assert connector._config.use_testnet is False
         assert connector._config.ws_url == BINANCE_WS_MAINNET
+
+
+class TestBuildEngine:
+    """Test build_engine() rehearsal knobs (PR-P2-LOOP-2)."""
+
+    def setup_method(self) -> None:
+        reset_sor_metrics()
+
+    def test_default_not_armed(self) -> None:
+        """Default build_engine has armed=False."""
+        engine = build_engine(SafeMode.READ_ONLY)
+        assert engine._config.armed is False
+
+    def test_armed_flag_sets_armed(self) -> None:
+        """build_engine(armed=True) sets config.armed=True."""
+        engine = build_engine(SafeMode.PAPER, armed=True)
+        assert engine._config.armed is True
+        assert engine._config.mode == SafeMode.PAPER
+
+    def test_paper_size_per_level(self) -> None:
+        """build_engine(paper_size_per_level=...) overrides PaperEngine sizing."""
+        engine = build_engine(SafeMode.READ_ONLY, paper_size_per_level=Decimal("0.001"))
+        assert engine._paper_engine._policy.size_per_level == Decimal("0.001")
+
+    def test_default_paper_size(self) -> None:
+        """Default build_engine uses PaperEngine default size (100)."""
+        engine = build_engine(SafeMode.READ_ONLY)
+        assert engine._paper_engine._policy.size_per_level == Decimal("100")
+
+    def test_fill_model_loaded_from_env(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """build_engine loads FillModelV0 when GRINDER_FILL_MODEL_DIR is set."""
+        model_dir = tmp_path / "model"
+        model_dir.mkdir()
+        model_data = json.dumps(
+            {"bins": {"long|1|1|0": 5000}, "global_prior_bps": 5000, "n_train_rows": 10}
+        )
+        (model_dir / "model.json").write_text(model_data)
+        sha = hashlib.sha256(model_data.encode()).hexdigest()
+        (model_dir / "manifest.json").write_text(json.dumps({"sha256": {"model.json": sha}}))
+        monkeypatch.setenv("GRINDER_FILL_MODEL_DIR", str(model_dir))
+        engine = build_engine(SafeMode.READ_ONLY)
+        assert engine._fill_model is not None
+        assert len(engine._fill_model.bins) == 1
+
+    def test_fill_model_none_without_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """build_engine without GRINDER_FILL_MODEL_DIR has fill_model=None."""
+        monkeypatch.delenv("GRINDER_FILL_MODEL_DIR", raising=False)
+        engine = build_engine(SafeMode.READ_ONLY)
+        assert engine._fill_model is None
+
+    def test_fill_model_bad_dir_returns_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """build_engine with bad model dir fails open (fill_model=None)."""
+        monkeypatch.setenv("GRINDER_FILL_MODEL_DIR", "/nonexistent/path")
+        engine = build_engine(SafeMode.READ_ONLY)
+        assert engine._fill_model is None
 
 
 class TestTradingLoop:
