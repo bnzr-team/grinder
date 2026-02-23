@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 from grinder.account.metrics import get_account_sync_metrics
 from grinder.connectors.metrics import get_connector_metrics
 from grinder.data.quality_metrics import get_data_quality_metrics
+from grinder.execution.port_metrics import get_port_metrics
 from grinder.execution.sor_metrics import get_sor_metrics
 from grinder.gating import get_gating_metrics
 from grinder.ha.role import HARole, get_ha_state
@@ -159,6 +160,9 @@ class MetricsBuilder:
 
         # SOR metrics (Launch-14)
         lines.extend(self._build_sor_metrics())
+
+        # Port order attempt metrics (PR-FUT-1)
+        lines.extend(self._build_port_metrics())
 
         # Account sync metrics (Launch-15)
         lines.extend(self._build_account_sync_metrics())
@@ -334,6 +338,11 @@ class MetricsBuilder:
         """Build SmartOrderRouter metrics (Launch-14)."""
         sor_metrics = get_sor_metrics()
         return sor_metrics.to_prometheus_lines()
+
+    def _build_port_metrics(self) -> list[str]:
+        """Build execution port order attempt metrics (PR-FUT-1)."""
+        port_metrics = get_port_metrics()
+        return port_metrics.to_prometheus_lines()
 
     def _build_account_sync_metrics(self) -> list[str]:
         """Build account sync metrics (Launch-15)."""

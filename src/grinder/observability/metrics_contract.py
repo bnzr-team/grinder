@@ -259,6 +259,10 @@ REQUIRED_METRICS_PATTERNS = [
     "# HELP grinder_live_engine_initialized",
     "# TYPE grinder_live_engine_initialized",
     "grinder_live_engine_initialized",
+    # PR-FUT-1: Port order attempt metrics
+    "# HELP grinder_port_order_attempts_total",
+    "# TYPE grinder_port_order_attempts_total",
+    "grinder_port_order_attempts_total{port=",
 ]
 
 # PR6: Concrete series patterns requiring fill ingest to be running.
