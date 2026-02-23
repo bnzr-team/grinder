@@ -71,6 +71,7 @@ from grinder.execution.binance_futures_port import (
     BinanceFuturesPortConfig,
 )
 from grinder.execution.port import ExchangePort, NoOpExchangePort
+from grinder.gating.metrics import get_gating_metrics
 from grinder.ha.leader import LeaderElector, LeaderElectorConfig
 from grinder.ha.role import HARole, get_ha_state
 from grinder.live.config import LiveEngineConfig
@@ -554,6 +555,9 @@ def main() -> None:
     )
     print("  Engine initialized: grinder_live_engine_initialized=1")
 
+    # Pre-populate zero-value gating metrics for Prometheus visibility
+    get_gating_metrics().initialize_zero_series()
+
     connector = build_connector(symbols, mode, args.fixture, use_testnet=use_testnet)
 
     # Async loop with signal handling
@@ -574,6 +578,7 @@ def main() -> None:
         print(f"GRINDER TRADING LOOP FATAL: {exc}")
         exit_code = 2
     finally:
+        loop.run_until_complete(loop.shutdown_asyncgens())
         loop.close()
         if elector is not None:
             print("  Stopping LeaderElector...")

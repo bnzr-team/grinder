@@ -13,7 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from grinder.gating.types import GateName, GateReason  # noqa: TC001 - used at runtime (.value)
+from grinder.gating.types import GateName, GateReason
 
 # Metric name constants (stable contracts)
 METRIC_GATING_ALLOWED = "grinder_gating_allowed_total"
@@ -107,6 +107,17 @@ class GatingMetrics:
             )
 
         return lines
+
+    def initialize_zero_series(self) -> None:
+        """Pre-populate zero-value series for all known gates.
+
+        Ensures Prometheus scrapes show 0-value series immediately,
+        before any gating decisions are made. Idempotent: does not
+        reset already-incremented counters.
+        """
+        for gate in GateName:
+            if gate.value not in self.allowed_total:
+                self.allowed_total[gate.value] = 0
 
     def reset(self) -> None:
         """Reset all metrics."""
