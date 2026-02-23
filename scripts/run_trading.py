@@ -512,6 +512,16 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+async def _drain_pending_tasks() -> None:
+    """Cancel and await all pending tasks (safety net for clean shutdown)."""
+    current = asyncio.current_task()
+    pending = [t for t in asyncio.all_tasks() if t is not current and not t.done()]
+    for t in pending:
+        t.cancel()
+    if pending:
+        await asyncio.gather(*pending, return_exceptions=True)
+
+
 def main() -> None:
     global _ha_enabled  # noqa: PLW0603
 
@@ -583,6 +593,7 @@ def main() -> None:
         exit_code = 2
     finally:
         loop.run_until_complete(loop.shutdown_asyncgens())
+        loop.run_until_complete(_drain_pending_tasks())
         loop.close()
         if elector is not None:
             print("  Stopping LeaderElector...")
