@@ -13,9 +13,9 @@ import json
 import time as time_module
 
 import pytest
-from scripts.run_trading import validate_env
+from scripts.run_trading import build_connector, validate_env
 
-from grinder.connectors.binance_ws import FakeWsTransport
+from grinder.connectors.binance_ws import BINANCE_WS_MAINNET, FakeWsTransport
 from grinder.connectors.live_connector import (
     LiveConnectorConfig,
     LiveConnectorV0,
@@ -79,6 +79,22 @@ class TestValidateEnv:
         monkeypatch.delenv("GRINDER_TRADING_LOOP_ACK", raising=False)
         mode = validate_env()
         assert mode == SafeMode.READ_ONLY
+
+
+class TestBuildConnector:
+    """Test build_connector() network selection."""
+
+    def test_default_uses_testnet(self) -> None:
+        """Default build_connector uses testnet WS URL."""
+        connector = build_connector(["BTCUSDT"], SafeMode.READ_ONLY, None)
+        assert connector._config.use_testnet is True
+        assert connector._config.ws_url == "wss://testnet.binance.vision/ws"
+
+    def test_mainnet_flag_sets_mainnet_url(self) -> None:
+        """build_connector(use_testnet=False) uses mainnet WS URL."""
+        connector = build_connector(["BTCUSDT"], SafeMode.READ_ONLY, None, use_testnet=False)
+        assert connector._config.use_testnet is False
+        assert connector._config.ws_url == BINANCE_WS_MAINNET
 
 
 class TestTradingLoop:

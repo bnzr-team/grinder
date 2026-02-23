@@ -2,7 +2,7 @@
 """Run GRINDER trading loop.
 
 Usage:
-    python -m scripts.run_trading --symbols BTCUSDT,ETHUSDT --metrics-port 9090
+    python -m scripts.run_trading --symbols BTCUSDT,ETHUSDT --metrics-port 9090 [--mainnet]
 
 Env vars:
     GRINDER_TRADING_MODE        read_only (default) | paper | live_trade
@@ -33,7 +33,7 @@ import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
-from grinder.connectors.binance_ws import FakeWsTransport
+from grinder.connectors.binance_ws import BINANCE_WS_MAINNET, FakeWsTransport
 from grinder.connectors.live_connector import (
     LiveConnectorConfig,
     LiveConnectorV0,
@@ -152,6 +152,8 @@ def build_connector(
     symbols: list[str],
     mode: SafeMode,
     fixture_path: str | None,
+    *,
+    use_testnet: bool = True,
 ) -> LiveConnectorV0:
     """Build LiveConnectorV0 with optional fixture transport.
 
@@ -159,6 +161,7 @@ def build_connector(
         symbols: List of trading symbols.
         mode: SafeMode for the connector.
         fixture_path: Optional path to JSONL fixture file.
+        use_testnet: Use testnet WS endpoint (default True for safety).
 
     Returns:
         Configured LiveConnectorV0 instance.
@@ -169,10 +172,14 @@ def build_connector(
             messages = [line.strip() for line in f if line.strip()]
         ws_transport = FakeWsTransport(messages=messages, delay_ms=100)
 
+    ws_url = BINANCE_WS_MAINNET if not use_testnet else "wss://testnet.binance.vision/ws"
+
     config = LiveConnectorConfig(
         mode=mode,
         symbols=symbols,
         ws_transport=ws_transport,
+        ws_url=ws_url,
+        use_testnet=use_testnet,
     )
     return LiveConnectorV0(config=config)
 
@@ -250,15 +257,24 @@ def main() -> None:
         default=None,
         help="Path to JSONL fixture (one bookTicker JSON per line)",
     )
+    parser.add_argument(
+        "--mainnet",
+        action="store_true",
+        default=False,
+        help="Use mainnet WS endpoint instead of testnet (safe for read_only)",
+    )
     args = parser.parse_args()
 
     mode = validate_env()
     symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
 
+    use_testnet = not args.mainnet
+
     print("GRINDER TRADING LOOP starting...")
     print(f"  Mode: {mode.value}")
     print(f"  Symbols: {symbols}")
     print(f"  Metrics port: {args.metrics_port}")
+    print(f"  Network: {'mainnet' if args.mainnet else 'testnet'}")
     if args.fixture:
         print(f"  Fixture: {args.fixture}")
 
@@ -268,7 +284,7 @@ def main() -> None:
     engine = build_engine(mode)
     print("  Engine initialized: grinder_live_engine_initialized=1")
 
-    connector = build_connector(symbols, mode, args.fixture)
+    connector = build_connector(symbols, mode, args.fixture, use_testnet=use_testnet)
 
     # Async loop with signal handling
     loop = asyncio.new_event_loop()
