@@ -769,3 +769,14 @@ groups:
           summary: "Fill probability gate blocking orders"
           description: "{{ $value | printf \"%.0f\" }} fill-prob blocks in 5 minutes. Model may be rejecting orders. Check threshold calibration."
           runbook_url: "docs/runbooks/31_FILL_PROB_ROLLOUT.md#circuit-breaker-tuning"
+
+      # Critical: Fill probability gate blocking heavily (escalation from FillProbBlocksSpike)
+      - alert: FillProbBlocksHigh
+        expr: increase(grinder_router_fill_prob_blocks_total[5m]) >= 10
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Fill probability gate blocking heavily"
+          description: "{{ $value | printf \"%.0f\" }} fill-prob blocks in 5 minutes (>=10). Model is cutting order flow significantly. Immediate review needed."
+          runbook_url: "docs/runbooks/31_FILL_PROB_ROLLOUT.md#circuit-breaker-tuning"
