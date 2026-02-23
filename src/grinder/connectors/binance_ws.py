@@ -177,11 +177,9 @@ class FakeWsTransport(WsTransport):
             msg = "Simulated WS error"
             raise ConnectorTransientError(msg)
 
-        # Check if messages exhausted
+        # Check if messages exhausted — signal end-of-data cleanly
         if self._index >= len(self._messages):
-            # Block forever (simulates waiting for next message)
-            await asyncio.sleep(3600)
-            msg = "No more messages"
+            msg = "Fixture messages exhausted"
             raise ConnectorClosedError(msg)
 
         # Simulate delay
