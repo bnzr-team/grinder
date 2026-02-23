@@ -26,8 +26,10 @@ from grinder.observability.metrics_builder import (
     get_consecutive_loss_metrics,
     get_risk_metrics_state,
     reset_consecutive_loss_metrics,
+    reset_ready_fn,
     reset_risk_metrics_state,
     set_consecutive_loss_metrics,
+    set_ready_fn,
     set_risk_metrics_state,
 )
 from grinder.observability.metrics_contract import (
@@ -52,9 +54,11 @@ __all__ = [
     "get_risk_metrics_state",
     "get_start_time",
     "reset_consecutive_loss_metrics",
+    "reset_ready_fn",
     "reset_risk_metrics_state",
     "reset_start_time",
     "set_consecutive_loss_metrics",
+    "set_ready_fn",
     "set_risk_metrics_state",
     "set_start_time",
 ]

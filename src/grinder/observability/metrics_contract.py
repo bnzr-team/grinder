@@ -23,6 +23,13 @@ REQUIRED_METRICS_PATTERNS = [
     "# HELP grinder_uptime_seconds",
     "# TYPE grinder_uptime_seconds",
     "grinder_uptime_seconds",
+    # Readyz gauges (PR-ALERTS-0)
+    "# HELP grinder_readyz_callback_registered",
+    "# TYPE grinder_readyz_callback_registered",
+    "grinder_readyz_callback_registered",
+    "# HELP grinder_readyz_ready",
+    "# TYPE grinder_readyz_ready",
+    "grinder_readyz_ready",
     # Gating metrics
     "# HELP grinder_gating_allowed_total",
     "# TYPE grinder_gating_allowed_total",

@@ -144,6 +144,36 @@ groups:
           summary: "GRINDER recently restarted"
           description: "GRINDER uptime is {{ $value | printf \"%.0f\" }} seconds."
 
+      # Critical: Trading engine not initialized (process alive but loop didn't start)
+      - alert: EngineInitDown
+        expr: |
+          grinder_live_engine_initialized == 0
+          and
+          grinder_up == 1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Trading engine not initialized for 5+ minutes"
+          description: "grinder_live_engine_initialized is 0 while process is up. Engine __init__ may have failed or loop is stuck before init."
+          runbook_url: "docs/runbooks/02_HEALTH_TRIAGE.md"
+
+      # Warning: Trading loop not ready (HA standby or loop not started)
+      - alert: ReadyzNotReady
+        expr: |
+          grinder_readyz_callback_registered == 1
+          and
+          grinder_readyz_ready == 0
+          and
+          grinder_up == 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Trading loop not ready for 5+ minutes"
+          description: "readyz returning not-ready while process is up. Check HA role (standby/unknown) or whether loop failed to start."
+          runbook_url: "docs/runbooks/02_HEALTH_TRIAGE.md"
+
   - name: grinder_risk
     rules:
       # Critical: Kill-switch has been triggered
@@ -727,4 +757,15 @@ groups:
         annotations:
           summary: "Fill probability circuit breaker tripped"
           description: "Fill probability gate block rate exceeded threshold. Circuit breaker bypassed the gate to prevent over-blocking. Review model calibration and threshold."
+          runbook_url: "docs/runbooks/31_FILL_PROB_ROLLOUT.md#circuit-breaker-tuning"
+
+      # Warning: Fill probability gate blocking orders (early warning before CB trips)
+      - alert: FillProbBlocksSpike
+        expr: increase(grinder_router_fill_prob_blocks_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Fill probability gate blocking orders"
+          description: "{{ $value | printf \"%.0f\" }} fill-prob blocks in 5 minutes. Model may be rejecting orders. Check threshold calibration."
           runbook_url: "docs/runbooks/31_FILL_PROB_ROLLOUT.md#circuit-breaker-tuning"
