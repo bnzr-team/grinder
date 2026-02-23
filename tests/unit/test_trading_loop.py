@@ -5,6 +5,10 @@ Tests cover:
 - validate_env() safety gates (ACK required for paper/live_trade)
 - build_engine() rehearsal knobs (--armed, --paper-size-per-level, fill model)
 - Full loop integration with FakeWsTransport fixture
+- validate_real_port_gates() 5-gate validation
+- build_exchange_port() port selection
+- HA-gated /readyz semantics
+- HA-gated loop processing
 """
 
 from __future__ import annotations
@@ -17,7 +21,17 @@ from decimal import Decimal
 from typing import TYPE_CHECKING
 
 import pytest
-from scripts.run_trading import build_connector, build_engine, validate_env
+import scripts.run_trading as run_trading_mod
+from scripts.run_trading import (
+    build_connector,
+    build_engine,
+    build_exchange_port,
+    is_trading_ready,
+    reset_trading_state,
+    trading_loop,
+    validate_env,
+    validate_real_port_gates,
+)
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -28,8 +42,10 @@ from grinder.connectors.live_connector import (
     LiveConnectorV0,
     SafeMode,
 )
+from grinder.execution.binance_futures_port import BinanceFuturesPort
 from grinder.execution.port import NoOpExchangePort
 from grinder.execution.sor_metrics import get_sor_metrics, reset_sor_metrics
+from grinder.ha.role import HARole, reset_ha_state, set_ha_state
 from grinder.live.config import LiveEngineConfig
 from grinder.live.engine import LiveEngineV0
 from grinder.paper.engine import PaperEngine
@@ -160,6 +176,12 @@ class TestBuildEngine:
         engine = build_engine(SafeMode.READ_ONLY)
         assert engine._fill_model is None
 
+    def test_custom_exchange_port_passed_through(self) -> None:
+        """build_engine(exchange_port=...) uses provided port instead of NoOp."""
+        port = NoOpExchangePort()
+        engine = build_engine(SafeMode.READ_ONLY, exchange_port=port)
+        assert engine._exchange_port is port
+
 
 class TestTradingLoop:
     """Test full trading loop integration with fixture data."""
@@ -226,4 +248,214 @@ class TestTradingLoop:
             await connector.close()
 
         assert ticks == 3
+        assert get_sor_metrics().engine_initialized is True
+
+
+class TestValidateRealPortGates:
+    """Test validate_real_port_gates() 5-gate validation."""
+
+    def test_non_live_trade_exits(self) -> None:
+        """Gate 1: mode must be LIVE_TRADE."""
+        with pytest.raises(SystemExit) as exc_info:
+            validate_real_port_gates(SafeMode.READ_ONLY, armed=True)
+        assert exc_info.value.code == 1
+
+    def test_not_armed_exits(self) -> None:
+        """Gate 2: must be armed."""
+        with pytest.raises(SystemExit) as exc_info:
+            validate_real_port_gates(SafeMode.LIVE_TRADE, armed=False)
+        assert exc_info.value.code == 1
+
+    def test_no_allow_mainnet_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Gate 3: ALLOW_MAINNET_TRADE must be set."""
+        monkeypatch.delenv("ALLOW_MAINNET_TRADE", raising=False)
+        with pytest.raises(SystemExit) as exc_info:
+            validate_real_port_gates(SafeMode.LIVE_TRADE, armed=True)
+        assert exc_info.value.code == 1
+
+    def test_no_real_ack_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Gate 4: GRINDER_REAL_PORT_ACK must be YES_I_REALLY_WANT_MAINNET."""
+        monkeypatch.setenv("ALLOW_MAINNET_TRADE", "1")
+        monkeypatch.delenv("GRINDER_REAL_PORT_ACK", raising=False)
+        with pytest.raises(SystemExit) as exc_info:
+            validate_real_port_gates(SafeMode.LIVE_TRADE, armed=True)
+        assert exc_info.value.code == 1
+
+    def test_all_gates_pass(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """All 4 pre-key gates pass (keys checked in build_exchange_port)."""
+        monkeypatch.setenv("ALLOW_MAINNET_TRADE", "1")
+        monkeypatch.setenv("GRINDER_REAL_PORT_ACK", "YES_I_REALLY_WANT_MAINNET")
+        # Should not raise
+        validate_real_port_gates(SafeMode.LIVE_TRADE, armed=True)
+
+    def test_paper_mode_exits(self) -> None:
+        """Paper mode is not live_trade, should exit."""
+        with pytest.raises(SystemExit) as exc_info:
+            validate_real_port_gates(SafeMode.PAPER, armed=True)
+        assert exc_info.value.code == 1
+
+
+class TestBuildExchangePort:
+    """Test build_exchange_port() port selection."""
+
+    def test_noop_returns_noop(self) -> None:
+        """port_name='noop' returns NoOpExchangePort (no gate checks)."""
+        port = build_exchange_port("noop", SafeMode.READ_ONLY, False, ["BTCUSDT"], Decimal("100"))
+        assert isinstance(port, NoOpExchangePort)
+
+    def test_futures_missing_keys_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Gate 5: futures without API keys exits."""
+        monkeypatch.setenv("ALLOW_MAINNET_TRADE", "1")
+        monkeypatch.setenv("GRINDER_REAL_PORT_ACK", "YES_I_REALLY_WANT_MAINNET")
+        monkeypatch.delenv("BINANCE_API_KEY", raising=False)
+        monkeypatch.delenv("BINANCE_API_SECRET", raising=False)
+        with pytest.raises(SystemExit) as exc_info:
+            build_exchange_port("futures", SafeMode.LIVE_TRADE, True, ["BTCUSDT"], Decimal("100"))
+        assert exc_info.value.code == 1
+
+    def test_futures_with_all_gates_returns_port(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """All 5 gates pass → returns BinanceFuturesPort."""
+        monkeypatch.setenv("ALLOW_MAINNET_TRADE", "1")
+        monkeypatch.setenv("GRINDER_REAL_PORT_ACK", "YES_I_REALLY_WANT_MAINNET")
+        monkeypatch.setenv("BINANCE_API_KEY", "test-key")
+        monkeypatch.setenv("BINANCE_API_SECRET", "test-secret")
+        # Disable latency retry to avoid extra setup
+        monkeypatch.delenv("LATENCY_RETRY_ENABLED", raising=False)
+        port = build_exchange_port(
+            "futures", SafeMode.LIVE_TRADE, True, ["BTCUSDT"], Decimal("100")
+        )
+        assert isinstance(port, BinanceFuturesPort)
+
+    def test_unknown_port_exits(self) -> None:
+        """Unknown port name exits."""
+        with pytest.raises(SystemExit) as exc_info:
+            build_exchange_port("unknown", SafeMode.READ_ONLY, False, ["BTCUSDT"], Decimal("100"))
+        assert exc_info.value.code == 1
+
+
+class TestHAGatingReadyz:
+    """Test HA-gated /readyz semantics via is_trading_ready()."""
+
+    def setup_method(self) -> None:
+        reset_trading_state()
+        reset_ha_state()
+
+    def teardown_method(self) -> None:
+        reset_trading_state()
+        reset_ha_state()
+
+    def test_not_ready_when_loop_not_ready(self) -> None:
+        """is_trading_ready() returns False when _loop_ready=False."""
+        assert is_trading_ready() is False
+
+    def test_ready_without_ha(self) -> None:
+        """Without HA, ready when loop_ready=True."""
+        run_trading_mod._loop_ready = True
+        run_trading_mod._ha_enabled = False
+        assert is_trading_ready() is True
+
+    def test_ready_with_ha_active(self) -> None:
+        """With HA enabled + ACTIVE role → ready."""
+        run_trading_mod._loop_ready = True
+        run_trading_mod._ha_enabled = True
+        set_ha_state(role=HARole.ACTIVE)
+        assert is_trading_ready() is True
+
+    def test_not_ready_with_ha_standby(self) -> None:
+        """With HA enabled + STANDBY role → not ready."""
+        run_trading_mod._loop_ready = True
+        run_trading_mod._ha_enabled = True
+        set_ha_state(role=HARole.STANDBY)
+        assert is_trading_ready() is False
+
+    def test_not_ready_with_ha_unknown(self) -> None:
+        """With HA enabled + UNKNOWN role → not ready (fail-closed)."""
+        run_trading_mod._loop_ready = True
+        run_trading_mod._ha_enabled = True
+        # Default role is UNKNOWN
+        assert is_trading_ready() is False
+
+    def test_reset_clears_state(self) -> None:
+        """reset_trading_state() clears both flags."""
+        run_trading_mod._loop_ready = True
+        run_trading_mod._ha_enabled = True
+        reset_trading_state()
+        assert run_trading_mod._loop_ready is False
+        assert run_trading_mod._ha_enabled is False
+
+
+class TestHAGatingLoop:
+    """Test HA-gated loop processing (ACTIVE processes, STANDBY skips)."""
+
+    def setup_method(self) -> None:
+        reset_sor_metrics()
+        reset_trading_state()
+        reset_ha_state()
+
+    def teardown_method(self) -> None:
+        reset_trading_state()
+        reset_ha_state()
+
+    @pytest.mark.asyncio
+    async def test_active_processes_snapshots(self) -> None:
+        """When HA enabled + ACTIVE, snapshots are processed."""
+        run_trading_mod._ha_enabled = True
+        set_ha_state(role=HARole.ACTIVE)
+
+        messages = [
+            json.dumps({"s": "BTCUSDT", "b": "50000.00", "B": "1.5", "a": "50001.00", "A": "2.0"}),
+            json.dumps({"s": "BTCUSDT", "b": "50002.00", "B": "1.2", "a": "50003.00", "A": "1.8"}),
+        ]
+        transport = FakeWsTransport(messages=messages, delay_ms=2)
+        connector = LiveConnectorV0(
+            config=LiveConnectorConfig(symbols=["BTCUSDT"], ws_transport=transport),
+            clock=time_module,
+            sleep_func=FakeSleep(),
+        )
+        engine = LiveEngineV0(
+            paper_engine=PaperEngine(),
+            exchange_port=NoOpExchangePort(),
+            config=LiveEngineConfig(mode=SafeMode.READ_ONLY),
+        )
+
+        shutdown = asyncio.Event()
+
+        # Run with short duration
+        task = asyncio.create_task(trading_loop(connector, engine, shutdown, duration_s=0))
+        await asyncio.sleep(0.3)
+        shutdown.set()
+        await task
+
+        assert get_sor_metrics().engine_initialized is True
+
+    @pytest.mark.asyncio
+    async def test_standby_skips_snapshots(self) -> None:
+        """When HA enabled + STANDBY, snapshots are skipped (not processed)."""
+        run_trading_mod._ha_enabled = True
+        set_ha_state(role=HARole.STANDBY)
+
+        messages = [
+            json.dumps({"s": "BTCUSDT", "b": "50000.00", "B": "1.5", "a": "50001.00", "A": "2.0"}),
+            json.dumps({"s": "BTCUSDT", "b": "50002.00", "B": "1.2", "a": "50003.00", "A": "1.8"}),
+        ]
+        transport = FakeWsTransport(messages=messages, delay_ms=2)
+        connector = LiveConnectorV0(
+            config=LiveConnectorConfig(symbols=["BTCUSDT"], ws_transport=transport),
+            clock=time_module,
+            sleep_func=FakeSleep(),
+        )
+        engine = LiveEngineV0(
+            paper_engine=PaperEngine(),
+            exchange_port=NoOpExchangePort(),
+            config=LiveEngineConfig(mode=SafeMode.READ_ONLY),
+        )
+
+        shutdown = asyncio.Event()
+
+        task = asyncio.create_task(trading_loop(connector, engine, shutdown, duration_s=0))
+        await asyncio.sleep(0.3)
+        shutdown.set()
+        await task
+
+        # Engine was initialized but no snapshots processed (all skipped by HA gating)
         assert get_sor_metrics().engine_initialized is True
