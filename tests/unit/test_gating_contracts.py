@@ -225,6 +225,30 @@ class TestGatingMetrics:
         assert metrics.get_allowed_count(GateName.RATE_LIMITER) == 0
         assert metrics.get_blocked_count(GateName.RISK_GATE) == 0
 
+    def test_initialize_zero_series_populates_all_gates(self) -> None:
+        """initialize_zero_series() creates 0-value entries for all GateNames."""
+        metrics = GatingMetrics()
+        metrics.initialize_zero_series()
+
+        for gate in GateName:
+            assert gate.value in metrics.allowed_total
+            assert metrics.allowed_total[gate.value] == 0
+
+    def test_initialize_zero_series_idempotent(self) -> None:
+        """initialize_zero_series() does not reset already-incremented counters."""
+        metrics = GatingMetrics()
+        metrics.record_allowed(GateName.RATE_LIMITER)
+        metrics.record_allowed(GateName.RATE_LIMITER)
+        assert metrics.get_allowed_count(GateName.RATE_LIMITER) == 2
+
+        metrics.initialize_zero_series()
+
+        # Existing count preserved
+        assert metrics.get_allowed_count(GateName.RATE_LIMITER) == 2
+        # Other gates now have 0
+        assert metrics.get_allowed_count(GateName.RISK_GATE) == 0
+        assert metrics.get_allowed_count(GateName.TOXICITY_GATE) == 0
+
 
 class TestGlobalMetricsInstance:
     """Tests for global metrics functions."""
