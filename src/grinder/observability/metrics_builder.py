@@ -14,6 +14,10 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 from decimal import Decimal
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 from grinder.account.metrics import get_account_sync_metrics
 from grinder.connectors.metrics import get_connector_metrics
@@ -84,6 +88,21 @@ def reset_consecutive_loss_metrics() -> None:
     _consec_loss_state[0] = (0, 0)
 
 
+# Module-level readyz callback (PR-ALERTS-0)
+# Uses list-as-mutable-container pattern (same as _risk_state, _consec_loss_state).
+_ready_fn: list[Callable[[], bool] | None] = [None]
+
+
+def set_ready_fn(fn: Callable[[], bool]) -> None:
+    """Register readyz callback (called by run_trading at startup)."""
+    _ready_fn[0] = fn
+
+
+def reset_ready_fn() -> None:
+    """Reset readyz callback (for testing)."""
+    _ready_fn[0] = None
+
+
 @dataclass
 class MetricsBuilder:
     """Builds consolidated Prometheus metrics output.
@@ -104,6 +123,9 @@ class MetricsBuilder:
 
         # System metrics
         lines.extend(self._build_system_metrics())
+
+        # Readyz gauges (PR-ALERTS-0)
+        lines.extend(self._build_readyz_metrics())
 
         # Gating metrics
         lines.extend(self._build_gating_metrics())
@@ -156,6 +178,26 @@ class MetricsBuilder:
             "# HELP grinder_uptime_seconds Uptime in seconds",
             "# TYPE grinder_uptime_seconds gauge",
             f"grinder_uptime_seconds {uptime:.2f}",
+        ]
+
+    def _build_readyz_metrics(self) -> list[str]:
+        """Build readyz readiness gauges (PR-ALERTS-0).
+
+        Emits two gauges:
+        - grinder_readyz_callback_registered: 1 if set_ready_fn() was called.
+          Used to scope ReadyzNotReady alert to trading loop processes only.
+        - grinder_readyz_ready: 1 if is_trading_ready() returns True, 0 otherwise.
+        """
+        fn = _ready_fn[0]
+        registered = 1 if fn is not None else 0
+        ready = 1 if (fn is not None and fn()) else 0
+        return [
+            "# HELP grinder_readyz_callback_registered Whether readyz callback is registered (1=yes, 0=no)",
+            "# TYPE grinder_readyz_callback_registered gauge",
+            f"grinder_readyz_callback_registered {registered}",
+            "# HELP grinder_readyz_ready Whether trading loop is ready (1=yes, 0=no)",
+            "# TYPE grinder_readyz_ready gauge",
+            f"grinder_readyz_ready {ready}",
         ]
 
     def _build_gating_metrics(self) -> list[str]:

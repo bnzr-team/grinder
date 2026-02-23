@@ -25,6 +25,8 @@ from grinder.observability.metrics_builder import (
     MetricsBuilder,
     get_metrics_builder,
     reset_metrics_builder,
+    reset_ready_fn,
+    set_ready_fn,
 )
 
 
@@ -164,3 +166,53 @@ class TestGlobalMetricsBuilder:
 
         assert isinstance(output, str)
         assert "grinder_up" in output
+
+
+class TestReadyzGauges:
+    """Tests for readyz readiness gauges (PR-ALERTS-0)."""
+
+    def setup_method(self) -> None:
+        """Reset readyz callback before each test."""
+        reset_ready_fn()
+
+    def teardown_method(self) -> None:
+        """Reset readyz callback after each test."""
+        reset_ready_fn()
+
+    def test_default_no_callback_registered(self) -> None:
+        """Without set_ready_fn, both gauges should be 0."""
+        builder = MetricsBuilder()
+        output = builder.build()
+
+        assert "grinder_readyz_callback_registered 0" in output
+        assert "grinder_readyz_ready 0" in output
+
+    def test_callback_returns_true(self) -> None:
+        """When callback returns True: registered=1, ready=1."""
+        set_ready_fn(lambda: True)
+
+        builder = MetricsBuilder()
+        output = builder.build()
+
+        assert "grinder_readyz_callback_registered 1" in output
+        assert "grinder_readyz_ready 1" in output
+
+    def test_callback_returns_false(self) -> None:
+        """When callback returns False: registered=1, ready=0."""
+        set_ready_fn(lambda: False)
+
+        builder = MetricsBuilder()
+        output = builder.build()
+
+        assert "grinder_readyz_callback_registered 1" in output
+        assert "grinder_readyz_ready 0" in output
+
+    def test_help_type_headers_present(self) -> None:
+        """Both gauges should have HELP and TYPE headers."""
+        builder = MetricsBuilder()
+        output = builder.build()
+
+        assert "# HELP grinder_readyz_callback_registered" in output
+        assert "# TYPE grinder_readyz_callback_registered gauge" in output
+        assert "# HELP grinder_readyz_ready" in output
+        assert "# TYPE grinder_readyz_ready gauge" in output

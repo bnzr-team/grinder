@@ -80,6 +80,7 @@ from grinder.ml.fill_model_loader import load_fill_model_v0
 from grinder.observability import (
     build_healthz_body,
     build_metrics_body,
+    set_ready_fn,
     set_start_time,
 )
 from grinder.paper.engine import PaperEngine
@@ -557,6 +558,9 @@ def main() -> None:
 
     # Pre-populate zero-value gating metrics for Prometheus visibility
     get_gating_metrics().initialize_zero_series()
+
+    # Register readyz callback so /metrics emits grinder_readyz_ready gauge (PR-ALERTS-0)
+    set_ready_fn(is_trading_ready)
 
     connector = build_connector(symbols, mode, args.fixture, use_testnet=use_testnet)
 
