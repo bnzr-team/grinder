@@ -4,9 +4,14 @@
 Usage:
     python -m scripts.run_trading --symbols BTCUSDT,ETHUSDT --metrics-port 9090 [--mainnet]
 
+Rehearsal knobs (safe with NoOpExchangePort):
+    --armed                 Arm engine gates (lets actions reach fill-prob gate)
+    --paper-size-per-level  Override PaperEngine size_per_level (Decimal, e.g. 0.001)
+
 Env vars:
     GRINDER_TRADING_MODE        read_only (default) | paper | live_trade
     GRINDER_TRADING_LOOP_ACK    Must be YES_I_KNOW for paper/live_trade
+    GRINDER_FILL_MODEL_DIR      Path to fill model directory (enables fill-prob gate)
     ALLOW_MAINNET_TRADE         Existing guard (enforced by connector for live_trade)
 
 Safety:
@@ -14,6 +19,8 @@ Safety:
     - paper / live_trade require explicit ACK env.
     - ExchangePort is NoOp — no real orders are placed regardless of mode.
       Modes affect gating/guards only.
+    - --armed only affects the gate chain inside LiveEngineV0._process_action().
+      With NoOpExchangePort, arming has zero real-world effect.
 
 Fixture mode (--fixture):
     Pass a JSONL file (one bookTicker JSON object per line) to run
@@ -30,6 +37,7 @@ import signal
 import sys
 import threading
 import time
+from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
@@ -42,6 +50,7 @@ from grinder.connectors.live_connector import (
 from grinder.execution.port import NoOpExchangePort
 from grinder.live.config import LiveEngineConfig
 from grinder.live.engine import LiveEngineV0
+from grinder.ml.fill_model_loader import load_fill_model_v0
 from grinder.observability import (
     build_healthz_body,
     build_metrics_body,
@@ -184,25 +193,55 @@ def build_connector(
     return LiveConnectorV0(config=config)
 
 
-def build_engine(mode: SafeMode) -> LiveEngineV0:
+def build_engine(
+    mode: SafeMode,
+    *,
+    armed: bool = False,
+    paper_size_per_level: Decimal | None = None,
+) -> LiveEngineV0:
     """Build LiveEngineV0 with NoOpExchangePort.
 
     NoOpExchangePort means no real orders are placed regardless of mode.
     Modes affect gating/guards only.
 
+    If GRINDER_FILL_MODEL_DIR is set, loads FillModelV0 for fill probability
+    gating (fail-open: load error -> None -> gate skipped).
+
     Args:
         mode: SafeMode for engine config.
+        armed: Arm engine gate chain (lets actions flow to fill-prob gate).
+            Safe with NoOpExchangePort — zero real-world effect.
+        paper_size_per_level: Override PaperEngine size_per_level.
+            Default PaperEngine uses 100 (base asset units), which exceeds
+            notional gating limits at current BTC prices. Use e.g. 0.001
+            for rehearsal to get actions through gating.
 
     Returns:
         Configured LiveEngineV0 instance (gauge set to 1 after init).
     """
-    paper_engine = PaperEngine()
+    if paper_size_per_level is not None:
+        paper_engine = PaperEngine(size_per_level=paper_size_per_level)
+    else:
+        paper_engine = PaperEngine()
     port = NoOpExchangePort()
-    config = LiveEngineConfig(mode=mode)  # armed=False by default
+    config = LiveEngineConfig(armed=armed, mode=mode)
+
+    fill_model = None
+    model_dir = os.environ.get("GRINDER_FILL_MODEL_DIR", "").strip()
+    if model_dir:
+        fill_model = load_fill_model_v0(model_dir)
+        if fill_model is not None:
+            print(
+                f"  Fill model loaded: {len(fill_model.bins)} bins, prior={fill_model.global_prior_bps} bps"
+            )
+        else:
+            print("  Fill model load FAILED (fail-open, gate skipped)")
+
     return LiveEngineV0(
         paper_engine=paper_engine,
         exchange_port=port,
         config=config,
+        fill_model=fill_model,
     )
 
 
@@ -263,6 +302,19 @@ def main() -> None:
         default=False,
         help="Use mainnet WS endpoint instead of testnet (safe for read_only)",
     )
+    parser.add_argument(
+        "--armed",
+        action="store_true",
+        default=False,
+        help="Arm engine gate chain (lets actions reach fill-prob gate). Safe with NoOpExchangePort.",
+    )
+    parser.add_argument(
+        "--paper-size-per-level",
+        type=str,
+        default=None,
+        help="Override PaperEngine size_per_level (Decimal, e.g. 0.001). "
+        "Default 100 exceeds notional limits at current BTC prices.",
+    )
     args = parser.parse_args()
 
     mode = validate_env()
@@ -270,18 +322,25 @@ def main() -> None:
 
     use_testnet = not args.mainnet
 
+    paper_size: Decimal | None = None
+    if args.paper_size_per_level is not None:
+        paper_size = Decimal(args.paper_size_per_level)
+
     print("GRINDER TRADING LOOP starting...")
     print(f"  Mode: {mode.value}")
     print(f"  Symbols: {symbols}")
     print(f"  Metrics port: {args.metrics_port}")
     print(f"  Network: {'mainnet' if args.mainnet else 'testnet'}")
+    print(f"  Armed: {args.armed}")
+    if paper_size is not None:
+        print(f"  Paper size_per_level: {paper_size}")
     if args.fixture:
         print(f"  Fixture: {args.fixture}")
 
     server = run_server(args.metrics_port)
     print(f"  Health endpoint: http://localhost:{args.metrics_port}/healthz")
 
-    engine = build_engine(mode)
+    engine = build_engine(mode, armed=args.armed, paper_size_per_level=paper_size)
     print("  Engine initialized: grinder_live_engine_initialized=1")
 
     connector = build_connector(symbols, mode, args.fixture, use_testnet=use_testnet)
