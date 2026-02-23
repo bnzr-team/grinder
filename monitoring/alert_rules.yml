@@ -156,7 +156,7 @@ groups:
         annotations:
           summary: "Trading engine not initialized for 5+ minutes"
           description: "grinder_live_engine_initialized is 0 while process is up. Engine __init__ may have failed or loop is stuck before init."
-          runbook_url: "docs/runbooks/02_HEALTH_TRIAGE.md"
+          runbook_url: "docs/runbooks/02_HEALTH_TRIAGE.md#engine-initialization-failures"
 
       # Warning: Trading loop not ready (HA standby or loop not started)
       - alert: ReadyzNotReady
@@ -172,7 +172,7 @@ groups:
         annotations:
           summary: "Trading loop not ready for 5+ minutes"
           description: "readyz returning not-ready while process is up. Check HA role (standby/unknown) or whether loop failed to start."
-          runbook_url: "docs/runbooks/02_HEALTH_TRIAGE.md"
+          runbook_url: "docs/runbooks/02_HEALTH_TRIAGE.md#readyz-not-ready"
 
   - name: grinder_risk
     rules:

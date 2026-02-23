@@ -194,6 +194,58 @@ curl -fsS http://localhost:9090/metrics | grep grinder_risk_consecutive
 
 **Scope:** Wired only in `scripts/run_live_reconcile.py`. Other entrypoints do not activate this guard.
 
+### Engine Initialization Failures
+
+**Alert:** `EngineInitDown` (critical) — `grinder_live_engine_initialized == 0` for 5+ minutes while process is up.
+
+**What it means:** The trading engine did not complete initialization. The process is running but no ticks are being processed.
+
+| Check | Command |
+|-------|---------|
+| Engine gauge | `curl -fsS http://localhost:9090/metrics \| grep grinder_live_engine_initialized` |
+| Process up | `curl -fsS http://localhost:9090/metrics \| grep grinder_up` |
+| Startup logs | `docker logs grinder --tail=100 \| grep -i "engine\|init\|error\|fatal"` |
+
+**Common causes:**
+- Fill model load failure (`GRINDER_FILL_MODEL_DIR` misconfigured) — check for `Fill model load FAILED` in logs
+- Missing or invalid config (symbols, mode, exchange port)
+- Import/dependency error on startup
+
+**Recovery:**
+1. Check logs for specific error: `docker logs grinder --tail=200`
+2. Verify env vars: `GRINDER_TRADING_MODE`, symbols, `GRINDER_FILL_MODEL_DIR`
+3. If config issue: fix env and restart
+4. If dependency issue: check image version, rebuild if needed
+
+### Readyz Not Ready
+
+**Alert:** `ReadyzNotReady` (warning) — readyz returning not-ready for 5+ minutes while process is up and callback is registered.
+
+**What it means:** The trading loop started but `/readyz` returns 503. This is normal during HA standby; investigate if unexpected.
+
+| Check | Command |
+|-------|---------|
+| Readyz endpoint | `curl -s -o /dev/null -w "%{http_code}" http://localhost:9090/readyz` |
+| Readyz body | `curl -fsS http://localhost:9090/readyz \| python3 -m json.tool` |
+| Readyz gauges | `curl -fsS http://localhost:9090/metrics \| grep grinder_readyz` |
+| HA role | `curl -fsS http://localhost:9090/metrics \| grep grinder_ha_role` |
+
+**Interpreting readyz body:**
+
+| `ha_enabled` | `ha_role` | `loop_ready` | `ready` | Meaning |
+|:---:|:---:|:---:|:---:|---|
+| false | n/a | true | true | Healthy (no HA) |
+| true | active | true | true | Healthy (HA active) |
+| true | standby | true | false | Normal standby — not an issue |
+| true | unknown | true | false | HA elector failed — check Redis connectivity |
+| any | any | false | false | Loop not ready — check engine init and logs |
+
+**Recovery:**
+1. If `ha_role=standby`: normal, no action needed (alert should not fire in steady state — elector promotes within seconds)
+2. If `ha_role=unknown`: check Redis connectivity (`GRINDER_REDIS_URL`), restart elector
+3. If `loop_ready=false`: check `grinder_live_engine_initialized` gauge — if 0, see [Engine Initialization Failures](#engine-initialization-failures)
+4. If all looks fine but still not ready: check logs for async errors, restart process
+
 ### Observability Quick Check
 
 Single command to grep all Launch-13/14/15 metrics at once (no Prometheus needed):
