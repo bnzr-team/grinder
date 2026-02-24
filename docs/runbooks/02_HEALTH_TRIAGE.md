@@ -206,6 +206,26 @@ curl -fsS http://localhost:9090/metrics | grep grinder_risk_consecutive
 | Process up | `curl -fsS http://localhost:9090/metrics \| grep grinder_up` |
 | Startup logs | `docker logs grinder --tail=100 \| grep -i "engine\|init\|error\|fatal"` |
 
+**What good looks like** (`curl -fsS http://localhost:9090/metrics | grep -E 'grinder_live_engine_initialized|grinder_up '`):
+
+```
+grinder_live_engine_initialized 1
+grinder_up 1
+```
+
+**What bad looks like:**
+
+```
+grinder_live_engine_initialized 0
+grinder_up 1
+```
+
+**PromQL** (adjust job/instance selectors for your environment):
+
+```promql
+grinder_live_engine_initialized == 0 and grinder_up == 1
+```
+
 **Common causes:**
 - Fill model load failure (`GRINDER_FILL_MODEL_DIR` misconfigured) — check for `Fill model load FAILED` in logs
 - Missing or invalid config (symbols, mode, exchange port)
@@ -229,6 +249,26 @@ curl -fsS http://localhost:9090/metrics | grep grinder_risk_consecutive
 | Readyz body | `curl -fsS http://localhost:9090/readyz \| python3 -m json.tool` |
 | Readyz gauges | `curl -fsS http://localhost:9090/metrics \| grep grinder_readyz` |
 | HA role | `curl -fsS http://localhost:9090/metrics \| grep grinder_ha_role` |
+
+**What good looks like** (`curl -fsS http://localhost:9090/metrics | grep -E 'grinder_readyz_(callback_registered|ready) '`):
+
+```
+grinder_readyz_callback_registered 1
+grinder_readyz_ready 1
+```
+
+**What bad looks like:**
+
+```
+grinder_readyz_callback_registered 1
+grinder_readyz_ready 0
+```
+
+**PromQL** (adjust job/instance selectors for your environment):
+
+```promql
+grinder_readyz_callback_registered == 1 and grinder_readyz_ready == 0 and grinder_up == 1
+```
 
 **Interpreting readyz body:**
 
@@ -307,6 +347,60 @@ For detailed panel definitions and drilldowns, see [OBSERVABILITY_STACK.md -- La
 - Routes starting with `/fapi/` are Binance Futures API
 - Routes starting with `/api/` are Binance Spot API
 - PromQL drilldown: `sum by (route, method) (increase(grinder_port_http_requests_total{port="futures"}[5m]))`
+
+### Fill Probability Gate Blocking (FillProbBlocksSpike / FillProbBlocksHigh)
+
+**Alert:** `FillProbBlocksSpike` (warning) — fill probability gate blocking orders for 5+ minutes.
+**Alert:** `FillProbBlocksHigh` (critical) — >=10 fill-prob blocks in 5 minutes.
+
+**What it means:** The fill probability model is rejecting orders below the configured threshold. A few blocks are normal; sustained heavy blocking means the model or threshold needs recalibration.
+
+| Check | Command |
+|-------|---------|
+| Block count | `curl -fsS http://localhost:9090/metrics \| grep grinder_router_fill_prob_blocks_total` |
+| CB trips | `curl -fsS http://localhost:9090/metrics \| grep grinder_router_fill_prob_cb_trips_total` |
+| Enforcement | `curl -fsS http://localhost:9090/metrics \| grep grinder_router_fill_prob_enforce_enabled` |
+| Auto-threshold | `curl -fsS http://localhost:9090/metrics \| grep grinder_router_fill_prob_auto_threshold_bps` |
+
+**What good looks like** (`curl -fsS http://localhost:9090/metrics | grep -E 'router_fill_prob_(blocks|cb_trips|enforce|auto_threshold)'`):
+
+```
+grinder_router_fill_prob_blocks_total 3
+grinder_router_fill_prob_cb_trips_total 0
+grinder_router_fill_prob_enforce_enabled 1
+grinder_router_fill_prob_auto_threshold_bps 4200
+```
+
+**What bad looks like:**
+
+```
+grinder_router_fill_prob_blocks_total 47
+grinder_router_fill_prob_cb_trips_total 2
+grinder_router_fill_prob_enforce_enabled 1
+```
+
+**PromQL** (adjust job/instance selectors for your environment):
+
+```promql
+increase(grinder_router_fill_prob_blocks_total[5m])
+increase(grinder_router_fill_prob_cb_trips_total[5m])
+```
+
+**Decision tree:**
+
+```
+Is FillProbBlocksHigh firing (>=10 blocks/5m)?
+├── YES → Check CB trips (grinder_router_fill_prob_cb_trips_total)
+│   ├── CB tripped → Gate auto-bypassed. Rollback: GRINDER_FILL_MODEL_ENFORCE=0 + restart.
+│   └── CB not tripped → Threshold too aggressive. Review eval report, consider raising threshold.
+└── NO (FillProbBlocksSpike only, <10 blocks/5m)
+    └── Normal operation — some blocks expected. Monitor.
+```
+
+**Recovery:**
+1. **Immediate rollback:** `export GRINDER_FILL_MODEL_ENFORCE=0` + restart (disables fill-prob gate entirely)
+2. **Investigate:** `curl -fsS http://localhost:9090/metrics | grep -E 'router_fill_prob_(auto_threshold|blocks|cb_trips|enforce)'`
+3. **Full procedure:** See [31_FILL_PROB_ROLLOUT.md](31_FILL_PROB_ROLLOUT.md#circuit-breaker-tuning) for rollout/rollback/calibration steps
 
 ---
 
