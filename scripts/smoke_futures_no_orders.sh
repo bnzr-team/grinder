@@ -166,6 +166,22 @@ for OP in place cancel replace; do
     fi
 done
 
+# Gate 9: zero HTTP requests to /fapi endpoints (PR-FUT-2)
+# Proves no real Binance Futures API traffic during fixture rehearsal.
+FAPI_HITS=$(echo "$METRICS" | grep -c '^grinder_port_http_requests_total{port="futures"' || true)
+if [[ "$FAPI_HITS" == "0" ]]; then
+    pass_msg "No grinder_port_http_requests_total{port=\"futures\"} series (0 HTTP calls)"
+else
+    # Series exist — check if all counts are 0
+    FAPI_SUM=$(echo "$METRICS" | grep '^grinder_port_http_requests_total{port="futures"' | awk '{s+=$2} END {print s+0}')
+    if [[ "$FAPI_SUM" == "0" ]]; then
+        pass_msg "grinder_port_http_requests_total{port=\"futures\"} sum = 0"
+    else
+        fail_msg "grinder_port_http_requests_total{port=\"futures\"} sum = $FAPI_SUM (expected 0)"
+        echo "$METRICS" | grep '^grinder_port_http_requests_total{port="futures"' || true
+    fi
+fi
+
 echo ""
 if [[ $FAILURES -eq 0 ]]; then
     echo -e "${GREEN}=== ALL CHECKS PASSED ===${NC}"

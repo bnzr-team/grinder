@@ -310,7 +310,7 @@ def build_exchange_port(
             print("ERROR: --exchange-port futures requires BINANCE_API_KEY and BINANCE_API_SECRET")
             sys.exit(1)
 
-        inner = RequestsHttpClient()
+        inner = RequestsHttpClient(port_name="futures")
         http_client = build_measured_client(inner)
 
         config = BinanceFuturesPortConfig(
