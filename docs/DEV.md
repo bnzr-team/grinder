@@ -51,11 +51,27 @@ CI runs with all dependencies installed (see `.github/workflows/ci.yml`).
 
 These are the exact commands required for PR approval. Copy-paste and run in order:
 
+### 0. Prerequisites
+
+Smokes and the trading loop require an editable install with all dependencies.
+Without this, imports will fail and smoke assertions will be misleading.
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+
+# Minimum for smokes + trading loop (runtime deps only):
+pip install -e .
+
+# Full dev proof bundle (adds pytest, mypy, ruff, types-pyyaml stubs):
+pip install -e ".[dev]"
+```
+
 ### 1. Quality Gates
 
 ```bash
-# Tests (290+ expected)
-PYTHONPATH=src python3 -m pytest -q
+# Tests (3100+ expected)
+python3 -m pytest -q
 
 # Linting
 ruff check .
@@ -63,19 +79,18 @@ ruff check .
 # Formatting
 ruff format --check .
 
-# Type checking
+# Type checking (must be run in dev env — needs types-pyyaml stubs)
 mypy .
 
 # Unicode security scan
-python3 -m scripts.check_unicode --all
+python3 scripts/check_unicode.py --all
 ```
 
 ### 2. Replay Determinism
 
 ```bash
 # Verify replay produces identical digests across runs
-PYTHONPATH=src python3 -m scripts.verify_replay_determinism --fixture tests/fixtures/sample_day
-PYTHONPATH=src python3 -m scripts.verify_replay_determinism --fixture tests/fixtures/sample_day_controller
+python3 scripts/verify_replay_determinism.py
 ```
 
 ### 3. Paper Trading Determinism
@@ -110,6 +125,31 @@ Expected output includes:
 - `fixtures_run: 5`
 - `all_digests_match: true`
 - `report_digest: d7e17b36d4d2c844`
+
+### 5. Smoke Tests
+
+Smokes require an editable install (see [Prerequisites](#0-prerequisites)).
+They start real processes on ephemeral ports and verify metrics/output.
+
+```bash
+# Futures rehearsal: proves 0 order attempts + 0 HTTP calls with port=futures
+bash scripts/smoke_futures_no_orders.sh
+
+# Clean shutdown: no "Task was destroyed" warnings
+bash scripts/smoke_no_task_destroyed.sh
+
+# HA metrics invariants: readyz + HA gauges correct
+bash scripts/smoke_ha_metrics_invariants.sh
+```
+
+Each smoke exits 0 on success, 1 on failure, and prints `=== ALL CHECKS PASSED ===` when green.
+
+### 6. Alert Rules Validator
+
+```bash
+# Validates all Prometheus alert rules (syntax, unique names, no forbidden labels)
+python3 -m scripts.verify_alert_rules monitoring/alert_rules.yml
+```
 
 ## CLI Usage
 
