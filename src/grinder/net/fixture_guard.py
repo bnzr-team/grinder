@@ -28,6 +28,9 @@ _original_connect: Any = None
 _original_connect_ex: Any = None
 _original_create_connection: Any = None
 
+_LOG_LIMIT: int = 5
+_blocked_count: int = 0
+
 
 class FixtureNetworkBlockedError(RuntimeError):
     """Raised when fixture mode blocks an outbound network connection."""
@@ -61,12 +64,25 @@ def _make_error_msg(address: Any) -> str:
     )
 
 
+def _log_blocked(msg: str) -> None:
+    """Log a blocked connection, suppressing after _LOG_LIMIT."""
+    global _blocked_count  # noqa: PLW0603
+    _blocked_count += 1
+    if _blocked_count <= _LOG_LIMIT:
+        logger.warning(msg)
+    elif _blocked_count == _LOG_LIMIT + 1:
+        logger.warning(
+            "FIXTURE NETWORK GUARD: further blocked connections suppressed (limit=%d)",
+            _LOG_LIMIT,
+        )
+
+
 def _guarded_connect(self: socket.socket, address: Any) -> Any:
     """Replacement for socket.socket.connect — blocks non-loopback."""
     if _is_localhost(address):
         return _original_connect(self, address)
     msg = _make_error_msg(address)
-    logger.warning(msg)
+    _log_blocked(msg)
     raise FixtureNetworkBlockedError(msg)
 
 
@@ -79,7 +95,7 @@ def _guarded_connect_ex(self: socket.socket, address: Any) -> Any:
     if _is_localhost(address):
         return _original_connect_ex(self, address)
     msg = _make_error_msg(address)
-    logger.warning(msg)
+    _log_blocked(msg)
     raise FixtureNetworkBlockedError(msg)
 
 
@@ -92,7 +108,7 @@ def _guarded_create_connection(
     """
     if isinstance(address, tuple) and len(address) >= 2 and not _is_localhost(address):
         msg = _make_error_msg(address)
-        logger.warning(msg)
+        _log_blocked(msg)
         raise FixtureNetworkBlockedError(msg)
     if timeout is ...:
         result: socket.socket = _original_create_connection(
@@ -111,9 +127,10 @@ def install_fixture_network_guard() -> None:
     Patches socket.socket.connect, socket.socket.connect_ex, and
     socket.create_connection. Idempotent: calling twice is a no-op.
     """
-    global _original_connect, _original_connect_ex, _original_create_connection  # noqa: PLW0603
+    global _original_connect, _original_connect_ex, _original_create_connection, _blocked_count  # noqa: PLW0603
     if _original_connect is not None:
         return  # Already installed
+    _blocked_count = 0
     _original_connect = socket.socket.connect
     _original_connect_ex = socket.socket.connect_ex
     _original_create_connection = socket.create_connection
@@ -128,7 +145,7 @@ def uninstall_fixture_network_guard() -> None:
 
     Idempotent: calling when not installed is a no-op.
     """
-    global _original_connect, _original_connect_ex, _original_create_connection  # noqa: PLW0603
+    global _original_connect, _original_connect_ex, _original_create_connection, _blocked_count  # noqa: PLW0603
     if _original_connect is None:
         return
     socket.socket.connect = _original_connect  # type: ignore[method-assign]
@@ -137,4 +154,5 @@ def uninstall_fixture_network_guard() -> None:
     _original_connect = None
     _original_connect_ex = None
     _original_create_connection = None
+    _blocked_count = 0
     logger.info("FIXTURE NETWORK GUARD: deactivated — connections restored")

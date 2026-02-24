@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import socket
 from typing import TYPE_CHECKING
 from unittest.mock import patch
@@ -9,6 +10,7 @@ from unittest.mock import patch
 import pytest
 
 from grinder.net.fixture_guard import (
+    _LOG_LIMIT,
     FixtureNetworkBlockedError,
     install_fixture_network_guard,
     uninstall_fixture_network_guard,
@@ -153,3 +155,19 @@ class TestIsLocalhostEdgeCases:
                 sock.connect(("127.0.0.2", 1))
         finally:
             sock.close()
+
+
+class TestFixtureGuardLogRateLimit:
+    """Tests that blocked-connection logs are rate-limited."""
+
+    def test_log_suppressed_after_limit(self, caplog: pytest.LogCaptureFixture) -> None:
+        """After _LOG_LIMIT blocks, further warnings are suppressed."""
+        with caplog.at_level(logging.WARNING, logger="grinder.net.fixture_guard"):
+            for _ in range(_LOG_LIMIT + 3):
+                with pytest.raises(FixtureNetworkBlockedError):
+                    socket.create_connection(("example.com", 80))
+
+        warning_records = [r for r in caplog.records if r.levelno == logging.WARNING]
+        # First _LOG_LIMIT are individual block messages, then 1 suppression message
+        assert len(warning_records) == _LOG_LIMIT + 1
+        assert "suppressed" in warning_records[-1].message
