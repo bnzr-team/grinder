@@ -15,6 +15,10 @@
 
 set -euo pipefail
 
+# TEMPORARY: verify required check enforcement (will be reverted)
+echo "INTENTIONAL FAILURE: verifying required check blocks merge"
+exit 1
+
 METRICS_PORT=9103
 FIXTURE="/tmp/smoke_shutdown_fixture.jsonl"
 LOG="/tmp/smoke_shutdown.log"
