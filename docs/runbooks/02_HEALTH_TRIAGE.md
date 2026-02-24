@@ -263,6 +263,29 @@ If you have Prometheus running, paste these PromQL queries for a full picture:
 
 For detailed panel definitions and drilldowns, see [OBSERVABILITY_STACK.md -- Launch-13/14/15 Quick Panels](../OBSERVABILITY_STACK.md#launch-131415-quick-panels).
 
+### Unexpected Futures HTTP
+
+**Alert:** `FuturesHttpRequestsDetected` (critical) — HTTP requests detected from futures port during rehearsal/fixture run.
+
+**What it means:** The `grinder_port_http_requests_total{port="futures"}` counter incremented, indicating real network calls to Binance Futures API endpoints. In a fixture/rehearsal context, this should never happen.
+
+| Check | Command |
+|-------|---------|
+| HTTP requests by route | `curl -fsS http://localhost:9090/metrics \| grep 'grinder_port_http_requests_total{port="futures"'` |
+| PromQL (5m window) | `sum(increase(grinder_port_http_requests_total{port="futures"}[5m]))` |
+| Order attempts | `curl -fsS http://localhost:9090/metrics \| grep 'grinder_port_order_attempts_total{port="futures"'` |
+
+**Common causes:**
+- Process running with `--exchange-port futures` against real ticks (not fixture)
+- Incorrect env vars: missing `GRINDER_TRADING_MODE`, `ALLOW_MAINNET_TRADE`, `GRINDER_REAL_PORT_ACK`, or wrong API keys
+- Someone started a rehearsal process without `--fixture` flag
+
+**Recovery:**
+1. Stop the process immediately
+2. Verify env vars: `GRINDER_TRADING_MODE`, `ALLOW_MAINNET_TRADE`, `GRINDER_REAL_PORT_ACK`, API keys
+3. For rehearsal: use `--exchange-port noop` + `--fixture <path>` to prevent any real API traffic
+4. Review logs for which routes were called: `grep '/fapi/' <logfile>`
+
 ---
 
 ## Common Issues
