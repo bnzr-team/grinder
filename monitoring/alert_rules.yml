@@ -72,6 +72,10 @@
 # Consecutive loss guard metrics (PR-C3b):
 #   - grinder_risk_consecutive_losses (gauge): current consecutive loss count
 #   - grinder_risk_consecutive_loss_trips_total (counter): total guard trips
+#
+# Port metrics (PR-FUT-1/FUT-2):
+#   - grinder_port_order_attempts_total{port,op} (counter): order attempts by port
+#   - grinder_port_http_requests_total{port,method,route} (counter): HTTP requests by port
 
 groups:
   - name: grinder_availability
@@ -157,6 +161,18 @@ groups:
           summary: "Trading engine not initialized for 5+ minutes"
           description: "grinder_live_engine_initialized is 0 while process is up. Engine __init__ may have failed or loop is stuck before init."
           runbook_url: "docs/runbooks/02_HEALTH_TRIAGE.md#engine-initialization-failures"
+
+      # Critical: Futures port made HTTP requests (unexpected in rehearsal/fixture)
+      - alert: FuturesHttpRequestsDetected
+        expr: |
+          increase(grinder_port_http_requests_total{port="futures"}[5m]) > 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Futures port made HTTP requests"
+          description: "Detected {{ $value | printf \"%.0f\" }} HTTP requests from futures port in last 5m. If this is a rehearsal/fixture run, this is unexpected."
+          runbook_url: "docs/runbooks/02_HEALTH_TRIAGE.md#unexpected-futures-http"
 
       # Warning: Trading loop not ready (HA standby or loop not started)
       - alert: ReadyzNotReady
