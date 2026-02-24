@@ -26,6 +26,7 @@ import pytest
 pytest.importorskip("redis", reason="redis not installed")
 
 from grinder.connectors.metrics import reset_connector_metrics
+from grinder.execution.port_metrics import reset_port_metrics
 from grinder.gating import reset_gating_metrics
 from grinder.ha.role import HARole, reset_ha_state, set_ha_state
 from grinder.observability import (
@@ -52,6 +53,7 @@ def reset_state() -> None:
     reset_metrics_builder()
     reset_ha_state()
     reset_connector_metrics()
+    reset_port_metrics()
     reset_reconcile_metrics()
 
 

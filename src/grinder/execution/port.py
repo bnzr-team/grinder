@@ -11,6 +11,7 @@ from typing import Protocol
 
 from grinder.account.contracts import AccountSnapshot, PositionSnap
 from grinder.core import OrderSide, OrderState
+from grinder.execution.port_metrics import get_port_metrics
 from grinder.execution.types import OrderRecord
 
 
@@ -142,6 +143,7 @@ class NoOpExchangePort:
         ts: int,
     ) -> str:
         """Place an order (stub - stores in memory only)."""
+        get_port_metrics().record_order_attempt("noop", "place")
         order_id = self._generate_order_id(symbol, side, level_id, ts)
 
         record = OrderRecord(
@@ -160,6 +162,7 @@ class NoOpExchangePort:
 
     def cancel_order(self, order_id: str) -> bool:
         """Cancel an order (stub - updates memory state)."""
+        get_port_metrics().record_order_attempt("noop", "cancel")
         if order_id not in self._orders:
             return False
 
@@ -188,6 +191,7 @@ class NoOpExchangePort:
         ts: int,
     ) -> str:
         """Replace an order (stub - cancel old, place new)."""
+        get_port_metrics().record_order_attempt("noop", "replace")
         old_order = self._orders.get(order_id)
         if old_order is None:
             msg = f"Order not found: {order_id}"

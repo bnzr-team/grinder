@@ -71,6 +71,7 @@ from grinder.execution.binance_futures_port import (
     BinanceFuturesPortConfig,
 )
 from grinder.execution.port import ExchangePort, NoOpExchangePort
+from grinder.execution.port_metrics import get_port_metrics
 from grinder.gating.metrics import get_gating_metrics
 from grinder.ha.leader import LeaderElector, LeaderElectorConfig
 from grinder.ha.role import HARole, get_ha_state
@@ -568,6 +569,9 @@ def main() -> None:
 
     # Pre-populate zero-value gating metrics for Prometheus visibility
     get_gating_metrics().initialize_zero_series()
+
+    # Pre-populate zero-value port order attempt metrics (PR-FUT-1)
+    get_port_metrics().initialize_zero_series(args.exchange_port)
 
     # Register readyz callback so /metrics emits grinder_readyz_ready gauge (PR-ALERTS-0)
     set_ready_fn(is_trading_ready)

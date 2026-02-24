@@ -54,6 +54,7 @@ from grinder.connectors.errors import ConnectorNonRetryableError
 from grinder.connectors.live_connector import SafeMode
 from grinder.core import OrderSide, OrderState
 from grinder.execution.binance_port import HttpClient, map_binance_error
+from grinder.execution.port_metrics import get_port_metrics
 from grinder.execution.types import OrderRecord
 from grinder.net.retry_policy import (
     OP_CANCEL_ALL,
@@ -504,6 +505,7 @@ class BinanceFuturesPort:
         Returns:
             order_id: Binance order ID as string
         """
+        get_port_metrics().record_order_attempt("futures", "place")
         self._validate_mode("place_order")
         self._validate_symbol(symbol)
         self._validate_notional(price, quantity)
@@ -638,6 +640,7 @@ class BinanceFuturesPort:
         Returns:
             True if cancellation succeeded
         """
+        get_port_metrics().record_order_attempt("futures", "cancel")
         self._validate_mode("cancel_order")
 
         # LC-12: Use proper identity parsing to extract symbol
@@ -761,6 +764,7 @@ class BinanceFuturesPort:
         ts: int,
     ) -> str:
         """Replace an order (cancel + new)."""
+        get_port_metrics().record_order_attempt("futures", "replace")
         self._validate_mode("replace_order")
 
         parts = order_id.split("_")

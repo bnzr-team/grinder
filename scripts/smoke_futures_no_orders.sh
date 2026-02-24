@@ -154,6 +154,18 @@ else
     fail_msg "\"Task was destroyed\" count = $COUNT_DESTROYED (expected 0)"
 fi
 
+# Gate 8: port order attempts metric = 0 for all futures ops (PR-FUT-1)
+# Re-read metrics from log (process already exited, endpoint gone) — check the
+# $METRICS variable captured earlier while process was alive.
+for OP in place cancel replace; do
+    ATTEMPTS=$(echo "$METRICS" | grep "^grinder_port_order_attempts_total{port=\"futures\",op=\"${OP}\"}" | awk '{print $2}')
+    if [[ "$ATTEMPTS" == "0" ]]; then
+        pass_msg "grinder_port_order_attempts_total{port=\"futures\",op=\"${OP}\"} = 0"
+    else
+        fail_msg "grinder_port_order_attempts_total{port=\"futures\",op=\"${OP}\"} = ${ATTEMPTS:-MISSING} (expected 0)"
+    fi
+done
+
 echo ""
 if [[ $FAILURES -eq 0 ]]; then
     echo -e "${GREEN}=== ALL CHECKS PASSED ===${NC}"
