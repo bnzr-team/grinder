@@ -78,6 +78,7 @@ from grinder.ha.role import HARole, get_ha_state
 from grinder.live.config import LiveEngineConfig
 from grinder.live.engine import LiveEngineV0
 from grinder.ml.fill_model_loader import load_fill_model_v0
+from grinder.net.fixture_guard import install_fixture_network_guard
 from grinder.observability import (
     build_healthz_body,
     build_metrics_body,
@@ -523,10 +524,14 @@ async def _drain_pending_tasks() -> None:
         await asyncio.gather(*pending, return_exceptions=True)
 
 
-def main() -> None:
+def main() -> None:  # noqa: PLR0915
     global _ha_enabled  # noqa: PLW0603
 
     args = build_parser().parse_args()
+
+    # Fixture network airgap (PR-NETLOCK-1) — must be before ANY network-touching code
+    if args.fixture:
+        install_fixture_network_guard()
 
     mode = validate_env()
     symbols = [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
@@ -555,6 +560,7 @@ def main() -> None:
         print(f"  Paper size_per_level: {paper_size}")
     if args.fixture:
         print(f"  Fixture: {args.fixture}")
+        print("  Network guard: ACTIVE (external connections blocked)")
 
     server = run_server(args.metrics_port)
     print(f"  Health endpoint: http://localhost:{args.metrics_port}/healthz")
