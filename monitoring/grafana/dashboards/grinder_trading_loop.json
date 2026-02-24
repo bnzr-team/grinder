@@ -194,9 +194,9 @@
       "id": 9,
       "options": { "legend": { "calcs": ["last"], "displayMode": "table", "placement": "right", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
       "targets": [
-        { "expr": "topk(10, sum by (route) (increase(grinder_port_http_requests_total{port=\"futures\"}[5m])))", "legendFormat": "{{route}}", "refId": "A" }
+        { "expr": "topk(10, sum by (route, method) (increase(grinder_port_http_requests_total{port=\"futures\"}[5m])))", "legendFormat": "{{method}} {{route}}", "refId": "A" }
       ],
-      "title": "Futures HTTP by Route (top 10, 5m)",
+      "title": "Futures HTTP by Route+Method (top 10, 5m)",
       "type": "timeseries"
     },
     {
@@ -218,6 +218,27 @@
         { "expr": "sum by (port) (increase(grinder_port_http_requests_total[5m]))", "legendFormat": "{{port}}", "refId": "A" }
       ],
       "title": "All Ports HTTP Requests (5m by port)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": { "axisCenteredZero": false, "axisColorMode": "text", "axisLabel": "", "axisPlacement": "auto", "barAlignment": 0, "drawStyle": "line", "fillOpacity": 10, "gradientMode": "none", "hideFrom": { "legend": false, "tooltip": false, "viz": false }, "lineInterpolation": "linear", "lineWidth": 1, "pointSize": 5, "scaleDistribution": { "type": "linear" }, "showPoints": "never", "spanNulls": false, "stacking": { "group": "A", "mode": "normal" }, "thresholdsStyle": { "mode": "off" } },
+          "mappings": [],
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 40 },
+      "id": 11,
+      "options": { "legend": { "calcs": ["last"], "displayMode": "table", "placement": "right", "showLegend": true }, "tooltip": { "mode": "multi", "sort": "desc" } },
+      "targets": [
+        { "expr": "topk(10, sum by (route, method) (increase(grinder_port_http_requests_total{port=\"futures\"}[1h])))", "legendFormat": "{{method}} {{route}}", "refId": "A" }
+      ],
+      "title": "Futures HTTP by Route+Method (1h)",
       "type": "timeseries"
     }
   ],

@@ -286,6 +286,28 @@ For detailed panel definitions and drilldowns, see [OBSERVABILITY_STACK.md -- La
 3. For rehearsal: use `--exchange-port noop` + `--fixture <path>` to prevent any real API traffic
 4. Review logs for which routes were called: `grep '/fapi/' <logfile>`
 
+**Dashboard drilldown:**
+
+1. Open **Grinder Trading Loop** dashboard (uid: `grinder-trading-loop`)
+2. Check **Futures HTTP by Route+Method (top 10, 5m)** — shows which endpoints were hit and with which HTTP method
+3. Check **Futures HTTP by Route+Method (1h)** — shows if the pattern is sustained or a one-time blip
+4. Use the **All Ports HTTP Requests (5m by port)** panel to compare futures vs other ports
+
+**Edge cases:**
+
+| Pattern | Meaning | Action |
+|---------|---------|--------|
+| Only `GET /fapi/v1/exchangeInfo` | SDK/client initialization call | Low risk — verify no order routes present |
+| `POST /fapi/v1/order` or `DELETE /fapi/v1/order` | Real order submission/cancellation | **Stop immediately** — this is live trading |
+| `GET /fapi/v1/openOrders` or `GET /fapi/v2/account` | Account state queries | Medium risk — process is reading real state |
+| `GET /fapi/v1/ping` or `GET /fapi/v1/time` | Health/time check | Low risk — likely SDK keepalive |
+
+**Confirming it's a real Binance endpoint:**
+
+- Routes starting with `/fapi/` are Binance Futures API
+- Routes starting with `/api/` are Binance Spot API
+- PromQL drilldown: `sum by (route, method) (increase(grinder_port_http_requests_total{port="futures"}[5m]))`
+
 ---
 
 ## Common Issues
