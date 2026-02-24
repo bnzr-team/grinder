@@ -46,6 +46,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - Not selected: TRENDUSDT, WIDEUSDT (lower scores)
   - Fixture format: SNAPSHOT events (see ADR-006 for migration from BOOK_TICKER)
   - Schema version: v1 (see ADR-008)
+  - **Fixture network airgap** (PR-NETLOCK-1): When `--fixture` is passed to `run_trading.py`, all non-loopback socket connections (`connect`, `connect_ex`, `create_connection`) are blocked at Python level. Prevents accidental HTTP/WS to Binance even with `--exchange-port futures`, API keys, and `ALLOW_MAINNET_TRADE=1`. See ADR-075.
 - **End-to-end replay**:
   - CLI: `grinder replay --fixture <path> [-v] [--out <path>]`
   - Script: `python3 -m scripts.run_replay --fixture <path> [-v] [--out <path>]`

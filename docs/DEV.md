@@ -289,6 +289,14 @@ pip install -e .
 PYTHONPATH=src python3 -m ...
 ```
 
+### Network Access During Fixture Run
+
+**Symptom:** `FixtureNetworkBlockedError: FIXTURE NETWORK BLOCKED: connection to api.binance.com denied`
+
+**Cause:** Code attempted external network access while `--fixture` is active. The fixture network guard blocks all non-loopback `socket.connect`, `socket.connect_ex`, and `socket.create_connection` calls (see ADR-075).
+
+**Fix:** This is by design — fixture runs are air-gapped. To use live network, run without `--fixture`. The default `NoOpExchangePort` simulates orders in memory without network calls.
+
 ## Forbidden Artifacts (Never Commit)
 
 These are in `.gitignore` and must never be committed:

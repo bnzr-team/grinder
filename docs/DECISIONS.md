@@ -4023,3 +4023,16 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
     - Bad env var value (non-numeric) → `env_invalid`, fail-open.
   - This is a behavioral control: it changes which eval reports the resolver accepts. Operators should validate in recommend-only mode before enabling.
 - **Consequences:** Triage-friendly structured errors. Operators can set a staleness limit to catch forgotten eval reruns. All failures are fail-open (no crash, no threshold override).
+
+### ADR-075: Fixture network airgap (PR-NETLOCK-1) — accepted
+
+- **Status:** accepted
+- **Context:** Fixture mode (`--fixture`) replaces WebSocket data with `FakeWsTransport` and typically uses `NoOpExchangePort`. But if `--exchange-port futures` is passed, `BinanceFuturesPort` could attempt real HTTP calls. Multiple env-var guards (`ALLOW_MAINNET_TRADE`, `GRINDER_REAL_PORT_ACK`, `SafeMode`) are independent of fixture mode — misconfiguration could leak real network traffic during what should be a hermetic run.
+- **Decision:**
+  - New module `src/grinder/net/fixture_guard.py` monkey-patches `socket.socket.connect`, `socket.socket.connect_ex`, and `socket.create_connection` when `--fixture` is active.
+  - All connections to non-loopback addresses raise `FixtureNetworkBlockedError` (fail-fast).
+  - Loopback allowed: `ip.is_loopback == True` (`127.0.0.0/8`, `::1`) + literal `"localhost"`. Permits metrics server and Redis HA.
+  - Guard installed once at startup in `scripts/run_trading.py`, before HA elector, exchange port, or connector initialization.
+  - Socket-level patch catches all Python network libraries (httpx, websockets, aiohttp, urllib, raw socket).
+- **Consequences:** Fixture runs are provably air-gapped. Any code path attempting external network I/O during fixture replay crashes immediately with clear error message. Existing smokes unaffected (use `--fixture` + localhost only). Integration test runs `run_trading.py` as a subprocess and sets `PYTHONPATH` to include both `src/` (for `grinder.*`) and repo root (for `scripts.*`, since `run_trading.py` imports `scripts.http_measured_client`).
+- **Alternatives:** "Library-level guard (patch httpx.Client)" — rejected (doesn't catch websockets, raw sockets, or future libraries). "DNS-level block" — rejected (OS-dependent, can't block IP-literal connections). "Warn-only mode" — rejected (silent leaks are worse than crashes).
