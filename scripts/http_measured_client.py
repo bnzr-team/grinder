@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
+import urllib.parse
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -23,6 +24,7 @@ import httpx
 
 from grinder.connectors.errors import ConnectorNonRetryableError, ConnectorTransientError
 from grinder.execution.binance_port import HttpResponse
+from grinder.execution.port_metrics import get_port_metrics
 from grinder.net.measured_sync import MeasuredSyncHttpClient
 from grinder.net.retry_policy import DeadlinePolicy, HttpRetryPolicy
 from grinder.observability.latency_metrics import get_http_metrics
@@ -51,9 +53,13 @@ class RequestsHttpClient:
     Implements the HttpClient protocol (binance_port.py).
     Shared between run_live.py (probe) and run_live_reconcile.py (reconcile).
     Uses httpx (already a project dependency) instead of requests.
+
+    Attributes:
+        port_name: Port identifier for metrics (e.g., "futures"). Empty = no metrics.
     """
 
     _client: httpx.Client = field(default_factory=httpx.Client, repr=False)
+    port_name: str = ""
 
     def request(
         self,
@@ -66,6 +72,7 @@ class RequestsHttpClient:
     ) -> HttpResponse:
         """Execute HTTP request via httpx."""
         timeout_s = timeout_ms / 1000.0
+        route = urllib.parse.urlparse(url).path if self.port_name else ""
 
         try:
             resp = self._client.request(
@@ -75,16 +82,24 @@ class RequestsHttpClient:
                 headers=headers,
                 timeout=timeout_s,
             )
+            if self.port_name:
+                get_port_metrics().record_http_request(self.port_name, method, route)
             return HttpResponse(
                 status_code=resp.status_code,
                 json_data=resp.json() if resp.content else {},
             )
 
         except httpx.TimeoutException as e:
+            if self.port_name:
+                get_port_metrics().record_http_request(self.port_name, method, route)
             raise ConnectorTransientError(f"Request timeout: {e}") from e
         except httpx.ConnectError as e:
+            if self.port_name:
+                get_port_metrics().record_http_request(self.port_name, method, route)
             raise ConnectorTransientError(f"Connection error: {e}") from e
         except httpx.HTTPError as e:
+            if self.port_name:
+                get_port_metrics().record_http_request(self.port_name, method, route)
             raise ConnectorNonRetryableError(f"Request error: {e}") from e
 
 

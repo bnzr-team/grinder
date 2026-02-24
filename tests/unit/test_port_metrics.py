@@ -1,7 +1,8 @@
-"""Tests for execution port metrics (PR-FUT-1).
+"""Tests for execution port metrics (PR-FUT-1, PR-FUT-2).
 
 Tests verify:
 - PortMetrics records order attempts correctly
+- PortMetrics records HTTP requests correctly (PR-FUT-2)
 - Prometheus output includes all required patterns
 - Zero-series initialization works
 - Global singleton lifecycle
@@ -13,6 +14,7 @@ from __future__ import annotations
 import pytest
 
 from grinder.execution.port_metrics import (
+    METRIC_PORT_HTTP_REQUESTS,
     METRIC_PORT_ORDER_ATTEMPTS,
     PortMetrics,
     get_port_metrics,
@@ -74,9 +76,71 @@ class TestPortMetrics:
         """Test reset clears all data."""
         metrics = PortMetrics()
         metrics.record_order_attempt("futures", "place")
+        metrics.record_http_request("futures", "POST", "/fapi/v1/order")
         metrics.reset()
 
         assert len(metrics.order_attempts) == 0
+        assert len(metrics.http_requests) == 0
+
+
+class TestHttpRequestMetrics:
+    """Tests for HTTP request tracking (PR-FUT-2)."""
+
+    def test_record_http_request(self) -> None:
+        """Test recording HTTP requests."""
+        metrics = PortMetrics()
+        metrics.record_http_request("futures", "POST", "/fapi/v1/order")
+        metrics.record_http_request("futures", "POST", "/fapi/v1/order")
+        metrics.record_http_request("futures", "GET", "/fapi/v2/account")
+
+        assert metrics.http_requests[("futures", "POST", "/fapi/v1/order")] == 2
+        assert metrics.http_requests[("futures", "GET", "/fapi/v2/account")] == 1
+
+    def test_record_http_request_normalizes_method(self) -> None:
+        """Test that HTTP method is uppercased."""
+        metrics = PortMetrics()
+        metrics.record_http_request("futures", "post", "/fapi/v1/order")
+
+        assert metrics.http_requests[("futures", "POST", "/fapi/v1/order")] == 1
+
+    def test_record_http_request_different_ports(self) -> None:
+        """Test HTTP requests across different ports."""
+        metrics = PortMetrics()
+        metrics.record_http_request("futures", "GET", "/fapi/v2/account")
+        metrics.record_http_request("spot", "GET", "/api/v3/account")
+
+        assert metrics.http_requests[("futures", "GET", "/fapi/v2/account")] == 1
+        assert metrics.http_requests[("spot", "GET", "/api/v3/account")] == 1
+
+    def test_prometheus_output_http_requests_empty(self) -> None:
+        """Test Prometheus output with no HTTP requests."""
+        metrics = PortMetrics()
+        lines = metrics.to_prometheus_lines()
+        output = "\n".join(lines)
+
+        assert f"# HELP {METRIC_PORT_HTTP_REQUESTS}" in output
+        assert f"# TYPE {METRIC_PORT_HTTP_REQUESTS}" in output
+        assert '{port="none",method="none",route="none"} 0' in output
+
+    def test_prometheus_output_http_requests_with_data(self) -> None:
+        """Test Prometheus output with recorded HTTP requests."""
+        metrics = PortMetrics()
+        metrics.record_http_request("futures", "POST", "/fapi/v1/order")
+        metrics.record_http_request("futures", "GET", "/fapi/v2/account")
+
+        lines = metrics.to_prometheus_lines()
+        output = "\n".join(lines)
+
+        assert (
+            f"{METRIC_PORT_HTTP_REQUESTS}"
+            f'{{port="futures",method="GET",route="/fapi/v2/account"}} 1' in output
+        )
+        assert (
+            f"{METRIC_PORT_HTTP_REQUESTS}"
+            f'{{port="futures",method="POST",route="/fapi/v1/order"}} 1' in output
+        )
+        # Should NOT have fallback when data exists
+        assert '{port="none",method="none"' not in output
 
 
 class TestPrometheusOutput:
@@ -116,8 +180,8 @@ class TestPrometheusOutput:
         assert f'{METRIC_PORT_ORDER_ATTEMPTS}{{port="futures",op="place"}} 0' in output
         assert f'{METRIC_PORT_ORDER_ATTEMPTS}{{port="futures",op="cancel"}} 0' in output
         assert f'{METRIC_PORT_ORDER_ATTEMPTS}{{port="futures",op="replace"}} 0' in output
-        # Should NOT have the fallback placeholder
-        assert '{port="none"' not in output
+        # Should NOT have the fallback placeholder for order_attempts
+        assert '{port="none",op="none"' not in output
 
 
 class TestGlobalSingleton:
@@ -167,7 +231,34 @@ class TestMetricsBuilderIntegration:
 
         output = build_metrics_output()
 
+        # Order attempt metrics
         assert f"# HELP {METRIC_PORT_ORDER_ATTEMPTS}" in output
         assert f'{METRIC_PORT_ORDER_ATTEMPTS}{{port="futures",op="place"}} 0' in output
-        assert f'{METRIC_PORT_ORDER_ATTEMPTS}{{port="futures",op="cancel"}} 0' in output
-        assert f'{METRIC_PORT_ORDER_ATTEMPTS}{{port="futures",op="replace"}} 0' in output
+
+        # HTTP request metrics (empty fallback since no requests made)
+        assert f"# HELP {METRIC_PORT_HTTP_REQUESTS}" in output
+        assert f"# TYPE {METRIC_PORT_HTTP_REQUESTS}" in output
+        assert f"{METRIC_PORT_HTTP_REQUESTS}{{port=" in output
+
+    def test_build_includes_http_request_data(self) -> None:
+        """Test that MetricsBuilder includes HTTP request data when recorded."""
+        pytest.importorskip("redis", reason="redis not installed")
+
+        from grinder.gating import reset_gating_metrics  # noqa: PLC0415
+        from grinder.observability import build_metrics_output  # noqa: PLC0415
+        from grinder.observability.metrics_builder import reset_metrics_builder  # noqa: PLC0415
+
+        reset_gating_metrics()
+        reset_metrics_builder()
+        reset_port_metrics()
+
+        metrics = get_port_metrics()
+        metrics.initialize_zero_series("futures")
+        metrics.record_http_request("futures", "POST", "/fapi/v1/order")
+
+        output = build_metrics_output()
+
+        assert (
+            f"{METRIC_PORT_HTTP_REQUESTS}"
+            f'{{port="futures",method="POST",route="/fapi/v1/order"}} 1' in output
+        )

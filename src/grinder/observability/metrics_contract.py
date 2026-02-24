@@ -263,6 +263,10 @@ REQUIRED_METRICS_PATTERNS = [
     "# HELP grinder_port_order_attempts_total",
     "# TYPE grinder_port_order_attempts_total",
     "grinder_port_order_attempts_total{port=",
+    # PR-FUT-2: Port HTTP request metrics
+    "# HELP grinder_port_http_requests_total",
+    "# TYPE grinder_port_http_requests_total",
+    "grinder_port_http_requests_total{port=",
 ]
 
 # PR6: Concrete series patterns requiring fill ingest to be running.
