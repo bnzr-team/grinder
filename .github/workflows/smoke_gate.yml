@@ -1,0 +1,85 @@
+name: Smoke Gate
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  smoke-clean-shutdown:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Install
+        run: pip install -e .
+
+      - name: Run clean shutdown smoke
+        run: bash scripts/smoke_no_task_destroyed.sh 2>&1 | tee /tmp/smoke_clean_shutdown.log
+
+      - name: Upload log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-clean-shutdown-log
+          path: /tmp/smoke_clean_shutdown.log
+
+  smoke-ha-metrics:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Install
+        run: pip install -e .
+
+      - name: Run HA metrics invariants smoke
+        run: bash scripts/smoke_ha_metrics_invariants.sh 2>&1 | tee /tmp/smoke_ha_metrics.log
+
+      - name: Upload log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-ha-metrics-log
+          path: /tmp/smoke_ha_metrics.log
+
+  smoke-futures-no-orders:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Upgrade pip
+        run: python -m pip install --upgrade pip
+
+      - name: Install
+        run: pip install -e .
+
+      - name: Run futures no-orders smoke
+        run: bash scripts/smoke_futures_no_orders.sh 2>&1 | tee /tmp/smoke_futures_no_orders.log
+
+      - name: Upload log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-futures-no-orders-log
+          path: /tmp/smoke_futures_no_orders.log
