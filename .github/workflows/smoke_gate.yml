@@ -23,7 +23,9 @@ jobs:
         run: pip install -e .
 
       - name: Run clean shutdown smoke
-        run: bash scripts/smoke_no_task_destroyed.sh 2>&1 | tee /tmp/smoke_clean_shutdown.log
+        run: |
+          set -o pipefail
+          bash scripts/smoke_no_task_destroyed.sh 2>&1 | tee /tmp/smoke_clean_shutdown.log
 
       - name: Upload log on failure
         if: failure()
@@ -49,7 +51,9 @@ jobs:
         run: pip install -e .
 
       - name: Run HA metrics invariants smoke
-        run: bash scripts/smoke_ha_metrics_invariants.sh 2>&1 | tee /tmp/smoke_ha_metrics.log
+        run: |
+          set -o pipefail
+          bash scripts/smoke_ha_metrics_invariants.sh 2>&1 | tee /tmp/smoke_ha_metrics.log
 
       - name: Upload log on failure
         if: failure()
@@ -75,7 +79,9 @@ jobs:
         run: pip install -e .
 
       - name: Run futures no-orders smoke
-        run: bash scripts/smoke_futures_no_orders.sh 2>&1 | tee /tmp/smoke_futures_no_orders.log
+        run: |
+          set -o pipefail
+          bash scripts/smoke_futures_no_orders.sh 2>&1 | tee /tmp/smoke_futures_no_orders.log
 
       - name: Upload log on failure
         if: failure()
