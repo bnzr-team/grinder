@@ -6,7 +6,29 @@ on:
   pull_request:
 
 jobs:
+  changes:
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            code:
+              - 'src/**'
+              - 'tests/**'
+              - 'scripts/**'
+              - 'monitoring/**'
+              - 'pyproject.toml'
+              - 'Dockerfile'
+              - 'docker-compose*.yml'
+
   checks:
+    needs: changes
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -33,12 +55,15 @@ jobs:
         run: python scripts/check_unicode.py
 
       - name: Mypy
-        run: mypy .
+        if: github.event_name == 'push' || needs.changes.outputs.code == 'true'
+        run: python3 -m mypy .
 
       - name: Pytest
-        run: pytest -q
+        if: github.event_name == 'push' || needs.changes.outputs.code == 'true'
+        run: python3 -m pytest -q
 
       - name: Backtest replay
+        if: github.event_name == 'push' || needs.changes.outputs.code == 'true'
         run: python -m scripts.run_replay --fixture tests/fixtures/sample_day/ -v
 
       - name: Upload evidence index
