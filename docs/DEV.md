@@ -2,6 +2,8 @@
 
 Single source of truth for local development and proof bundle verification.
 
+> **Note:** After repo transfer to `bnzr-team`, all CI workflows and branch protection rules have been verified (PR #277).
+
 ## Quick Start
 
 ### Recommended: Virtual Environment
