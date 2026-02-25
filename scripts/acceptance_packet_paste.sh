@@ -34,9 +34,9 @@ fi
 TMPDIR_PASTE="$(mktemp -d)"
 trap 'rm -rf "${TMPDIR_PASTE}"' EXIT
 
-PACKET_FILE="${TMPDIR_PASTE}/packet.txt"
-BODY_FILE="${TMPDIR_PASTE}/body.txt"
-UPDATE_FILE="${TMPDIR_PASTE}/update.json"
+export PACKET_FILE="${TMPDIR_PASTE}/packet.txt"
+export BODY_FILE="${TMPDIR_PASTE}/body.txt"
+export UPDATE_FILE="${TMPDIR_PASTE}/update.json"
 
 # --- Step 1: Generate acceptance packet ---
 echo "==> Generating acceptance packet for PR #${PR_NUMBER}..."
@@ -91,7 +91,10 @@ END_MARKER = "<!-- ACCEPTANCE_PACKET_END -->"
 
 if START_MARKER in current_body:
     # Replace existing block (idempotent)
-    pattern = re.escape(START_MARKER) + r".*?" + re.escape(END_MARKER)
+    # Greedy match: captures from first START to LAST END.
+    # Needed because the packet's PR diff may contain these markers
+    # as literal strings in source code (e.g. acceptance_packet_paste.sh).
+    pattern = re.escape(START_MARKER) + r".*" + re.escape(END_MARKER)
     new_body = re.sub(pattern, new_block, current_body, count=1, flags=re.DOTALL)
     print("Mode: REPLACE (existing block found)")
 else:
