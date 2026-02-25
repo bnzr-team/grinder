@@ -1,0 +1,121 @@
+name: CI Runner Outage Auto-Rerun
+
+on:
+  workflow_run:
+    workflows:
+      - "CI"
+      - "Smoke Gate"
+      - "PR Body Guard"
+      - "Proof Guard"
+      - "Acceptance Packet"
+      - "Secret Guard"
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Actions run_id to inspect and rerun"
+        required: true
+        type: string
+      pr_number:
+        description: "Optional PR number for audit comment"
+        required: false
+        type: string
+
+permissions:
+  actions: write
+  pull-requests: write
+  contents: read
+
+jobs:
+  rerun-on-outage:
+    runs-on: ubuntu-latest
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'failure'
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+
+            // Determine run_id from trigger
+            const runId = context.payload.inputs?.run_id
+              ? Number(context.payload.inputs.run_id)
+              : context.payload.workflow_run.id;
+
+            const runAttempt = context.payload.workflow_run?.run_attempt ?? 1;
+            const workflowName = context.payload.workflow_run?.name ?? 'workflow_dispatch';
+
+            core.info(`Inspecting run ${runId} (attempt ${runAttempt}, workflow: ${workflowName})`);
+
+            // Fetch jobs for the run
+            const { data } = await github.rest.actions.listJobsForWorkflowRun({
+              owner, repo, run_id: runId, per_page: 100
+            });
+
+            // Detect runner-outage signature:
+            //   failed job + runner_id=0/null + empty runner_name + zero steps
+            const outageJobs = data.jobs.filter(j =>
+              j.conclusion === 'failure' &&
+              (j.runner_id === 0 || j.runner_id === null) &&
+              (!j.runner_name || j.runner_name === '') &&
+              (j.steps?.length ?? 0) === 0
+            );
+
+            if (outageJobs.length === 0) {
+              core.info('No runner-outage signature detected. Nothing to do.');
+              return;
+            }
+
+            core.warning(`Runner outage detected: ${outageJobs.length} job(s) with runner_id=0, steps=0`);
+
+            // Anti-loop: only rerun if attempt < 3
+            const canRerun = runAttempt < 3;
+            if (canRerun) {
+              await github.rest.actions.reRunWorkflowFailedJobs({
+                owner, repo, run_id: runId
+              });
+              core.info(`Triggered rerun-failed-jobs for run ${runId}`);
+            } else {
+              core.warning(`NOT rerunning: attempt=${runAttempt} >= 3 (limit reached)`);
+            }
+
+            // Find PR number for audit comment
+            let prNumber = null;
+            if (context.payload.workflow_run?.pull_requests?.length) {
+              prNumber = context.payload.workflow_run.pull_requests[0].number;
+            }
+            if (context.payload.inputs?.pr_number) {
+              prNumber = Number(context.payload.inputs.pr_number);
+            }
+
+            if (!prNumber) {
+              core.info('No PR number found; skipping audit comment.');
+              return;
+            }
+
+            // Build audit comment
+            const jobLines = outageJobs.map(j =>
+              `- \`${j.name}\` (runner_id=${j.runner_id}, steps=${j.steps?.length ?? 0})`
+            ).join('\n');
+
+            const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${runId}`;
+
+            const body = [
+              '## CI runner outage detected (auto)',
+              '',
+              `**Run:** [${runId}](${runUrl})`,
+              `**Workflow:** ${workflowName}`,
+              `**Attempt:** ${runAttempt}`,
+              '',
+              'Signature: `runner_id=0` + `steps_len=0` on failed jobs:',
+              jobLines,
+              '',
+              `**Action:** ${canRerun ? 'Triggered rerun-failed-jobs' : 'NOT rerun (attempt limit reached)'}.`,
+            ].join('\n');
+
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: prNumber, body
+            });
+            core.info(`Audit comment posted on PR #${prNumber}`);
