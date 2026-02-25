@@ -6,6 +6,28 @@ Quick diagnostics to determine if GRINDER is alive and functioning correctly.
 
 ---
 
+## One-command triage bundle
+
+Collect a full diagnostic snapshot into a single file you can paste into Slack/PR/ticket:
+
+```bash
+bash scripts/triage_bundle.sh --out /tmp/triage_bundle.txt
+```
+
+The bundle includes: readyz/healthz status, key metrics (engine init, HA role, futures safety, fill-prob gate), logs (docker/journalctl/file fallback), and auto-generated next-step hints.
+
+**What to check in the bundle:**
+- `READYZ` HTTP status (200 = ready, 503 = standby/not ready)
+- `grinder_live_engine_initialized` (0 = not init, 1 = running)
+- `grinder_readyz_ready` / `grinder_readyz_callback_registered`
+- `grinder_port_http_requests_total{port="futures"}` (any >0 is critical)
+- `grinder_router_fill_prob_blocks_total` / `cb_trips_total` / `enforce_enabled`
+- `NEXT STEPS` section at the end for auto-triage hints
+
+See `bash scripts/triage_bundle.sh --help` for all options.
+
+---
+
 ## Quick Health Check
 
 ### 1. Check `/healthz` Endpoint
