@@ -177,7 +177,10 @@ jobs:
 
           # Apply update if new body was written
           if [[ -f /tmp/new_body.txt ]]; then
-            gh pr edit "$PR_NUMBER" --body-file /tmp/new_body.txt
+            # Build JSON payload (handles escaping safely)
+            python3 -c 'import json,sys; json.dump({"body": sys.stdin.read()}, open("/tmp/update.json","w"))' < /tmp/new_body.txt
+            REPO_NWO="${{ github.repository }}"
+            gh api "repos/${REPO_NWO}/pulls/${PR_NUMBER}" -X PATCH --input /tmp/update.json -q '.html_url'
             echo "PR body updated with acceptance packet"
           else
             echo "PR body unchanged, no update needed"
