@@ -297,6 +297,46 @@ PYTHONPATH=src python3 -m ...
 
 **Fix:** This is by design — fixture runs are air-gapped. To use live network, run without `--fixture`. The default `NoOpExchangePort` simulates orders in memory without network calls.
 
+### CI Checks Fail Instantly (Runner Outage)
+
+**Symptom:** All CI checks fail in ~3 seconds with no steps executed.
+
+**Diagnosis:**
+
+```bash
+# Get job details for a failed run
+gh api repos/<owner>/<repo>/actions/runs/<RUN_ID>/jobs \
+  --jq '.jobs[0] | {name, conclusion, runner_id, runner_name, steps_len: (.steps|length)}'
+```
+
+Also check GitHub billing budgets: Actions or Premium SKUs set to `$0` with `Stop usage: Yes` can block runner provisioning entirely.
+
+**What runner outage looks like:**
+
+```json
+{
+  "name": "checks",
+  "conclusion": "failure",
+  "runner_id": 0,
+  "runner_name": "",
+  "steps_len": 0
+}
+```
+
+If `runner_id` is 0, `runner_name` is empty, and `steps_len` is 0 — no runner was provisioned. This is a platform-side issue, not a code problem.
+
+**Safe actions:**
+- Re-run failed jobs: `gh run rerun <RUN_ID>`
+- Push a no-op commit to retrigger: `git commit --allow-empty -m "ci: retrigger" && git push`
+- Check GitHub Status (Actions / API) in the status page
+
+**Do NOT:**
+- Disable or weaken required status checks in branch protection
+- Use `--admin` merge (won't work anyway when required checks are failing)
+- Merge locally via git push (branch protection blocks this too)
+
+**Resolution:** Wait for runners to recover, then re-run. PRs that are content-approved stay open until CI passes.
+
 ## Forbidden Artifacts (Never Commit)
 
 These are in `.gitignore` and must never be committed:
