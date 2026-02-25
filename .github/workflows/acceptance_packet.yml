@@ -97,7 +97,8 @@ jobs:
           CHECK_NAME="acceptance-packet"
 
           # Save current PR body to file
-          gh pr view "$PR_NUMBER" --json body -q '.body' > /tmp/current_body.txt || echo "" > /tmp/current_body.txt
+          REPO_NWO="${{ github.repository }}"
+          gh api "repos/${REPO_NWO}/pulls/${PR_NUMBER}" -q '.body // ""' > /tmp/current_body.txt
 
           # Use Python for all the complex string handling
           python3 << 'PYEOF'
@@ -122,8 +123,11 @@ jobs:
               packet_content = f.read()
 
           # Determine mode: FULL VERBATIM or CI ARTIFACT
-          pattern = r'<!-- ACCEPTANCE_PACKET_START -->.*?<!-- ACCEPTANCE_PACKET_END -->'
-          base_body = re.sub(pattern, '', current_body, flags=re.DOTALL).strip()
+          # Greedy match: captures from first START to LAST END.
+          # Needed because the packet's PR diff may contain these markers
+          # as literal strings in source code (e.g. acceptance_packet_paste.sh).
+          pattern = re.escape('<!-- ACCEPTANCE_PACKET_START -->') + r'.*' + re.escape('<!-- ACCEPTANCE_PACKET_END -->')
+          base_body = re.sub(pattern, '', current_body, count=1, flags=re.DOTALL).strip()
 
           base_body_bytes = len(base_body.encode('utf-8'))
           packet_content_bytes = len(packet_content.encode('utf-8'))
@@ -141,31 +145,38 @@ jobs:
 
           print(f"Mode: {'FULL VERBATIM' if use_full_verbatim else 'CI ARTIFACT'}")
 
+          # Build the acceptance packet block (same format as acceptance_packet_paste.sh)
           if use_full_verbatim:
-              new_block = f'''<!-- ACCEPTANCE_PACKET_START -->
-          ```
-          {packet_content}
-          ```
-          <!-- ACCEPTANCE_PACKET_END -->'''
+              new_block = (
+                  "<!-- ACCEPTANCE_PACKET_START -->\n\n"
+                  "<details><summary>Acceptance Packet (verbatim)</summary>\n\n"
+                  "```\n"
+                  + packet_content
+                  + "\n```\n\n"
+                  "</details>\n\n"
+                  "<!-- ACCEPTANCE_PACKET_END -->"
+              )
           else:
-              new_block = f'''<!-- ACCEPTANCE_PACKET_START -->
-          == ACCEPTANCE PACKET: CI ARTIFACT ==
-          RUN_URL: {run_url}
-          ARTIFACT_NAME: {artifact_name}
-          SHA256: {sha256}
-          BYTES: {bytes_size}
-          CHECK_NAME: {check_name}
-          HEAD_SHA: {head_sha}
-          <!-- ACCEPTANCE_PACKET_END -->'''
+              new_block = (
+                  "<!-- ACCEPTANCE_PACKET_START -->\n"
+                  "== ACCEPTANCE PACKET: CI ARTIFACT ==\n"
+                  f"RUN_URL: {run_url}\n"
+                  f"ARTIFACT_NAME: {artifact_name}\n"
+                  f"SHA256: {sha256}\n"
+                  f"BYTES: {bytes_size}\n"
+                  f"CHECK_NAME: {check_name}\n"
+                  f"HEAD_SHA: {head_sha}\n"
+                  "<!-- ACCEPTANCE_PACKET_END -->"
+              )
 
           start_marker = '<!-- ACCEPTANCE_PACKET_START -->'
-          end_marker = '<!-- ACCEPTANCE_PACKET_END -->'
 
           if start_marker in current_body:
-              pattern = r'<!-- ACCEPTANCE_PACKET_START -->.*?<!-- ACCEPTANCE_PACKET_END -->'
-              new_body = re.sub(pattern, lambda m: new_block.strip(), current_body, flags=re.DOTALL)
+              # Greedy: first START to LAST END (handles markers inside diff content)
+              replace_pattern = re.escape(start_marker) + r'.*' + re.escape('<!-- ACCEPTANCE_PACKET_END -->')
+              new_body = re.sub(replace_pattern, new_block, current_body, count=1, flags=re.DOTALL)
           else:
-              new_body = current_body + '\n\n' + new_block.strip()
+              new_body = current_body.rstrip() + '\n\n' + new_block
 
           if new_body.strip() == current_body.strip():
               print("Body unchanged, skipping update")
