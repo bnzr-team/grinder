@@ -381,3 +381,4 @@ Settings (`.vscode/settings.json`):
 1. Mark `src/` as Sources Root
 2. Set interpreter to `.venv/bin/python`
 3. Enable Ruff plugin
+
