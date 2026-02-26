@@ -45,16 +45,19 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
-      - name: Comment on PR (if exists)
+      - name: Comment on PR (dedup)
         uses: actions/github-script@v7
         with:
           script: |
             const owner = context.repo.owner;
             const repo = context.repo.repo;
+
             const runId = context.payload.workflow_run.id;
             const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${runId}`;
             const workflowName = context.payload.workflow_run.name;
             const attempt = context.payload.workflow_run.run_attempt ?? 1;
+            const artifactName = `triage-bundle-${runId}`;
+            const nowIso = new Date().toISOString();
 
             const prs = context.payload.workflow_run.pull_requests || [];
             if (!prs.length) {
@@ -63,25 +66,119 @@ jobs:
             }
             const prNumber = prs[0].number;
 
-            const artifactName = `triage-bundle-${runId}`;
+            const MARKER = "<!-- TRIAGE_BUNDLE_COMMENT -->";
+            const STATE_START = "<!-- TRIAGE_STATE_START -->";
+            const STATE_END = "<!-- TRIAGE_STATE_END -->";
 
-            const body = [
-              "## CI failure triage bundle attached",
-              "",
-              `**Workflow:** ${workflowName}`,
-              `**Run:** [${runId}](${runUrl}) (attempt ${attempt})`,
-              "",
-              `Artifact: **${artifactName}**`,
-              `Open run -> Artifacts -> download bundle.`,
-              "",
-              "_Bundle is best-effort: it captures readyz/metrics/log hints at time of run._"
-            ].join("\n");
+            function extractState(body) {
+              const s = body.indexOf(STATE_START);
+              const e = body.indexOf(STATE_END);
+              if (s === -1 || e === -1 || e <= s) return { entries: {} };
+              const jsonText = body.slice(s + STATE_START.length, e).trim();
+              try {
+                const parsed = JSON.parse(jsonText);
+                if (!parsed || typeof parsed !== "object") return { entries: {} };
+                if (!parsed.entries || typeof parsed.entries !== "object") parsed.entries = {};
+                return parsed;
+              } catch {
+                return { entries: {} };
+              }
+            }
 
-            await github.rest.issues.createComment({
+            function renderBody(state) {
+              const entries = Object.values(state.entries || {});
+              // sort desc by ts
+              entries.sort((a, b) => String(b.ts || "").localeCompare(String(a.ts || "")));
+
+              // cap to last N
+              const MAX = 15;
+              const trimmed = entries.slice(0, MAX);
+
+              const rows = trimmed.map(e => {
+                const wf = e.workflow || "Unknown";
+                const rid = e.run_id || "";
+                const url = e.run_url || "";
+                const att = e.attempt ?? "";
+                const art = e.artifact || "";
+                const runCell = url ? `[${rid}](${url})` : `${rid}`;
+                return `| ${wf} | ${runCell} | ${att} | ${art} |`;
+              });
+
+              const table = [
+                "| Workflow | Run | Attempt | Artifact |",
+                "|---|---:|---:|---|",
+                ...(rows.length ? rows : ["| _none_ |  |  |  |"]),
+              ].join("\n");
+
+              const stateJson = JSON.stringify({ entries: state.entries }, null, 0);
+
+              return [
+                MARKER,
+                "## CI failure triage bundles (auto)",
+                "",
+                `Last update: ${nowIso}`,
+                "",
+                table,
+                "",
+                "Open run → Artifacts → download bundle.",
+                "",
+                "_Bundle is best-effort: it captures readyz/metrics/log hints at time of run._",
+                "",
+                STATE_START,
+                stateJson,
+                STATE_END,
+              ].join("\n");
+            }
+
+            // List comments and find existing consolidated comment
+            const comments = await github.paginate(github.rest.issues.listComments, {
               owner,
               repo,
               issue_number: prNumber,
-              body
+              per_page: 100,
             });
 
-            core.info(`Posted triage bundle comment to PR #${prNumber}`);
+            const existing = comments.find(c => (c.body || "").includes(MARKER));
+
+            // Build/update state
+            const baseState = existing ? extractState(existing.body || "") : { entries: {} };
+
+            // upsert by run_id
+            const key = String(runId);
+            baseState.entries[key] = {
+              workflow: workflowName,
+              run_id: String(runId),
+              run_url: runUrl,
+              attempt: attempt,
+              artifact: artifactName,
+              ts: nowIso,
+            };
+
+            // Drop entries beyond MAX (keep state small)
+            const entriesArr = Object.values(baseState.entries);
+            entriesArr.sort((a, b) => String(b.ts || "").localeCompare(String(a.ts || "")));
+            const MAX_STATE = 30;
+            const keep = entriesArr.slice(0, MAX_STATE);
+            const newEntries = {};
+            for (const e of keep) newEntries[String(e.run_id)] = e;
+            baseState.entries = newEntries;
+
+            const newBody = renderBody(baseState);
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner,
+                repo,
+                comment_id: existing.id,
+                body: newBody,
+              });
+              core.info(`Updated consolidated triage comment on PR #${prNumber}`);
+            } else {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: prNumber,
+                body: newBody,
+              });
+              core.info(`Created consolidated triage comment on PR #${prNumber}`);
+            }
