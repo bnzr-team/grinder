@@ -45,6 +45,21 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+      - name: Generate compact preview
+        shell: bash
+        run: |
+          set +e
+          COMPACT_OUT="/tmp/triage/compact_${{ github.event.workflow_run.id }}.txt"
+          bash scripts/triage_bundle.sh --compact --out "$COMPACT_OUT" 2>&1 || true
+          # Extract just NEXT STEPS section (most actionable)
+          PREVIEW=$(awk '/^===== NEXT STEPS =====/{p=1; next} /^===== END TRIAGE BUNDLE =====/{exit} p{print}' "$COMPACT_OUT" 2>/dev/null | head -10 || true)
+          if [[ -z "$PREVIEW" ]]; then
+            PREVIEW="(no hints available)"
+          fi
+          # Save to file (avoid env var size limits)
+          echo "$PREVIEW" > /tmp/triage/compact_preview.txt
+          exit 0
+
       - name: Comment on PR (dedup)
         uses: actions/github-script@v7
         with:
@@ -58,6 +73,13 @@ jobs:
             const attempt = context.payload.workflow_run.run_attempt ?? 1;
             const artifactName = `triage-bundle-${runId}`;
             const nowIso = new Date().toISOString();
+
+            // Read compact preview (best-effort)
+            const fs = require('fs');
+            let compactPreview = "(no preview available)";
+            try {
+              compactPreview = fs.readFileSync('/tmp/triage/compact_preview.txt', 'utf8').trim();
+            } catch { /* file may not exist */ }
 
             const prs = context.payload.workflow_run.pull_requests || [];
             if (!prs.length) {
@@ -124,12 +146,16 @@ jobs:
                 `Artifacts: ${latest.run_url ? latest.run_url + "#artifacts" : "N/A"}`,
               ].join("\n");
 
+              const preview = compactPreview && compactPreview !== "(no preview available)"
+                ? `\n<details><summary>Latest triage hints</summary>\n\n\`\`\`\n${compactPreview}\n\`\`\`\n\n</details>\n`
+                : "";
+
               return [
                 MARKER,
                 header,
                 "",
                 table,
-                "",
+                preview,
                 "_Bundle is best-effort: it captures readyz/metrics/log hints at time of run._",
                 "",
                 STATE_START,
