@@ -90,15 +90,21 @@ groups:
           summary: "GRINDER is down"
           description: "GRINDER instance has been unresponsive for more than 1 minute."
 
-      # Critical: Prometheus cannot scrape GRINDER
+      # Critical: Prometheus cannot scrape GRINDER (meta-alert: silences all others)
       - alert: GrinderTargetDown
         expr: up{job="grinder"} == 0
         for: 1m
         labels:
           severity: critical
         annotations:
-          summary: "GRINDER target is down"
-          description: "Prometheus cannot scrape the GRINDER metrics endpoint."
+          summary: "Prometheus cannot scrape grinder metrics (all other alerts may be silent)"
+          description: |
+            Prometheus cannot reach the grinder /metrics endpoint for 1+ minute.
+            While this alert is firing, ALL other grinder alerts are effectively blind.
+            Check: process alive (pgrep -af grinder), port listening (ss -lntp | grep :9090),
+            metrics reachable (curl -sS http://localhost:9090/metrics | head -5),
+            docker running (docker ps | grep grinder), firewall/network policy.
+          runbook_url: "docs/runbooks/02_HEALTH_TRIAGE.md"
 
   - name: grinder_gating
     rules:
