@@ -18,57 +18,30 @@ jobs:
       github.event_name == 'pull_request' ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
     steps:
-      - name: Wait for acceptance-packet (pull_request events only)
+      - name: Wait for acceptance packet in PR body (pull_request events only)
         if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REPO: ${{ github.repository }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
-          echo "Waiting for acceptance-packet workflow to complete..."
-          MAX_WAIT=120
-          INTERVAL=10
+          echo "Waiting for acceptance packet to appear in PR body..."
+          MAX_WAIT=300
+          INTERVAL=15
           ELAPSED=0
 
           while [ $ELAPSED -lt $MAX_WAIT ]; do
-            RESPONSE=$(curl --fail-with-body -sS \
-              --connect-timeout 5 --max-time 20 \
-              --retry 3 --retry-delay 2 --retry-connrefused \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/$REPO/commits/$HEAD_SHA/check-runs" 2>&1) || {
-                echo "WARNING: curl failed: $RESPONSE"
-                sleep $INTERVAL
-                ELAPSED=$((ELAPSED + INTERVAL))
-                continue
-            }
+            BODY=$(gh api "repos/$REPO/pulls/$PR_NUMBER" -q '.body // ""' 2>/dev/null || echo "")
 
-            STATUS=$(echo "$RESPONSE" | python3 -c "
-          import sys, json
-          data = json.load(sys.stdin)
-          for cr in data.get('check_runs', []):
-              if cr.get('name') == 'acceptance-packet':
-                  status = cr.get('status')
-                  conclusion = cr.get('conclusion')
-                  if status == 'completed':
-                      print(f'completed:{conclusion}')
-                  else:
-                      print(f'running:{status}')
-                  sys.exit(0)
-          print('not_found')
-          ")
-
-            echo "acceptance-packet status: $STATUS"
-
-            if [[ "$STATUS" == completed:* ]]; then
-              echo "acceptance-packet completed, proceeding with proof-guard validation"
-              break
-            fi
-
-            if [[ "$STATUS" == "not_found" ]] && [ $ELAPSED -gt 30 ]; then
-              echo "WARNING: acceptance-packet check-run not found after 30s, proceeding anyway"
-              break
+            if echo "$BODY" | grep -qF '<!-- ACCEPTANCE_PACKET_START -->'; then
+              if echo "$BODY" | grep -qF '== ACCEPTANCE PACKET: PENDING =='; then
+                echo "[${ELAPSED}s] Acceptance packet in PENDING state, waiting..."
+              else
+                echo "[${ELAPSED}s] Acceptance packet found in PR body, proceeding"
+                break
+              fi
+            else
+              echo "[${ELAPSED}s] No acceptance packet markers in PR body yet, waiting..."
             fi
 
             sleep $INTERVAL
@@ -76,7 +49,8 @@ jobs:
           done
 
           if [ $ELAPSED -ge $MAX_WAIT ]; then
-            echo "WARNING: Timed out waiting for acceptance-packet, proceeding with validation"
+            echo "WARNING: Timed out after ${MAX_WAIT}s waiting for acceptance packet"
+            echo "The workflow_run trigger will retry after acceptance-packet completes"
           fi
 
       - name: Get PR number for workflow_run events
