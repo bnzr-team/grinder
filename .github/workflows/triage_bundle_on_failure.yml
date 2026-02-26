@@ -101,7 +101,8 @@ jobs:
                 const att = e.attempt ?? "";
                 const art = e.artifact || "";
                 const runCell = url ? `[${rid}](${url})` : `${rid}`;
-                return `| ${wf} | ${runCell} | ${att} | ${art} |`;
+                const artCell = url ? `[${art}](${url}#artifacts)` : art;
+                return `| ${wf} | ${runCell} | ${att} | ${artCell} |`;
               });
 
               const table = [
@@ -120,6 +121,7 @@ jobs:
                 "",
                 `Updated: ${nowIso} • Events tracked: ${total} (showing last ${MAX})`,
                 `Last run: ${latest.run_url || "N/A"}`,
+                `Artifacts: ${latest.run_url ? latest.run_url + "#artifacts" : "N/A"}`,
               ].join("\n");
 
               return [
@@ -127,8 +129,6 @@ jobs:
                 header,
                 "",
                 table,
-                "",
-                "Open run → Artifacts → download bundle.",
                 "",
                 "_Bundle is best-effort: it captures readyz/metrics/log hints at time of run._",
                 "",
