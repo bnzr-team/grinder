@@ -112,11 +112,19 @@ jobs:
 
               const stateJson = JSON.stringify({ entries: state.entries }, null, 0);
 
+              const latest = trimmed[0] || { workflow: "Unknown", attempt: "", run_url: "" };
+              const total = entries.length;
+
+              const header = [
+                `## CI triage bundles (auto) — last: ${latest.workflow} (attempt ${latest.attempt ?? ""})`,
+                "",
+                `Updated: ${nowIso} • Events tracked: ${total} (showing last ${MAX})`,
+                `Last run: ${latest.run_url || "N/A"}`,
+              ].join("\n");
+
               return [
                 MARKER,
-                "## CI failure triage bundles (auto)",
-                "",
-                `Last update: ${nowIso}`,
+                header,
                 "",
                 table,
                 "",
