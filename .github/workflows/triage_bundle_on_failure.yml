@@ -1,0 +1,87 @@
+name: Triage Bundle on Failure
+
+on:
+  workflow_run:
+    workflows:
+      - "CI"
+      - "Smoke Gate"
+      - "PR Body Guard"
+      - "Proof Guard"
+      - "Acceptance Packet"
+      - "Secret Guard"
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: write
+  actions: read
+
+jobs:
+  triage-on-failure:
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Generate triage bundle (best-effort)
+        shell: bash
+        run: |
+          set +e
+          mkdir -p /tmp/triage
+          OUT="/tmp/triage/triage_bundle_${{ github.event.workflow_run.id }}.txt"
+          bash scripts/triage_bundle.sh --out "$OUT" || true
+          echo "OUT=$OUT" >> "$GITHUB_ENV"
+          echo "=== NEXT STEPS (preview) ==="
+          awk '/^===== NEXT STEPS =====/{p=1} p{print} /^===== END TRIAGE BUNDLE =====/{exit}' "$OUT" 2>/dev/null || true
+          exit 0
+
+      - name: Upload triage bundle artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: triage-bundle-${{ github.event.workflow_run.id }}
+          path: ${{ env.OUT }}
+          if-no-files-found: warn
+          retention-days: 7
+
+      - name: Comment on PR (if exists)
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const runId = context.payload.workflow_run.id;
+            const runUrl = `https://github.com/${owner}/${repo}/actions/runs/${runId}`;
+            const workflowName = context.payload.workflow_run.name;
+            const attempt = context.payload.workflow_run.run_attempt ?? 1;
+
+            const prs = context.payload.workflow_run.pull_requests || [];
+            if (!prs.length) {
+              core.info("No PR associated with workflow_run; skipping comment.");
+              return;
+            }
+            const prNumber = prs[0].number;
+
+            const artifactName = `triage-bundle-${runId}`;
+
+            const body = [
+              "## CI failure triage bundle attached",
+              "",
+              `**Workflow:** ${workflowName}`,
+              `**Run:** [${runId}](${runUrl}) (attempt ${attempt})`,
+              "",
+              `Artifact: **${artifactName}**`,
+              `Open run -> Artifacts -> download bundle.`,
+              "",
+              "_Bundle is best-effort: it captures readyz/metrics/log hints at time of run._"
+            ].join("\n");
+
+            await github.rest.issues.createComment({
+              owner,
+              repo,
+              issue_number: prNumber,
+              body
+            });
+
+            core.info(`Posted triage bundle comment to PR #${prNumber}`);
