@@ -190,6 +190,38 @@ else
   grep -E '^grinder_ml_fill_(prob_bps_last|model_loaded)\b' "${TMP_METRICS}" || echo "(none)"
 fi
 
+# ── D2) CONNECTIVITY DIAG (when metrics unavailable) ─────────────────
+if [[ ${METRICS_RC} -ne 0 ]]; then
+  section "CONNECTIVITY DIAG"
+  METRICS_PORT="${METRICS_URL##*:}"
+  METRICS_PORT="${METRICS_PORT%%/*}"
+
+  echo "--- port ${METRICS_PORT} listeners ---"
+  if command -v ss >/dev/null 2>&1; then
+    set +e; ss -lntp 2>/dev/null | grep -E ":${METRICS_PORT}\b" || echo "(port ${METRICS_PORT} not listening)"; set -e
+  elif command -v netstat >/dev/null 2>&1; then
+    set +e; netstat -lntp 2>/dev/null | grep -E ":${METRICS_PORT}\b" || echo "(port ${METRICS_PORT} not listening)"; set -e
+  else
+    echo "ss/netstat: N/A"
+  fi
+
+  echo ""
+  echo "--- grinder processes ---"
+  if command -v pgrep >/dev/null 2>&1; then
+    set +e; pgrep -af 'grinder|run_trading' 2>/dev/null || echo "(no grinder processes found)"; set -e
+  else
+    set +e; ps aux 2>/dev/null | grep -i 'grinder\|run_trading' | grep -v grep || echo "(no grinder processes found)"; set -e
+  fi
+
+  echo ""
+  echo "--- docker containers ---"
+  if command -v docker >/dev/null 2>&1; then
+    set +e; docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' 2>/dev/null | grep -i grinder || echo "(no grinder containers)"; set -e
+  else
+    echo "docker: N/A"
+  fi
+fi
+
 # ── E) LOGS ───────────────────────────────────────────────────────────
 section "LOGS"
 
@@ -246,7 +278,12 @@ fi # end of COMPACT != true guard (sections B-E)
 if [[ "${COMPACT}" == "true" ]]; then
   READYZ_HTTP=$(curl -sS -o /dev/null -w '%{http_code}' "${READYZ_URL}" 2>/dev/null || echo "000")
   echo "readyz: ${READYZ_HTTP} (${READYZ_URL})"
-  echo "metrics: $(if [[ ${METRICS_RC} -eq 0 ]]; then echo "OK"; else echo "UNAVAILABLE"; fi)"
+  if [[ ${METRICS_RC} -eq 0 ]]; then
+    echo "metrics: OK"
+  else
+    echo "metrics: UNAVAILABLE"
+    echo "  check: process running + port 9090 listening + logs (docker/journalctl)"
+  fi
 fi
 
 # ── F) NEXT STEPS ─────────────────────────────────────────────────────
@@ -302,8 +339,20 @@ if [[ ${METRICS_RC} -eq 0 ]]; then
     echo "For rate-based alerts, check Prometheus/Grafana dashboards."
   fi
 else
-  echo "Metrics unavailable — cannot auto-triage."
-  echo "Check if the trading loop is running and metrics port is reachable."
+  echo "- Metrics endpoint unreachable (${METRICS_URL})"
+  echo "  Quick diagnostics (copy-paste):"
+  echo "    ss -lntp | grep ':9090'              # is port listening?"
+  echo "    pgrep -af 'grinder|run_trading'      # is process alive?"
+  echo "    docker ps | grep -i grinder          # running in docker?"
+  echo "    journalctl -u grinder -n 50 --no-pager  # systemd logs"
+  echo "    curl -sS http://localhost:9090/readyz # readyz probe"
+  echo ""
+  echo "  Common causes:"
+  echo "    1. Trading loop not started (check deployment / systemd / docker)"
+  echo "    2. Port 9090 occupied by another process (ss -lntp | grep :9090)"
+  echo "    3. Metrics endpoint on different port (check --metrics-port flag)"
+  echo "    4. Firewall / network policy blocking localhost"
+  echo "  -> See: docs/runbooks/02_HEALTH_TRIAGE.md"
 fi
 
 echo ""
