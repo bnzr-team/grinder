@@ -6,6 +6,39 @@ Quick diagnostics to determine if GRINDER is alive and functioning correctly.
 
 ---
 
+## First look (60 seconds)
+
+Five checks to run immediately when paged. Copy-paste in order:
+
+```bash
+# 1. Readyz (200=ready, 503=not ready, connection refused=process down)
+curl -s -o /dev/null -w "readyz: %{http_code}\n" http://localhost:9090/readyz
+
+# 2. Metrics reachable? (if no output, all Prometheus alerts are blind)
+curl -fsS http://localhost:9090/metrics | head -3
+
+# 3. Engine init + process up
+curl -fsS http://localhost:9090/metrics | grep -E 'grinder_live_engine_initialized|grinder_up '
+
+# 4. Fill-prob blocks / CB trips (any blocks in last 5m?)
+curl -fsS http://localhost:9090/metrics | grep -E 'router_fill_prob_(blocks_total|cb_trips_total|enforce_enabled)'
+
+# 5. Futures HTTP safety (should be 0 in rehearsal/fixture)
+curl -fsS http://localhost:9090/metrics | grep 'port_http_requests_total{port="futures"'
+```
+
+| # | What | Good | Bad | Next step |
+|---|------|------|-----|-----------|
+| 1 | Readyz | 200 | 503 or refused | [ReadyzNotReady](#readyz-not-ready) |
+| 2 | Metrics | lines appear | connection refused / empty | Process down or port wrong. See [triage bundle](#one-command-triage-bundle) |
+| 3 | Engine | `initialized 1`, `up 1` | `initialized 0` | [EngineInitDown](#engine-initialization-failures) |
+| 4 | Fill-prob | `blocks_total` low, `cb_trips 0` | blocks >=10 or CB >0 | [FillProbBlocksHigh](#fill-probability-gate-blocking-fillprobblocksspike--fillprobblockshigh) |
+| 5 | Futures HTTP | no output or all 0 | any >0 | [FuturesHttpRequestsDetected](#unexpected-futures-http) |
+
+For a full snapshot (readyz + metrics + logs + auto-triage hints), use the triage bundle below.
+
+---
+
 ## One-command triage bundle
 
 Collect a full diagnostic snapshot into a single file you can paste into Slack/PR/ticket:
