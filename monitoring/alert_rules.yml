@@ -1,5 +1,15 @@
-# GRINDER Alert Rules v5
+# GRINDER Alert Rules v6
 # Based on metrics from src/grinder/observability/metrics_builder.py
+#
+# Alert label/annotation contract (OBS-3):
+#   labels (required):  severity, component, category
+#   annotations (required): summary, description, runbook_url
+#   annotations (critical/page): dashboard_uid
+#
+#   severity enum: critical | page | warning | ticket | info
+#   component enum: scrape | process | readyz | engine | risk | gating |
+#                   reconcile | ml | dq | exchange | fills | fsm | sor | account
+#   category enum: availability | safety | latency | correctness | capacity | integrity
 #
 # Available metrics:
 #   - grinder_up (gauge): 1 if running
@@ -86,9 +96,13 @@ groups:
         for: 1m
         labels:
           severity: critical
+          component: process
+          category: availability
         annotations:
           summary: "GRINDER is down"
           description: "GRINDER instance has been unresponsive for more than 1 minute."
+          runbook_url: "docs/runbooks/02_HEALTH_TRIAGE.md"
+          dashboard_uid: "prometheus-targets"
 
       # Critical: Prometheus cannot scrape GRINDER (meta-alert: silences all others)
       - alert: GrinderTargetDown
@@ -96,6 +110,8 @@ groups:
         for: 1m
         labels:
           severity: critical
+          component: scrape
+          category: availability
         annotations:
           summary: "Prometheus cannot scrape grinder metrics (all other alerts may be silent)"
           description: |
@@ -105,6 +121,7 @@ groups:
             metrics reachable (curl -sS http://localhost:9090/metrics | head -5),
             docker running (docker ps | grep grinder), firewall/network policy.
           runbook_url: "docs/runbooks/02_HEALTH_TRIAGE.md"
+          dashboard_uid: "prometheus-targets"
 
   - name: grinder_gating
     rules:
@@ -114,9 +131,12 @@ groups:
         for: 5m
         labels:
           severity: warning
+          component: gating
+          category: safety
         annotations:
           summary: "High rate of blocked gating decisions"
           description: "More than 0.1 blocks/sec over 5 minutes. Current rate: {{ $value | printf \"%.2f\" }}/sec"
+          runbook_url: "docs/runbooks/06_ALERT_RESPONSE.md#warning-alerts"
 
       # Warning: Toxicity-related blocks (spread spike or price impact)
       - alert: ToxicityTriggers
@@ -125,9 +145,12 @@ groups:
         for: 1m
         labels:
           severity: warning
+          component: gating
+          category: safety
         annotations:
           summary: "Toxicity gate triggered"
           description: "Spread spike or high price impact blocks detected in the last minute."
+          runbook_url: "docs/runbooks/06_ALERT_RESPONSE.md#warning-alerts"
 
       # Info: All gating decisions are being blocked
       - alert: AllGatingBlocked
@@ -138,9 +161,12 @@ groups:
         for: 5m
         labels:
           severity: info
+          component: gating
+          category: safety
         annotations:
           summary: "No gating decisions allowed"
           description: "All gating decisions are being blocked for the past 5 minutes."
+          runbook_url: "docs/runbooks/06_ALERT_RESPONSE.md#ticket--info-alerts"
 
   - name: grinder_health
     rules:
@@ -150,9 +176,12 @@ groups:
         for: 0m
         labels:
           severity: info
+          component: process
+          category: availability
         annotations:
           summary: "GRINDER recently restarted"
           description: "GRINDER uptime is {{ $value | printf \"%.0f\" }} seconds."
+          runbook_url: "docs/runbooks/06_ALERT_RESPONSE.md#ticket--info-alerts"
 
       # Critical: Trading engine not initialized (process alive but loop didn't start)
       - alert: EngineInitDown
@@ -163,10 +192,13 @@ groups:
         for: 5m
         labels:
           severity: critical
+          component: engine
+          category: availability
         annotations:
           summary: "Trading engine not initialized for 5+ minutes"
           description: "grinder_live_engine_initialized is 0 while process is up. Engine __init__ may have failed or loop is stuck before init."
           runbook_url: "docs/runbooks/02_HEALTH_TRIAGE.md#engine-initialization-failures"
+          dashboard_uid: "grinder-trading-loop"
 
       # Critical: Futures port made HTTP requests (unexpected in rehearsal/fixture)
       - alert: FuturesHttpRequestsDetected
@@ -175,10 +207,13 @@ groups:
         for: 2m
         labels:
           severity: critical
+          component: exchange
+          category: safety
         annotations:
           summary: "Futures port made HTTP requests"
           description: "Detected {{ $value | printf \"%.0f\" }} HTTP requests from futures port in last 5m. Open Trading Loop dashboard → Futures HTTP by Route+Method panel to identify which endpoints were called. Any /fapi/ route is a real Binance Futures call. See runbook for triage."
           runbook_url: "docs/runbooks/02_HEALTH_TRIAGE.md#unexpected-futures-http"
+          dashboard_uid: "grinder-trading-loop"
 
       # Warning: Trading loop not ready (HA standby or loop not started)
       - alert: ReadyzNotReady
@@ -191,6 +226,8 @@ groups:
         for: 5m
         labels:
           severity: warning
+          component: readyz
+          category: availability
         annotations:
           summary: "Trading loop not ready for 5+ minutes"
           description: "readyz returning not-ready while process is up. Check HA role (standby/unknown) or whether loop failed to start."
@@ -204,9 +241,13 @@ groups:
         for: 0m
         labels:
           severity: critical
+          component: risk
+          category: safety
         annotations:
           summary: "GRINDER kill-switch is active"
           description: "Kill-switch has been triggered. All trading is halted."
+          runbook_url: "docs/runbooks/04_KILL_SWITCH.md"
+          dashboard_uid: "grinder-overview"
 
       # Warning: Drawdown approaching threshold
       - alert: HighDrawdown
@@ -214,9 +255,12 @@ groups:
         for: 1m
         labels:
           severity: warning
+          component: risk
+          category: safety
         annotations:
           summary: "High drawdown detected"
           description: "Current drawdown is {{ $value | printf \"%.2f\" }}%. Kill-switch triggers at 5%."
+          runbook_url: "docs/runbooks/04_KILL_SWITCH.md"
 
       # Info: Kill-switch trip count increased
       - alert: KillSwitchTripIncreased
@@ -224,9 +268,12 @@ groups:
         for: 0m
         labels:
           severity: info
+          component: risk
+          category: safety
         annotations:
           summary: "Kill-switch trip detected"
           description: "Kill-switch trip count increased in the last 5 minutes."
+          runbook_url: "docs/runbooks/04_KILL_SWITCH.md"
 
       # Critical: Consecutive loss guard tripped — PAUSE set (PR-C3b)
       - alert: ConsecutiveLossTrip
@@ -234,10 +281,13 @@ groups:
         for: 0m
         labels:
           severity: critical
+          component: risk
+          category: safety
         annotations:
           summary: "Consecutive loss guard tripped"
           description: "Consecutive loss guard reached threshold and set PAUSE. Check GRINDER_OPERATOR_OVERRIDE."
           runbook_url: "docs/runbooks/02_HEALTH_TRIAGE.md#consecutive-loss-guard-pr-c3b"
+          dashboard_uid: "grinder-overview"
 
       # Warning: Consecutive losses approaching threshold (early warning at >=3) (PR-C3b)
       - alert: ConsecutiveLossesHigh
@@ -245,6 +295,8 @@ groups:
         for: 1m
         labels:
           severity: warning
+          component: risk
+          category: safety
         annotations:
           summary: "Consecutive losses approaching threshold"
           description: "{{ $value }} consecutive losses detected (guard trips at configured threshold, default 5)."
@@ -262,6 +314,8 @@ groups:
         for: 5m
         labels:
           severity: warning
+          component: reconcile
+          category: availability
         annotations:
           summary: "ReconcileLoop is not running"
           description: "No reconcile loop runs detected in 5 minutes while GRINDER is up."
@@ -273,6 +327,8 @@ groups:
         for: 2m
         labels:
           severity: warning
+          component: reconcile
+          category: correctness
         annotations:
           summary: "Reconcile snapshot is stale"
           description: "Snapshot age is {{ $value | printf \"%.0f\" }} seconds (threshold: 120s). Data may be outdated."
@@ -285,6 +341,8 @@ groups:
         for: 3m
         labels:
           severity: warning
+          component: reconcile
+          category: correctness
         annotations:
           summary: "High rate of reconciliation mismatches"
           description: "Mismatch rate is {{ $value | printf \"%.3f\" }}/sec. Investigate expected vs observed state."
@@ -296,10 +354,13 @@ groups:
         for: 0m
         labels:
           severity: critical
+          component: reconcile
+          category: safety
         annotations:
           summary: "Reconcile remediation action EXECUTED"
           description: "A REAL remediation action was executed. Verify it was intended. Action count increased by {{ $value | printf \"%.0f\" }}."
           runbook_url: "docs/runbooks/16_RECONCILE_ALERTS_SLOS.md#reconcileremediationexecuted"
+          dashboard_uid: "grinder-reconcile"
 
       # Info: Remediation action was planned (dry-run)
       - alert: ReconcileRemediationPlanned
@@ -307,6 +368,8 @@ groups:
         for: 0m
         labels:
           severity: info
+          component: reconcile
+          category: integrity
         annotations:
           summary: "Reconcile remediation action planned"
           description: "A remediation action was planned (dry-run mode). {{ $value | printf \"%.0f\" }} actions planned."
@@ -318,6 +381,8 @@ groups:
         for: 0m
         labels:
           severity: info
+          component: reconcile
+          category: integrity
         annotations:
           summary: "Reconcile remediation action blocked"
           description: "Remediation was blocked by safety gates. This is expected behavior during staged rollout."
@@ -334,6 +399,8 @@ groups:
         for: 5m
         labels:
           severity: warning
+          component: reconcile
+          category: correctness
         annotations:
           summary: "Mismatches detected but no remediation planned or blocked"
           description: "Mismatches are detected but no actions are being planned/blocked. Check RECONCILE_ACTION setting."
@@ -349,6 +416,8 @@ groups:
         for: 1m
         labels:
           severity: warning
+          component: reconcile
+          category: capacity
         annotations:
           summary: "Reconcile budget calls exhausted"
           description: "No remediation calls remaining for today. Used: {{ with query \"grinder_reconcile_budget_calls_used_day\" }}{{ . | first | value }}{{ end }} calls."
@@ -364,6 +433,8 @@ groups:
         for: 1m
         labels:
           severity: warning
+          component: reconcile
+          category: capacity
         annotations:
           summary: "Reconcile budget notional critically low"
           description: "Notional budget remaining is {{ $value | printf \"%.2f\" }} USDT (threshold: 10). Used today: {{ with query \"grinder_reconcile_budget_notional_used_day\" }}{{ . | first | value | printf \"%.2f\" }}{{ end }} USDT."
@@ -381,6 +452,8 @@ groups:
         for: 5m
         labels:
           severity: warning
+          component: ml
+          category: latency
         annotations:
           summary: "ML inference p99 latency exceeds SLO"
           description: "ML inference p99 latency is {{ $value | printf \"%.1f\" }}ms (SLO: 100ms). Check ONNX model performance."
@@ -395,10 +468,13 @@ groups:
         for: 3m
         labels:
           severity: critical
+          component: ml
+          category: latency
         annotations:
           summary: "ML inference p99.9 latency critically high"
           description: "ML inference p99.9 latency is {{ $value | printf \"%.1f\" }}ms (threshold: 250ms). Consider model optimization or kill-switch."
           runbook_url: "docs/runbooks/18_ML_INFERENCE_SLOS.md#mlinferencelatencycritical"
+          dashboard_uid: "grinder-ml-overview"
 
       # Warning: ML inference error rate exceeds 5%
       - alert: MlInferenceErrorRateHigh
@@ -411,6 +487,8 @@ groups:
         for: 5m
         labels:
           severity: warning
+          component: ml
+          category: correctness
         annotations:
           summary: "ML inference error rate exceeds 5%"
           description: "ML inference error rate is {{ $value | printf \"%.1f\" }}%. Check model and input data."
@@ -425,6 +503,8 @@ groups:
         for: 15m
         labels:
           severity: info
+          component: ml
+          category: availability
         annotations:
           summary: "ML ACTIVE mode persistently blocked"
           description: "ML ACTIVE mode has been blocked for 15+ minutes. Check block reasons in metrics."
@@ -441,6 +521,8 @@ groups:
         for: 10m
         labels:
           severity: warning
+          component: ml
+          category: availability
         annotations:
           summary: "No ML inferences detected"
           description: "No ML inferences (success or error) in 10 minutes while GRINDER is up. Check ML configuration."
@@ -457,10 +539,13 @@ groups:
         for: 3m
         labels:
           severity: page
+          component: dq
+          category: correctness
         annotations:
           summary: "Data staleness burst detected"
           description: "Staleness events firing at {{ $value | printf \"%.3f\" }}/sec over 5 minutes. Exchange feed or ingestion may be lagging."
           runbook_url: "docs/runbooks/23_DATA_QUALITY_TRIAGE.md#grinderdatastaleburst"
+          dashboard_uid: "grinder-overview"
 
       # Ticket: Tick gaps in large buckets (>1s)
       - alert: GrinderDataGapSpike
@@ -468,6 +553,8 @@ groups:
         for: 5m
         labels:
           severity: ticket
+          component: dq
+          category: correctness
         annotations:
           summary: "Tick gap rate elevated"
           description: "Tick gaps firing at {{ $value | printf \"%.3f\" }}/sec. Check exchange connectivity and WebSocket health."
@@ -479,6 +566,8 @@ groups:
         for: 5m
         labels:
           severity: ticket
+          component: dq
+          category: correctness
         annotations:
           summary: "Price outlier rate elevated"
           description: "Price outlier events at {{ $value | printf \"%.3f\" }}/sec. May indicate flash crash, exchange glitch, or misconfigured thresholds."
@@ -491,10 +580,13 @@ groups:
         for: 2m
         labels:
           severity: page
+          component: dq
+          category: safety
         annotations:
           summary: "DQ gate is blocking remediation actions"
           description: "Remediation blocked by data quality gate (reason={{ $labels.reason }}). Rate: {{ $value | printf \"%.3f\" }}/sec. Investigate data feed quality before taking action."
           runbook_url: "docs/runbooks/23_DATA_QUALITY_TRIAGE.md#grinderdqblockingactive"
+          dashboard_uid: "grinder-overview"
 
   # Launch-05 PR3: HTTP Latency / Retry Alerts
   # Metrics from src/grinder/observability/latency_metrics.py (PR1/PR2).
@@ -511,10 +603,13 @@ groups:
         for: 2m
         labels:
           severity: page
+          component: exchange
+          category: latency
         annotations:
           summary: "Write-op deadline misses (timeout) elevated"
           description: "Timeout failures on write ops at {{ $value | printf \"%.3f\" }}/sec. Cancel/place orders may not be reaching the exchange. Check network latency and exchange status."
           runbook_url: "docs/runbooks/24_LATENCY_RETRY_TRIAGE.md#grinderhttpwritedeadlinemissburst"
+          dashboard_uid: "grinder-trading-loop"
 
       # Page: cancel_order p99 latency exceeds deadline budget (600ms default)
       # If p99 is above budget, most cancel attempts are timing out.
@@ -526,10 +621,13 @@ groups:
         for: 3m
         labels:
           severity: page
+          component: exchange
+          category: latency
         annotations:
           summary: "cancel_order p99 latency exceeds deadline budget"
           description: "cancel_order p99 latency is {{ $value | printf \"%.0f\" }}ms (budget: 600ms). Most cancel attempts are at risk of timing out. Check exchange API latency."
           runbook_url: "docs/runbooks/24_LATENCY_RETRY_TRIAGE.md#grinderhttpcancellatencyp99high"
+          dashboard_uid: "grinder-trading-loop"
 
       # Ticket: Read-op retries elevated (get_positions, get_account, etc.)
       # Sustained retries waste budget and indicate degraded connectivity.
@@ -539,6 +637,8 @@ groups:
         for: 5m
         labels:
           severity: ticket
+          component: exchange
+          category: latency
         annotations:
           summary: "Read-op HTTP retries elevated"
           description: "Read-op retry rate at {{ $value | printf \"%.3f\" }}/sec over 5 minutes. Sustained retries waste latency budget. Check exchange connectivity."
@@ -552,6 +652,8 @@ groups:
         for: 3m
         labels:
           severity: ticket
+          component: exchange
+          category: capacity
         annotations:
           summary: "HTTP 429 rate-limit retries detected"
           description: "Rate-limit retries at {{ $value | printf \"%.3f\" }}/sec. Exchange is throttling requests. Consider reducing reconcile interval or request frequency."
@@ -569,6 +671,8 @@ groups:
         for: 5m
         labels:
           severity: warning
+          component: fills
+          category: availability
         annotations:
           summary: "Fill ingest disabled (FILL_INGEST_ENABLED != 1)"
           description: "Fill ingestion is not active. Set FILL_INGEST_ENABLED=1 to enable."
@@ -583,10 +687,13 @@ groups:
         for: 10m
         labels:
           severity: page
+          component: fills
+          category: availability
         annotations:
           summary: "No fill ingest polls for 10m"
           description: "Fill ingestion is enabled but no polls detected in 10 minutes. Reconcile loop may be stuck."
           runbook_url: "docs/runbooks/26_FILL_TRACKER_TRIAGE.md#fillingestnopolls"
+          dashboard_uid: "grinder-overview"
 
       # Page: Cursor save errors (dedup at risk after restart)
       - alert: FillCursorSaveErrors
@@ -595,10 +702,13 @@ groups:
         for: 5m
         labels:
           severity: page
+          component: fills
+          category: integrity
         annotations:
           summary: "Fill cursor save failing"
           description: "Cursor persistence is broken. After restart, old trades may be re-ingested. Check disk permissions and path."
           runbook_url: "docs/runbooks/26_FILL_TRACKER_TRIAGE.md#fillcursorsaveerrors"
+          dashboard_uid: "grinder-overview"
 
       # Warning: Parse errors (schema drift or unexpected Binance payload)
       - alert: FillParseErrors
@@ -607,6 +717,8 @@ groups:
         for: 5m
         labels:
           severity: warning
+          component: fills
+          category: correctness
         annotations:
           summary: "Fill parse errors detected"
           description: "Binance userTrades response contains fields the parser cannot handle. Check for API schema changes."
@@ -619,6 +731,8 @@ groups:
         for: 5m
         labels:
           severity: warning
+          component: fills
+          category: availability
         annotations:
           summary: "Fill ingest HTTP errors rising"
           description: "More than 3 HTTP errors fetching userTrades in 10 minutes. Check Binance connectivity and API key permissions."
@@ -641,6 +755,8 @@ groups:
         for: 5m
         labels:
           severity: warning
+          component: fills
+          category: correctness
         annotations:
           summary: "Fill cursor not saved for 30m"
           description: "Fill ingest is enabled and polling, but cursor has not been saved for 30+ minutes. This alert is suppressed when cursor_save errors or non-monotonic rejections are present (those have their own alerts). Check cursor file permissions, disk space, and logs."
@@ -653,6 +769,8 @@ groups:
         for: 5m
         labels:
           severity: warning
+          component: fills
+          category: integrity
         annotations:
           summary: "Cursor writes rejected (non-monotonic)"
           description: "Cursor save was rejected because the new (trade_id, ts_ms) tuple is less than the existing file. This may indicate data corruption or a logic bug."
@@ -673,6 +791,8 @@ groups:
         for: 2m
         labels:
           severity: warning
+          component: fsm
+          category: availability
         annotations:
           summary: "FSM stuck in {{ $labels.state }} for >2 minutes"
           description: "FSM has been in {{ $labels.state }} state for {{ $value | printf \"%.0f\" }}s. Check operator override or underlying trigger (kill-switch, feed stale, drawdown)."
@@ -685,6 +805,8 @@ groups:
         for: 5m
         labels:
           severity: warning
+          component: fsm
+          category: safety
         annotations:
           summary: "FSM blocking intents"
           description: "FSM permission matrix has blocked {{ $value | printf \"%.0f\" }} intents in 5 minutes. Check current FSM state and whether operator override is needed."
@@ -702,6 +824,8 @@ groups:
         for: 5m
         labels:
           severity: warning
+          component: sor
+          category: safety
         annotations:
           summary: "SOR blocking orders"
           description: "SOR has issued {{ $value | printf \"%.0f\" }} BLOCK decisions in 5 minutes. Orders are being rejected by the router."
@@ -714,6 +838,8 @@ groups:
         for: 5m
         labels:
           severity: info
+          component: sor
+          category: safety
         annotations:
           summary: "SOR NOOP decisions detected"
           description: "SOR has issued {{ $value | printf \"%.0f\" }} NOOP decisions in 5 minutes. Orders are being skipped (already in desired state)."
@@ -735,6 +861,8 @@ groups:
         for: 2m
         labels:
           severity: warning
+          component: account
+          category: correctness
         annotations:
           summary: "Account sync stale (age {{ $value | printf \"%.0f\" }}s)"
           description: "Account sync data is {{ $value | printf \"%.0f\" }}s old (threshold: 120s). Positions and open orders may be outdated."
@@ -747,6 +875,8 @@ groups:
         for: 5m
         labels:
           severity: warning
+          component: account
+          category: availability
         annotations:
           summary: "Account sync errors detected"
           description: "{{ $value | printf \"%.0f\" }} account sync errors in 5 minutes. Check API connectivity and credentials."
@@ -759,6 +889,8 @@ groups:
         for: 3m
         labels:
           severity: warning
+          component: account
+          category: correctness
         annotations:
           summary: "Account sync mismatches detected"
           description: "{{ $value | printf \"%.0f\" }} account sync mismatches in 5 minutes. Expected vs observed state diverged."
@@ -776,6 +908,8 @@ groups:
         for: 0m
         labels:
           severity: warning
+          component: sor
+          category: safety
         annotations:
           summary: "Fill probability circuit breaker tripped"
           description: "Fill probability gate block rate exceeded threshold. Circuit breaker bypassed the gate to prevent over-blocking. Review model calibration and threshold."
@@ -787,6 +921,8 @@ groups:
         for: 5m
         labels:
           severity: warning
+          component: sor
+          category: safety
         annotations:
           summary: "Fill probability gate blocking orders"
           description: "{{ $value | printf \"%.0f\" }} fill-prob blocks in 5 minutes. Model may be rejecting orders. Check threshold calibration."
@@ -798,7 +934,10 @@ groups:
         for: 5m
         labels:
           severity: critical
+          component: sor
+          category: safety
         annotations:
           summary: "Fill probability gate blocking heavily"
           description: "{{ $value | printf \"%.0f\" }} fill-prob blocks in 5 minutes (>=10). Model is cutting order flow significantly. Immediate review needed."
           runbook_url: "docs/runbooks/31_FILL_PROB_ROLLOUT.md#circuit-breaker-tuning"
+          dashboard_uid: "grinder-trading-loop"

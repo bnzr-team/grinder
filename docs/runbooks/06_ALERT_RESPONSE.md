@@ -187,6 +187,36 @@ bash scripts/triage_bundle.sh --compact 2>&1
 
 ---
 
+## Alert label/annotation contract (OBS-3)
+
+Every alert in `monitoring/alert_rules.yml` MUST carry these labels and annotations.
+This contract is enforced by code review; automated validation is planned (OBS-4).
+
+### Required labels
+
+| Label | Enum values | Purpose |
+|-------|-------------|---------|
+| `severity` | `critical` / `page` / `warning` / `ticket` / `info` | Response time SLA (see table above) |
+| `component` | `scrape` / `process` / `readyz` / `engine` / `risk` / `gating` / `reconcile` / `ml` / `dq` / `exchange` / `fills` / `fsm` / `sor` / `account` | Which subsystem is affected |
+| `category` | `availability` / `safety` / `latency` / `correctness` / `capacity` / `integrity` | What kind of failure |
+
+### Required annotations
+
+| Annotation | Required for | Purpose |
+|------------|-------------|---------|
+| `summary` | all | One-line human description |
+| `description` | all | Full context with `{{ $value }}` / `{{ $labels.X }}` |
+| `runbook_url` | all | Relative path to runbook anchor |
+| `dashboard_uid` | `critical` / `page` only | Grafana dashboard UID for quick navigation |
+
+### SSOT
+
+- Contract header: `monitoring/alert_rules.yml` lines 1-12
+- Label values: `monitoring/alert_rules.yml` (grep `component:` / `category:`)
+- Dashboard UIDs: `grinder-overview`, `grinder-trading-loop`, `grinder-reconcile`, `grinder-ml-overview`, `prometheus-targets`
+
+---
+
 ## Alert silencing (maintenance)
 
 During planned maintenance, silence alerts in Prometheus Alertmanager:
