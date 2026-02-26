@@ -1,185 +1,193 @@
 # Runbook: Alert Response
 
-## Overview
-
 Response procedures for Prometheus alerts defined in `monitoring/alert_rules.yml`.
 
----
-
-## Alert Summary
-
-| Alert | Severity | Condition | Response Time |
-|-------|----------|-----------|---------------|
-| GrinderDown | critical | `grinder_up == 0` for 1m | Immediate |
-| GrinderTargetDown | critical | Target unreachable for 1m | Immediate |
-| KillSwitchTripped | critical | `kill_switch_triggered == 1` | Immediate |
-| HighDrawdown | warning | `drawdown_pct > 3` for 1m | Within 15m |
-| HighGatingBlocks | warning | Block rate > 0.1/s for 5m | Within 1h |
-| KillSwitchTripIncreased | info | Trip count increased in 5m | Next business day |
-| GrinderRecentRestart | info | `uptime < 60s` | Acknowledge |
+**SSOT references:**
+- SLO definitions & PromQL: [`docs/OBSERVABILITY_SLOS.md`](../OBSERVABILITY_SLOS.md)
+- Alert rules source: [`monitoring/alert_rules.yml`](../../monitoring/alert_rules.yml)
+- Metrics contract: [`src/grinder/observability/metrics_contract.py`](../../src/grinder/observability/metrics_contract.py)
 
 ---
 
-## Critical Alerts
+## ScrapeDown = all other alerts are blind
 
-### GrinderDown
+> **If `GrinderTargetDown` is firing, stop here. Fix scraping first.**
 
-**Condition:** `grinder_up == 0` for 1 minute
+When Prometheus cannot reach `/metrics`, every other alert in this document
+is effectively silenced. This is the single most important failure mode.
 
-**Impact:** System is not running, no trading possible.
+**Quick check:**
+```bash
+curl -sS http://localhost:9090/metrics | head -3
+# No output or connection refused = scrape is down
+```
 
-**Response:**
+**Diagnostics (copy-paste):**
+```bash
+ss -lntp | grep ':9090'                    # is port listening?
+pgrep -af 'grinder|run_trading'            # is process alive?
+docker ps | grep -i grinder                # running in docker?
+journalctl -u grinder -n 50 --no-pager     # systemd logs
+curl -sS http://localhost:9090/readyz       # readyz probe
+```
 
-1. Check container status:
-   ```bash
-   docker ps -a -f name=grinder
-   ```
+**Common causes:**
+1. Trading loop not started (check deployment / systemd / docker)
+2. Port 9090 occupied by another process
+3. Metrics endpoint on different port (check `--metrics-port` flag)
+4. Firewall / network policy blocking Prometheus -> grinder
 
-2. Check logs for crash reason:
-   ```bash
-   docker logs grinder --tail=100
-   ```
-
-3. Restart if needed:
-   ```bash
-   docker compose -f docker-compose.observability.yml restart grinder
-   ```
-
-4. Verify recovery:
-   ```bash
-   curl -fsS http://localhost:9090/healthz
-   ```
-
----
-
-### GrinderTargetDown
-
-**Condition:** Prometheus cannot scrape grinder for 1 minute
-
-**Impact:** Metrics not being collected, alerts won't fire.
-
-**Response:**
-
-1. Check if grinder is running:
-   ```bash
-   curl -fsS http://localhost:9090/metrics | head
-   ```
-
-2. Check Prometheus targets:
-   Open http://localhost:9091/targets
-
-3. Check network between containers:
-   ```bash
-   docker network inspect grinder_default
-   ```
+**Runbook:** [02_HEALTH_TRIAGE.md](02_HEALTH_TRIAGE.md) -- "First look" section
 
 ---
 
-### KillSwitchTripped
+## First 60 seconds (any alert)
 
-**Condition:** `grinder_kill_switch_triggered == 1`
+When paged, run these five checks in order before reading the specific alert section:
 
-**Impact:** All trading is halted.
+```bash
+# 0. Scrape alive? (if no output, ALL alerts are blind)
+curl -fsS http://localhost:9090/metrics | head -3
 
-**Response:**
+# 1. Readyz (200=ready, 503=not ready, connection refused=process down)
+curl -s -o /dev/null -w "readyz: %{http_code}\n" http://localhost:9090/readyz
 
-See [04_KILL_SWITCH.md](04_KILL_SWITCH.md) for full procedure.
+# 2. Engine initialized?
+curl -fsS http://localhost:9090/metrics | grep grinder_live_engine_initialized
 
-Quick summary:
-1. Verify state: `curl -fsS localhost:9090/metrics | grep kill_switch`
-2. Check reason: Look at `trips_total` labels
-3. Decide: Wait for auto-reset or manual restart
+# 3. Fill-prob blocks / CB trips (any blocks in last 5m?)
+curl -fsS http://localhost:9090/metrics | grep -E 'router_fill_prob_(blocks_total|cb_trips_total|enforce_enabled)'
 
----
+# 4. Futures HTTP safety (should be 0 in rehearsal/fixture)
+curl -fsS http://localhost:9090/metrics | grep 'port_http_requests_total{port="futures"'
+```
 
-## Warning Alerts
+| Check | Good | Bad | Next step |
+|-------|------|-----|-----------|
+| #0 Scrape | output visible | connection refused / empty | See [ScrapeDown](#scrapedown--all-other-alerts-are-blind) above |
+| #1 Readyz | `200` | `503` or refused | [02_HEALTH_TRIAGE.md#readyz-not-ready](02_HEALTH_TRIAGE.md#readyz-not-ready) |
+| #2 Engine init | `1` | `0` | [02_HEALTH_TRIAGE.md#engine-initialization-failures](02_HEALTH_TRIAGE.md#engine-initialization-failures) |
+| #3 Fill-prob | blocks=0, cb_trips=0 | blocks>0 or cb_trips>0 | [31_FILL_PROB_ROLLOUT.md](31_FILL_PROB_ROLLOUT.md#circuit-breaker-tuning) |
+| #4 Futures HTTP | counter=0 or absent | counter>0 | [02_HEALTH_TRIAGE.md#unexpected-futures-http](02_HEALTH_TRIAGE.md#unexpected-futures-http) |
 
-### HighDrawdown
-
-**Condition:** `grinder_drawdown_pct > 3` for 1 minute
-
-**Impact:** Approaching kill-switch threshold (5%).
-
-**Response:**
-
-1. Monitor drawdown:
-   ```bash
-   watch -n5 'curl -s localhost:9090/metrics | grep drawdown_pct'
-   ```
-
-2. Review recent trades in logs
-
-3. Consider manual intervention if drawdown continues rising
-
-4. If drawdown reaches 5%, kill-switch will trigger automatically
+**See also:** [02_HEALTH_TRIAGE.md -- First look](02_HEALTH_TRIAGE.md#first-look-60-seconds), [OBSERVABILITY_SLOS.md](../OBSERVABILITY_SLOS.md)
 
 ---
 
-### HighGatingBlocks
+## Alert-to-Dashboard-to-Runbook mapping
 
-**Condition:** Block rate > 0.1 per second for 5 minutes
+Use this table to jump from any alert directly to the right dashboard panel and runbook.
 
-**Impact:** Many trade signals being blocked.
+### Critical / Page alerts
 
-**Response:**
+| Alert | Severity | Dashboard | Panels / What to check | Immediate action | Runbook |
+|-------|----------|-----------|------------------------|------------------|---------|
+| `GrinderTargetDown` | critical | Prometheus Targets | up/down status | Fix scraping first (see above) | [02_HEALTH_TRIAGE](02_HEALTH_TRIAGE.md) |
+| `GrinderDown` | critical | Prometheus Targets | grinder_up gauge | Check container/process, restart if needed | [02_HEALTH_TRIAGE](02_HEALTH_TRIAGE.md) |
+| `EngineInitDown` | critical | Trading Loop | Engine Initialized stat | Check logs for init errors, fill model load | [02_HEALTH_TRIAGE](02_HEALTH_TRIAGE.md#engine-initialization-failures) |
+| `KillSwitchTripped` | critical | Overview | Kill-switch gauge, Drawdown | Verify state, check trip reason labels | [04_KILL_SWITCH](04_KILL_SWITCH.md) |
+| `ConsecutiveLossTrip` | critical | Overview | Consecutive losses gauge | Check GRINDER_OPERATOR_OVERRIDE | [02_HEALTH_TRIAGE](02_HEALTH_TRIAGE.md#consecutive-loss-guard-pr-c3b) |
+| `FuturesHttpRequestsDetected` | critical | Trading Loop | Futures HTTP by Route+Method | Any /fapi/ route = real Binance call | [02_HEALTH_TRIAGE](02_HEALTH_TRIAGE.md#unexpected-futures-http) |
+| `FillProbBlocksHigh` | critical | Trading Loop | Fill-Prob Blocks, CB Trips | Check threshold, model calibration | [31_FILL_PROB_ROLLOUT](31_FILL_PROB_ROLLOUT.md#circuit-breaker-tuning) |
+| `MlInferenceLatencyCritical` | critical | ML Overview | Latency p99.9 | Consider model rollback or kill-switch | [18_ML_INFERENCE_SLOS](18_ML_INFERENCE_SLOS.md#mlinferencelatencycritical) |
+| `ReconcileRemediationExecuted` | critical | Reconcile | Actions Executed | Verify intended; check remediation logs | [16_RECONCILE_ALERTS_SLOS](16_RECONCILE_ALERTS_SLOS.md#reconcileremediationexecuted) |
+| `GrinderDataStaleBurst` | page | Overview | Stale counters | Check exchange feed, WebSocket health | [23_DATA_QUALITY_TRIAGE](23_DATA_QUALITY_TRIAGE.md#grinderdatastaleburst) |
+| `GrinderDQBlockingActive` | page | Overview | DQ gate blocks | Investigate feed quality before action | [23_DATA_QUALITY_TRIAGE](23_DATA_QUALITY_TRIAGE.md#grinderdqblockingactive) |
+| `GrinderHttpWriteDeadlineMissBurst` | page | Trading Loop | Route+Method latency | Check network latency, exchange status | [24_LATENCY_RETRY_TRIAGE](24_LATENCY_RETRY_TRIAGE.md#grinderhttpwritedeadlinemissburst) |
+| `GrinderHttpCancelLatencyP99High` | page | Trading Loop | Route+Method latency | Check exchange API latency | [24_LATENCY_RETRY_TRIAGE](24_LATENCY_RETRY_TRIAGE.md#grinderhttpcancellatencyp99high) |
+| `FillIngestNoPolls` | page | Overview | Ingest polls counter | Reconcile loop may be stuck | [26_FILL_TRACKER_TRIAGE](26_FILL_TRACKER_TRIAGE.md#fillingestnopolls) |
+| `FillCursorSaveErrors` | page | Overview | Cursor save counters | Check disk permissions, path | [26_FILL_TRACKER_TRIAGE](26_FILL_TRACKER_TRIAGE.md#fillcursorsaveerrors) |
 
-1. Check block reasons:
-   ```bash
-   curl -fsS localhost:9090/metrics | grep "gating_blocked_total"
-   ```
+### Warning alerts
 
-2. Common reasons:
-   - `toxicity`: Model flagging high-risk trades
-   - `position_limit`: Max position reached
-   - `cooldown`: Rate limiting active
+| Alert | Severity | Dashboard | Panels / What to check | Immediate action | Runbook |
+|-------|----------|-----------|------------------------|------------------|---------|
+| `ReadyzNotReady` | warning | Trading Loop | Readyz Ready stat | Check HA role (standby is normal) | [02_HEALTH_TRIAGE](02_HEALTH_TRIAGE.md#readyz-not-ready) |
+| `HighDrawdown` | warning | Overview | Drawdown % | Monitor; kill-switch fires at 5% | [04_KILL_SWITCH](04_KILL_SWITCH.md) |
+| `ConsecutiveLossesHigh` | warning | Overview | Consecutive losses gauge | Early warning; guard trips at threshold | [02_HEALTH_TRIAGE](02_HEALTH_TRIAGE.md#consecutive-loss-guard-pr-c3b) |
+| `HighGatingBlocks` | warning | Overview | Allowed/Blocked counters | Check block reasons (toxicity, position limit) | -- |
+| `ToxicityTriggers` | warning | Overview | Blocked by reason | Spread spike or price impact detected | -- |
+| `FillProbBlocksSpike` | warning | Trading Loop | Fill-Prob Blocks | Early warning before FillProbBlocksHigh | [31_FILL_PROB_ROLLOUT](31_FILL_PROB_ROLLOUT.md#circuit-breaker-tuning) |
+| `FillProbCircuitBreakerTripped` | warning | Trading Loop | CB Trips | Review model calibration, threshold | [31_FILL_PROB_ROLLOUT](31_FILL_PROB_ROLLOUT.md#circuit-breaker-tuning) |
+| `ReconcileLoopDown` | warning | Reconcile | Runs counter | Loop stopped while process alive | [16_RECONCILE_ALERTS_SLOS](16_RECONCILE_ALERTS_SLOS.md#reconcileloopdown) |
+| `ReconcileSnapshotStale` | warning | Reconcile | Snapshot Age | Data may be outdated (>120s) | [16_RECONCILE_ALERTS_SLOS](16_RECONCILE_ALERTS_SLOS.md#reconcilesnapshotstale) |
+| `ReconcileMismatchSpike` | warning | Reconcile | Mismatches counter | Investigate expected vs observed | [16_RECONCILE_ALERTS_SLOS](16_RECONCILE_ALERTS_SLOS.md#reconcilemismatchspike) |
+| `ReconcileMismatchNoBlocks` | warning | Reconcile | Actions, Blocks | Gates may be bypassed | [16_RECONCILE_ALERTS_SLOS](16_RECONCILE_ALERTS_SLOS.md#reconcilemismatchnoblocks) |
+| `ReconcileBudgetCallsExhausted` | warning | Reconcile | Budget panels | No remediation calls left today | [16_RECONCILE_ALERTS_SLOS](16_RECONCILE_ALERTS_SLOS.md#reconcilebudgetcallsexhausted) |
+| `ReconcileBudgetNotionalLow` | warning | Reconcile | Budget panels | Notional <10 USDT remaining | [16_RECONCILE_ALERTS_SLOS](16_RECONCILE_ALERTS_SLOS.md#reconcilebudgetnotionallow) |
+| `MlInferenceLatencyHigh` | warning | ML Overview | Latency p99 | Check ONNX model performance | [18_ML_INFERENCE_SLOS](18_ML_INFERENCE_SLOS.md#mlinferencelatencyhigh) |
+| `MlInferenceErrorRateHigh` | warning | ML Overview | Error Rate | Check model and input data | [18_ML_INFERENCE_SLOS](18_ML_INFERENCE_SLOS.md#mlinferenceerrorratehigh) |
+| `MlInferenceStalled` | warning | ML Overview | Inference counter | No inferences for 10m; check config | [18_ML_INFERENCE_SLOS](18_ML_INFERENCE_SLOS.md#mlinferencestalled) |
+| `FsmBadStateTooLong` | warning | Overview | FSM state | Check operator override | [27_FSM_OPERATOR_OVERRIDE](27_FSM_OPERATOR_OVERRIDE.md#fsmbadstatetoolong) |
+| `FsmActionBlockedSpike` | warning | Overview | FSM state | Intents rejected by permission matrix | [27_FSM_OPERATOR_OVERRIDE](27_FSM_OPERATOR_OVERRIDE.md#fsmactionblockedspike) |
+| `SorBlockedSpike` | warning | Overview | Router decisions | Orders rejected by SOR | [28_SOR_FIRE_DRILL](28_SOR_FIRE_DRILL.md#sorblockedspike) |
+| `AccountSyncStale` | warning | Overview | Sync age | Positions/orders may be outdated | [29_ACCOUNT_SYNC](29_ACCOUNT_SYNC.md#accountsyncstale) |
+| `AccountSyncErrors` | warning | Overview | Sync errors | Check API connectivity, credentials | [29_ACCOUNT_SYNC](29_ACCOUNT_SYNC.md#accountsyncerrors) |
+| `AccountSyncMismatchSpike` | warning | Overview | Sync mismatches | Expected vs observed diverged | [30_ACCOUNT_SYNC_FIRE_DRILL](30_ACCOUNT_SYNC_FIRE_DRILL.md#accountsyncmismatchspike) |
+| `FillIngestDisabled` | warning | Overview | Ingest enabled gauge | Set FILL_INGEST_ENABLED=1 | [26_FILL_TRACKER_TRIAGE](26_FILL_TRACKER_TRIAGE.md#fillingestdisabled) |
+| `FillParseErrors` | warning | Overview | Ingest errors | Check for API schema changes | [26_FILL_TRACKER_TRIAGE](26_FILL_TRACKER_TRIAGE.md#fillparseerrors) |
+| `FillIngestHttpErrors` | warning | Overview | Ingest errors | Check Binance connectivity, API key | [26_FILL_TRACKER_TRIAGE](26_FILL_TRACKER_TRIAGE.md#fillingesthttperrors) |
+| `FillCursorStuck` | warning | Overview | Cursor age | Cursor not saved for 30m+ | [26_FILL_TRACKER_TRIAGE](26_FILL_TRACKER_TRIAGE.md#fillcursorstuck) |
+| `FillCursorNonMonotonicRejected` | warning | Overview | Cursor save counters | Possible data corruption | [26_FILL_TRACKER_TRIAGE](26_FILL_TRACKER_TRIAGE.md#fillcursornonmonotonicrejected) |
 
-3. Review if blocks are expected given market conditions
+### Ticket / Info alerts
+
+| Alert | Severity | Dashboard | What to check | Runbook |
+|-------|----------|-----------|---------------|---------|
+| `GrinderDataGapSpike` | ticket | Overview | Tick gap counters | [23_DATA_QUALITY_TRIAGE](23_DATA_QUALITY_TRIAGE.md#grinderdatagapspike) |
+| `GrinderDataOutlierSpike` | ticket | Overview | Outlier counters | [23_DATA_QUALITY_TRIAGE](23_DATA_QUALITY_TRIAGE.md#grinderdataoutlierspike) |
+| `GrinderHttpReadRetriesSpike` | ticket | Trading Loop | Route+Method panels | [24_LATENCY_RETRY_TRIAGE](24_LATENCY_RETRY_TRIAGE.md#grinderhttpreadretriesspike) |
+| `GrinderHttp429RateLimitSpike` | ticket | Trading Loop | Route+Method panels | [24_LATENCY_RETRY_TRIAGE](24_LATENCY_RETRY_TRIAGE.md#grinderhttp429ratelimitspike) |
+| `KillSwitchTripIncreased` | info | Overview | Kill-switch trips | [04_KILL_SWITCH](04_KILL_SWITCH.md) |
+| `GrinderRecentRestart` | info | Trading Loop | Uptime seconds | Verify intentional; check logs if not |
+| `AllGatingBlocked` | info | Overview | Allowed/Blocked counters | All decisions blocked for 5m |
+| `ReconcileRemediationPlanned` | info | Reconcile | Planned actions | [16_RECONCILE_ALERTS_SLOS](16_RECONCILE_ALERTS_SLOS.md#reconcileremediationplanned) |
+| `ReconcileRemediationBlocked` | info | Reconcile | Blocked actions | [16_RECONCILE_ALERTS_SLOS](16_RECONCILE_ALERTS_SLOS.md#reconcileremediationblocked) |
+| `MlActiveModePersistentlyBlocked` | info | ML Overview | Active mode gauge | [18_ML_INFERENCE_SLOS](18_ML_INFERENCE_SLOS.md#mlactivemodepersistentlyblocked) |
+| `SorNoopSpike` | info | Overview | Router decisions | [28_SOR_FIRE_DRILL](28_SOR_FIRE_DRILL.md#sornoopspike) |
 
 ---
 
-## Info Alerts
+## Using triage bundle when an alert fires
 
-### KillSwitchTripIncreased
+The CI/CD pipeline automatically generates triage bundles on failure, but you can
+also run one manually when investigating an alert:
 
-**Condition:** Kill-switch trip count increased in last 5 minutes
+**Full triage (all sections):**
+```bash
+bash scripts/triage_bundle.sh 2>&1 | tee /tmp/triage_$(date +%s).txt
+```
 
-**Impact:** A kill-switch event occurred (may have already recovered).
+**Compact triage (metadata + readyz + next steps only):**
+```bash
+bash scripts/triage_bundle.sh --compact 2>&1
+```
 
-**Response:**
+**Where to find CI triage artifacts:**
+- PR comments: look for "Latest triage hints" block (compact preview)
+- GitHub Actions artifacts: download full bundle from the workflow run
+- 1-click link: the consolidated triage comment includes a direct artifact URL
 
-1. Check current state:
-   ```bash
-   curl -fsS localhost:9090/metrics | grep kill_switch
-   ```
-
-2. Review what triggered the trip
-
-3. Document for post-mortem
-
----
-
-### GrinderRecentRestart
-
-**Condition:** Uptime < 60 seconds
-
-**Impact:** System recently restarted.
-
-**Response:**
-
-1. Verify restart was intentional
-
-2. If unintentional, check logs for crash:
-   ```bash
-   docker logs grinder --tail=200
-   ```
-
-3. Monitor for stability (no repeated restarts)
+**What to read first in the triage output:**
+1. `NEXT STEPS` section -- prioritized actions based on current state
+2. `READYZ` section -- is the loop ready?
+3. `METRICS SNAPSHOT` section -- key counters at the time of capture
 
 ---
 
-## Alert Silencing
+## Severity reference
 
-### Temporary Silence (Maintenance)
+| Severity | Meaning | Response time | Examples |
+|----------|---------|---------------|----------|
+| `critical` | Immediate action required | <5 min | GrinderDown, EngineInitDown, KillSwitchTripped |
+| `page` | Wake-up worthy | <15 min | GrinderDataStaleBurst, FillCursorSaveErrors |
+| `warning` | Investigate soon | <1 hour | ReadyzNotReady, HighDrawdown, ReconcileSnapshotStale |
+| `ticket` | Track and fix | Next business day | GrinderDataGapSpike, GrinderHttp429RateLimitSpike |
+| `info` | Informational | Review in batch | GrinderRecentRestart, SorNoopSpike |
+
+---
+
+## Alert silencing (maintenance)
 
 During planned maintenance, silence alerts in Prometheus Alertmanager:
 
@@ -194,13 +202,14 @@ curl -X POST http://localhost:9093/api/v2/silences -d '{
 }'
 ```
 
-**Note:** Alertmanager is not currently deployed in the observability stack. Silencing would need to be done via Grafana or by modifying alert rules.
+**Note:** Alertmanager is not currently deployed. Silencing would need to be done
+via Grafana or by modifying alert rules.
 
 ---
 
 ## Escalation
 
-| Severity | Response Time | Escalation |
+| Severity | Response time | Escalation |
 |----------|---------------|------------|
 | Critical | Immediate | Page on-call |
 | Warning | 15 minutes | Slack notification |
