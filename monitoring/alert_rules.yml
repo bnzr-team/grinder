@@ -102,6 +102,7 @@ groups:
           summary: "GRINDER is down"
           description: "GRINDER instance has been unresponsive for more than 1 minute."
           runbook_url: "docs/runbooks/02_HEALTH_TRIAGE.md"
+          dashboard_uid: "prometheus-targets"
 
       # Critical: Prometheus cannot scrape GRINDER (meta-alert: silences all others)
       - alert: GrinderTargetDown
