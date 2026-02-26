@@ -13,6 +13,7 @@
 #   --log-lines <N>       Tail N log lines (default: 300)
 #   --service <name>      Systemd unit name (default: grinder)
 #   --compose <path>      Docker compose file (optional)
+#   --compact             Print only readyz + next-steps (for PR comments)
 #
 # Exit codes:
 #   0 - Bundle generated (even if some checks failed)
@@ -26,6 +27,7 @@ READYZ_URL="http://localhost:9090/readyz"
 LOG_LINES=300
 SERVICE="grinder"
 COMPOSE_FILE=""
+COMPACT="false"
 OUT=""
 
 # ── Parse flags ───────────────────────────────────────────────────────
@@ -37,6 +39,7 @@ while [[ $# -gt 0 ]]; do
     --log-lines)    LOG_LINES="$2";    shift 2 ;;
     --service)      SERVICE="$2";      shift 2 ;;
     --compose)      COMPOSE_FILE="$2"; shift 2 ;;
+    --compact)      COMPACT="true";    shift   ;;
     -h|--help)
       sed -n '2,/^$/p' "$0" | sed 's/^# \?//'
       exit 0
@@ -114,6 +117,17 @@ if git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   echo "git_dirty: $(git status --porcelain 2>/dev/null | wc -l | tr -d ' ') files"
 fi
 
+# ── Fetch metrics (always — needed for NEXT STEPS) ───────────────────
+TMP_METRICS=$(mktemp)
+trap 'rm -f "${TMP_METRICS}"' EXIT
+
+set +e
+curl -fsS "${METRICS_URL}" > "${TMP_METRICS}" 2>&1
+METRICS_RC=$?
+set -e
+
+if [[ "${COMPACT}" != "true" ]]; then
+
 # ── B) ENV FINGERPRINT ────────────────────────────────────────────────
 section "ENV FINGERPRINT"
 if python3 -c "import scripts.env_fingerprint" >/dev/null 2>&1; then
@@ -134,14 +148,6 @@ fi
 
 # ── D) KEY METRICS ────────────────────────────────────────────────────
 section "METRICS"
-
-TMP_METRICS=$(mktemp)
-trap 'rm -f "${TMP_METRICS}"' EXIT
-
-set +e
-curl -fsS "${METRICS_URL}" > "${TMP_METRICS}" 2>&1
-METRICS_RC=$?
-set -e
 
 if [[ ${METRICS_RC} -ne 0 ]]; then
   echo "METRICS_FETCH_FAILED (exit ${METRICS_RC})"
@@ -232,6 +238,15 @@ fi
 
 if [[ "${LOGS_FOUND}" == "false" ]]; then
   echo "LOGS: not found (no docker/journalctl/tmp logs)"
+fi
+
+fi # end of COMPACT != true guard (sections B-E)
+
+# ── Compact: one-line readyz status ──────────────────────────────────
+if [[ "${COMPACT}" == "true" ]]; then
+  READYZ_HTTP=$(curl -sS -o /dev/null -w '%{http_code}' "${READYZ_URL}" 2>/dev/null || echo "000")
+  echo "readyz: ${READYZ_HTTP} (${READYZ_URL})"
+  echo "metrics: $(if [[ ${METRICS_RC} -eq 0 ]]; then echo "OK"; else echo "UNAVAILABLE"; fi)"
 fi
 
 # ── F) NEXT STEPS ─────────────────────────────────────────────────────
