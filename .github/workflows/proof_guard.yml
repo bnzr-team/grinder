@@ -33,8 +33,8 @@ jobs:
           while [ $ELAPSED -lt $MAX_WAIT ]; do
             BODY=$(gh api "repos/$REPO/pulls/$PR_NUMBER" -q '.body // ""' 2>/dev/null || echo "")
 
-            if echo "$BODY" | grep -q 'ACCEPTANCE_PACKET_START'; then
-              if echo "$BODY" | grep -q '== ACCEPTANCE PACKET: PENDING =='; then
+            if echo "$BODY" | grep -qF '<!-- ACCEPTANCE_PACKET_START -->'; then
+              if echo "$BODY" | grep -qF '== ACCEPTANCE PACKET: PENDING =='; then
                 echo "[${ELAPSED}s] Acceptance packet in PENDING state, waiting..."
               else
                 echo "[${ELAPSED}s] Acceptance packet found in PR body, proceeding"
