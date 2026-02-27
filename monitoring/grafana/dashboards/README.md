@@ -1,78 +1,60 @@
-# Grinder Grafana Dashboards
+# Grafana Dashboards
 
-## Available Dashboards
+## Quick start: "I got an alert with `dashboard_uid` -- what do I do?"
 
-| Dashboard | UID | Description |
-|-----------|-----|-------------|
-| [Grinder Overview](grinder_overview.json) | `grinder-overview` | System health, HA status, kill-switch, gating |
-| [Reconcile](grinder_reconcile.json) | `grinder-reconcile` | Reconciliation loop, mismatches, remediation |
-| [ML Overview](grinder_ml_overview.json) | `grinder-ml-overview` | ML inference overview: mode, rates, latency, errors |
-| [ML Latency & SLO](grinder_ml_latency.json) | `grinder-ml-latency` | Latency percentiles, heatmap, SLO compliance |
-| [ML Block Reasons](grinder_ml_blocks.json) | `grinder-ml-blocks` | ACTIVE mode block reasons, distribution |
+1. Find `dashboard_uid` in the alert's annotations (visible in Alertmanager or the runbook).
+2. Open Grafana and navigate: **Dashboards > Search** (or press `/`), then search by the dashboard title from the table below.
+3. If provisioned via `docker-compose.observability.yml`, dashboards appear in the **Grinder** folder.
 
-## Import Instructions
+## Where dashboards live in this repo
 
-### Option 1: Provisioning (Recommended)
+| Path | Purpose |
+|------|---------|
+| `monitoring/grafana/dashboards/*.json` | Dashboard definitions (auto-provisioned) |
+| `monitoring/grafana/provisioning/dashboards/dashboard.yml` | Provisioning config (maps JSON files into Grafana) |
+| `monitoring/grafana/provisioning/datasources/datasource.yml` | Prometheus datasource config |
 
-Dashboards are automatically loaded via Grafana provisioning when using Docker Compose:
+## Dashboard UID mapping (SSOT)
+
+| `dashboard_uid` | Title | JSON file | Used by alerts | Notes |
+|-----------------|-------|-----------|----------------|-------|
+| `grinder-overview` | Grinder Overview | `grinder_overview.json` | 6 alerts | System health, HA, gating, risk |
+| `grinder-trading-loop` | Grinder Trading Loop | `grinder_trading_loop.json` | 5 alerts | Engine, SOR, fill-prob, order flow |
+| `grinder-reconcile` | Grinder Reconcile & Remediation | `grinder_reconcile.json` | 1 alert | Reconcile loop, mismatches, budget |
+| `grinder-ml-overview` | Grinder ML Overview | `grinder_ml_overview.json` | 1 alert | ML inference, latency, block reasons |
+| `prometheus-targets` | Prometheus Targets | *(built-in)* | 2 alerts | Built-in Prometheus UI at `/targets`; no JSON in this repo |
+| `grinder-ml-latency` | Grinder ML Latency & SLO | `grinder_ml_latency.json` | 0 alerts | ML latency histograms and SLO tracking |
+| `grinder-ml-blocks` | Grinder ML Block Reasons | `grinder_ml_blocks.json` | 0 alerts | ML block reason breakdown |
+
+The `dashboard_uid` values used in `monitoring/alert_rules.yml` are validated by `scripts/verify_alert_rules.py` (OBS-4).
+The SSOT enum lives in `scripts/verify_alert_rules.py:DASHBOARD_UID_ENUM`.
+
+> **SSOT note:** ML metrics, SLO targets, and panel details live in `docs/OBSERVABILITY_SLOS.md` — do not duplicate here.
+
+## How to find a dashboard JSON by UID
 
 ```bash
-docker-compose up -d grafana
+# All dashboard UIDs in this directory:
+grep -rn '"uid":' monitoring/grafana/dashboards/*.json | grep -v '"prometheus"'
+
+# Specific UID lookup:
+grep -rn '"uid": "grinder-overview"' monitoring/grafana/dashboards/
 ```
 
-Provisioning config: `monitoring/grafana/provisioning/dashboards/dashboard.yml`
+## How to find which alerts use a dashboard
 
-### Option 2: Manual Import
-
-1. Open Grafana UI (default: http://localhost:3000)
-2. Go to Dashboards > Import
-3. Upload JSON file or paste contents
-4. Select `prometheus` datasource
-
-## ML Dashboards (M8-02e)
-
-### Metrics Used
-
-```
-# Counters
-grinder_ml_inference_total         # Successful inferences
-grinder_ml_inference_errors_total  # Inference errors
-grinder_ml_block_total{reason}     # ACTIVE mode blocks by reason
-
-# Histogram
-grinder_ml_inference_latency_ms{mode}  # Latency by mode (shadow/active)
-  - Buckets: 1, 5, 10, 25, 50, 100, 250, 500, 1000ms
-
-# Gauges
-grinder_ml_active_on               # 1 if ACTIVE mode, 0 if SHADOW
+```bash
+grep -n 'dashboard_uid:' monitoring/alert_rules.yml
 ```
 
-### SLO Targets
+## Import / provisioning
 
-| Metric | SLO | Alert Threshold |
-|--------|-----|-----------------|
-| p99 latency | < 100ms | > 100ms for 5m |
-| p99.9 latency | < 250ms | > 250ms for 3m |
-| Error rate | < 5% | > 5% for 5m |
+Dashboards are auto-loaded via Grafana provisioning when using Docker Compose:
 
-### Panel Reference
+```bash
+docker compose -f docker-compose.observability.yml up -d
+```
 
-**ML Overview:**
-- ML Mode stat (SHADOW/ACTIVE)
-- Inference rate timeseries
-- Latency percentiles by mode
-- Block reasons stacked timeseries
+To import manually: Grafana UI > Dashboards > Import > upload JSON file > select `prometheus` datasource.
 
-**ML Latency & SLO:**
-- p50/p95/p99/p99.9 stats
-- Latency heatmap
-- SLO compliance percentage
-
-**ML Block Reasons:**
-- Block distribution pie chart
-- Block reasons table
-- Mode vs block activity correlation
-
-## Datasource
-
-All dashboards use `prometheus` datasource UID. If your Prometheus datasource has a different UID, update the JSON files or use Grafana's import variable mapping.
+All dashboards use the `prometheus` datasource UID. If your Prometheus datasource has a different UID, update the JSON files or use Grafana's import variable mapping.
