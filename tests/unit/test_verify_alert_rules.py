@@ -1,4 +1,4 @@
-"""Tests for scripts/verify_alert_rules.py (Launch-05).
+"""Tests for scripts/verify_alert_rules.py (Launch-05 + OBS-4).
 
 Covers:
 - Valid YAML → PASS
@@ -8,6 +8,8 @@ Covers:
 - Invalid YAML → exit 2
 - op= allowlist: valid ops pass, unknown ops fail
 - Real alert_rules.yml passes validation
+- OBS-4: required labels (component, category), enum validation,
+  dashboard_uid for critical/page, template prohibition
 """
 
 from __future__ import annotations
@@ -16,7 +18,12 @@ from pathlib import Path
 
 import pytest
 import yaml
-from scripts.verify_alert_rules import main, validate
+from scripts.verify_alert_rules import (
+    COMPONENT_ENUM,
+    SEVERITY_ENUM,
+    main,
+    validate,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -30,7 +37,11 @@ VALID_RULES: dict[str, object] = {
                 {
                     "alert": "TestAlert",
                     "expr": "up == 1",
-                    "labels": {"severity": "warning"},
+                    "labels": {
+                        "severity": "warning",
+                        "component": "engine",
+                        "category": "availability",
+                    },
                     "annotations": {"summary": "Test alert"},
                 },
             ],
@@ -44,7 +55,11 @@ def _rules_with(**overrides: object) -> dict[str, object]:
     rule: dict[str, object] = {
         "alert": "TestAlert",
         "expr": "up == 1",
-        "labels": {"severity": "warning"},
+        "labels": {
+            "severity": "warning",
+            "component": "engine",
+            "category": "availability",
+        },
         "annotations": {"summary": "Test"},
     }
     rule.update(overrides)
@@ -62,10 +77,11 @@ class TestValidateHappy:
         assert errors == []
 
     def test_multiple_groups_unique_names(self) -> None:
+        _labels = {"severity": "warning", "component": "engine", "category": "availability"}
         data = {
             "groups": [
-                {"name": "g1", "rules": [{"alert": "A", "expr": "up == 1"}]},
-                {"name": "g2", "rules": [{"alert": "B", "expr": "up == 0"}]},
+                {"name": "g1", "rules": [{"alert": "A", "expr": "up == 1", "labels": _labels}]},
+                {"name": "g2", "rules": [{"alert": "B", "expr": "up == 0", "labels": _labels}]},
             ],
         }
         assert validate(data) == []
@@ -73,13 +89,14 @@ class TestValidateHappy:
 
 class TestValidateDuplicates:
     def test_duplicate_name_same_group(self) -> None:
+        _labels = {"severity": "warning", "component": "engine", "category": "availability"}
         data = {
             "groups": [
                 {
                     "name": "g1",
                     "rules": [
-                        {"alert": "Dup", "expr": "up == 1"},
-                        {"alert": "Dup", "expr": "up == 0"},
+                        {"alert": "Dup", "expr": "up == 1", "labels": _labels},
+                        {"alert": "Dup", "expr": "up == 0", "labels": _labels},
                     ],
                 },
             ],
@@ -89,10 +106,11 @@ class TestValidateDuplicates:
         assert "duplicate alert name" in errors[0]
 
     def test_duplicate_name_cross_group(self) -> None:
+        _labels = {"severity": "warning", "component": "engine", "category": "availability"}
         data = {
             "groups": [
-                {"name": "g1", "rules": [{"alert": "Dup", "expr": "up == 1"}]},
-                {"name": "g2", "rules": [{"alert": "Dup", "expr": "up == 0"}]},
+                {"name": "g1", "rules": [{"alert": "Dup", "expr": "up == 1", "labels": _labels}]},
+                {"name": "g2", "rules": [{"alert": "Dup", "expr": "up == 0", "labels": _labels}]},
             ],
         }
         errors = validate(data)
@@ -227,11 +245,21 @@ class TestValidateStructure:
 
 
 class TestMainIntegration:
+    _VALID_YAML = (
+        "groups:\n"
+        "  - name: test\n"
+        "    rules:\n"
+        "      - alert: TestAlert\n"
+        "        expr: up == 1\n"
+        "        labels:\n"
+        "          severity: warning\n"
+        "          component: engine\n"
+        "          category: availability\n"
+    )
+
     def test_valid_file(self, tmp_path: Path) -> None:
         p = tmp_path / "rules.yml"
-        p.write_text(
-            "groups:\n  - name: test\n    rules:\n      - alert: TestAlert\n        expr: up == 1\n"
-        )
+        p.write_text(self._VALID_YAML)
         assert main([str(p)]) == 0
 
     def test_invalid_yaml(self, tmp_path: Path) -> None:
@@ -251,8 +279,16 @@ class TestMainIntegration:
             "    rules:\n"
             "      - alert: Dup\n"
             "        expr: up == 1\n"
+            "        labels:\n"
+            "          severity: warning\n"
+            "          component: engine\n"
+            "          category: availability\n"
             "      - alert: Dup\n"
             "        expr: up == 0\n"
+            "        labels:\n"
+            "          severity: warning\n"
+            "          component: engine\n"
+            "          category: availability\n"
         )
         assert main([str(p)]) == 1
 
@@ -264,6 +300,10 @@ class TestMainIntegration:
             "    rules:\n"
             "      - alert: Bad\n"
             "        expr: 'metric{symbol=\"BTC\"}'\n"
+            "        labels:\n"
+            "          severity: warning\n"
+            "          component: engine\n"
+            "          category: availability\n"
         )
         assert main([str(p)]) == 1
 
@@ -272,6 +312,164 @@ class TestRealAlertRules:
     """Validate the actual alert_rules.yml in the repo."""
 
     def test_real_rules_pass(self) -> None:
+        real_path = Path("monitoring/alert_rules.yml")
+        if not real_path.exists():
+            pytest.skip("monitoring/alert_rules.yml not found")
+        assert main([str(real_path)]) == 0
+
+
+# ---------------------------------------------------------------------------
+# OBS-4: Alert annotation contract tests
+# ---------------------------------------------------------------------------
+
+
+class TestLabelContractComponent:
+    """OBS-4: component label is required and enum-validated."""
+
+    def test_missing_component(self) -> None:
+        data = _rules_with(labels={"severity": "warning", "category": "availability"})
+        errors = validate(data)
+        assert any("missing required label 'component'" in e for e in errors)
+
+    def test_empty_component(self) -> None:
+        data = _rules_with(
+            labels={"severity": "warning", "component": "", "category": "availability"},
+        )
+        errors = validate(data)
+        assert any("missing required label 'component'" in e for e in errors)
+
+    def test_invalid_component_enum(self) -> None:
+        data = _rules_with(
+            labels={"severity": "warning", "component": "scrpae", "category": "availability"},
+        )
+        errors = validate(data)
+        assert len(errors) == 1
+        assert "invalid component 'scrpae'" in errors[0]
+
+    def test_all_valid_components(self) -> None:
+        for comp in sorted(COMPONENT_ENUM):
+            data = _rules_with(
+                labels={"severity": "warning", "component": comp, "category": "availability"},
+            )
+            assert validate(data) == [], f"component '{comp}' should be valid"
+
+
+class TestLabelContractCategory:
+    """OBS-4: category label is required and enum-validated."""
+
+    def test_missing_category(self) -> None:
+        data = _rules_with(labels={"severity": "warning", "component": "engine"})
+        errors = validate(data)
+        assert any("missing required label 'category'" in e for e in errors)
+
+    def test_empty_category(self) -> None:
+        data = _rules_with(
+            labels={"severity": "warning", "component": "engine", "category": ""},
+        )
+        errors = validate(data)
+        assert any("missing required label 'category'" in e for e in errors)
+
+    def test_invalid_category_enum(self) -> None:
+        data = _rules_with(
+            labels={"severity": "warning", "component": "engine", "category": "availabilty"},
+        )
+        errors = validate(data)
+        assert len(errors) == 1
+        assert "invalid category 'availabilty'" in errors[0]
+
+
+class TestLabelContractSeverity:
+    """OBS-4: severity enum validation."""
+
+    def test_invalid_severity(self) -> None:
+        data = _rules_with(
+            labels={"severity": "urgent", "component": "engine", "category": "availability"},
+        )
+        errors = validate(data)
+        assert any("invalid severity 'urgent'" in e for e in errors)
+
+    def test_all_valid_severities(self) -> None:
+        for sev in sorted(SEVERITY_ENUM):
+            labels: dict[str, str] = {
+                "severity": sev,
+                "component": "engine",
+                "category": "availability",
+            }
+            ann: dict[str, str] = {"summary": "Test"}
+            if sev in {"critical", "page"}:
+                ann["dashboard_uid"] = "grinder-overview"
+            data = _rules_with(labels=labels, annotations=ann)
+            assert validate(data) == [], f"severity '{sev}' should be valid"
+
+
+class TestDashboardUidContract:
+    """OBS-4: dashboard_uid required for critical/page severity."""
+
+    def test_critical_without_dashboard_uid(self) -> None:
+        data = _rules_with(
+            labels={"severity": "critical", "component": "engine", "category": "availability"},
+            annotations={"summary": "Down"},
+        )
+        errors = validate(data)
+        assert any("requires 'dashboard_uid'" in e for e in errors)
+
+    def test_page_without_dashboard_uid(self) -> None:
+        data = _rules_with(
+            labels={"severity": "page", "component": "engine", "category": "availability"},
+            annotations={"summary": "Slow"},
+        )
+        errors = validate(data)
+        assert any("requires 'dashboard_uid'" in e for e in errors)
+
+    def test_critical_with_valid_dashboard_uid(self) -> None:
+        data = _rules_with(
+            labels={"severity": "critical", "component": "engine", "category": "availability"},
+            annotations={"summary": "Down", "dashboard_uid": "grinder-overview"},
+        )
+        assert validate(data) == []
+
+    def test_warning_without_dashboard_uid_ok(self) -> None:
+        data = _rules_with(
+            labels={"severity": "warning", "component": "engine", "category": "availability"},
+        )
+        assert validate(data) == []
+
+    def test_invalid_dashboard_uid(self) -> None:
+        data = _rules_with(
+            labels={"severity": "critical", "component": "engine", "category": "availability"},
+            annotations={"summary": "Down", "dashboard_uid": "bad-dashboard"},
+        )
+        errors = validate(data)
+        assert any("invalid dashboard_uid 'bad-dashboard'" in e for e in errors)
+
+
+class TestTemplateProhibition:
+    """OBS-4: No Go-template syntax in constant fields."""
+
+    def test_template_in_component(self) -> None:
+        data = _rules_with(
+            labels={
+                "severity": "warning",
+                "component": "{{ .Labels.job }}",
+                "category": "availability",
+            },
+        )
+        errors = validate(data)
+        assert any("invalid component" in e for e in errors)
+
+    def test_template_in_dashboard_uid(self) -> None:
+        data = _rules_with(
+            labels={"severity": "critical", "component": "engine", "category": "availability"},
+            annotations={"summary": "X", "dashboard_uid": "{{ .ExternalURL }}"},
+        )
+        errors = validate(data)
+        assert any("invalid dashboard_uid" in e for e in errors)
+
+
+class TestRealAlertRulesContract:
+    """OBS-4: Real alert_rules.yml passes ALL contract checks (golden positive)."""
+
+    def test_real_rules_pass_full_contract(self) -> None:
         real_path = Path("monitoring/alert_rules.yml")
         if not real_path.exists():
             pytest.skip("monitoring/alert_rules.yml not found")
