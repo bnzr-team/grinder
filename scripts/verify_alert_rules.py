@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate Prometheus alert rules YAML (Launch-05).
+"""Validate Prometheus alert rules YAML (Launch-05 + OBS-4).
 
 Checks:
 1. Valid YAML structure with ``groups[].rules[]``
@@ -7,6 +7,11 @@ Checks:
 3. No forbidden labels in expr (``symbol=``, ``order_id=``, ``key=``, ``client_id=``)
 4. Non-empty ``expr`` on every rule
 5. ``op=`` values in PromQL expressions match ops taxonomy allowlist
+6. Required labels: ``component``, ``category`` (non-empty, valid enum)
+7. Required annotations: ``summary``, ``description``, ``runbook_url``
+8. ``dashboard_uid`` required for ``critical``/``page`` severity
+9. No Go-template syntax (``{{``/``}}``) in component/category/dashboard_uid
+10. Enum validation for severity/component/category/dashboard_uid
 
 Usage:
   python -m scripts.verify_alert_rules monitoring/alert_rules.yml
@@ -52,6 +57,51 @@ _OPS_ALLOWLIST: frozenset[str] = frozenset(
 # Pattern to extract op= literal values from PromQL expressions.
 # Matches: op="value", op=~"value|value2", op!="value"
 _OP_VALUE_PATTERN = re.compile(r'\bop\s*[!=~]+\s*"([^"]*)"')
+
+# ---------------------------------------------------------------------------
+# OBS-4: Alert annotation contract enums (SSOT: alert_rules.yml header v6)
+# ---------------------------------------------------------------------------
+
+SEVERITY_ENUM: frozenset[str] = frozenset({"critical", "page", "warning", "ticket", "info"})
+
+COMPONENT_ENUM: frozenset[str] = frozenset(
+    {
+        "scrape",
+        "process",
+        "readyz",
+        "engine",
+        "risk",
+        "gating",
+        "reconcile",
+        "ml",
+        "dq",
+        "exchange",
+        "fills",
+        "fsm",
+        "sor",
+        "account",
+    }
+)
+
+CATEGORY_ENUM: frozenset[str] = frozenset(
+    {"availability", "safety", "latency", "correctness", "capacity", "integrity"}
+)
+
+DASHBOARD_UID_ENUM: frozenset[str] = frozenset(
+    {
+        "grinder-overview",
+        "grinder-trading-loop",
+        "grinder-reconcile",
+        "grinder-ml-overview",
+        "prometheus-targets",
+    }
+)
+
+# Severities that require dashboard_uid annotation
+_DASHBOARD_REQUIRED_SEVERITIES: frozenset[str] = frozenset({"critical", "page"})
+
+# Go-template pattern — must not appear in constant label/annotation values
+_TEMPLATE_PATTERN = re.compile(r"\{\{|\}\}")
 
 
 def load_rules(path: Path) -> dict[str, Any]:
@@ -114,6 +164,10 @@ def validate(data: dict[str, Any]) -> list[str]:
             # op= value allowlist check on expr
             _check_op_allowlist(str(expr), rule_id, errors)
 
+            # OBS-4: Alert annotation contract enforcement
+            _check_label_contract(rule, rule_id, errors)
+            _check_annotation_contract(rule, rule_id, errors)
+
     return errors
 
 
@@ -142,6 +196,61 @@ def _check_op_allowlist(expr: str, context: str, errors: list[str]) -> None:
         for op in ops:
             if op not in _OPS_ALLOWLIST:
                 errors.append(f"{context}: unknown op '{op}' in expr (not in ops taxonomy)")
+
+
+def _check_label_contract(rule: dict[str, Any], context: str, errors: list[str]) -> None:
+    """OBS-4: Enforce required labels and enum validation."""
+    labels = rule.get("labels") or {}
+
+    # severity enum (already present in most rules, now validated)
+    severity = str(labels.get("severity", "")).strip()
+    if severity and severity not in SEVERITY_ENUM:
+        errors.append(
+            f"{context}: invalid severity '{severity}' (expected one of {sorted(SEVERITY_ENUM)})"
+        )
+
+    # component — required, enum-validated
+    component = str(labels.get("component", "")).strip()
+    if not component:
+        errors.append(f"{context}: missing required label 'component'")
+    elif component not in COMPONENT_ENUM:
+        errors.append(
+            f"{context}: invalid component '{component}' (expected one of {sorted(COMPONENT_ENUM)})"
+        )
+    elif _TEMPLATE_PATTERN.search(component):
+        errors.append(f"{context}: template syntax in 'component' — must be a constant string")
+
+    # category — required, enum-validated
+    category = str(labels.get("category", "")).strip()
+    if not category:
+        errors.append(f"{context}: missing required label 'category'")
+    elif category not in CATEGORY_ENUM:
+        errors.append(
+            f"{context}: invalid category '{category}' (expected one of {sorted(CATEGORY_ENUM)})"
+        )
+    elif _TEMPLATE_PATTERN.search(category):
+        errors.append(f"{context}: template syntax in 'category' — must be a constant string")
+
+
+def _check_annotation_contract(rule: dict[str, Any], context: str, errors: list[str]) -> None:
+    """OBS-4: Enforce required annotations and dashboard_uid for critical/page."""
+    annotations = rule.get("annotations") or {}
+    labels = rule.get("labels") or {}
+    severity = str(labels.get("severity", "")).strip()
+
+    # dashboard_uid — required for critical/page
+    if severity in _DASHBOARD_REQUIRED_SEVERITIES:
+        uid = str(annotations.get("dashboard_uid", "")).strip()
+        if not uid:
+            errors.append(f"{context}: severity '{severity}' requires 'dashboard_uid' annotation")
+        elif uid not in DASHBOARD_UID_ENUM:
+            errors.append(
+                f"{context}: invalid dashboard_uid '{uid}' (expected one of {sorted(DASHBOARD_UID_ENUM)})"
+            )
+        elif _TEMPLATE_PATTERN.search(uid):
+            errors.append(
+                f"{context}: template syntax in 'dashboard_uid' — must be a constant string"
+            )
 
 
 def main(argv: list[str] | None = None) -> int:
