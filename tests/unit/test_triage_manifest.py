@@ -14,6 +14,7 @@ import pytest
 from scripts.triage_manifest import (
     cmd_append,
     cmd_init,
+    cmd_summary,
     detect_mode,
     is_sensitive_env_key,
     main,
@@ -210,6 +211,75 @@ class TestCmdAppend:
         assert len(data["artifacts"]) == 2
         assert data["artifacts"][0]["name"] == "a"
         assert data["artifacts"][1]["name"] == "b"
+
+
+# ---------------------------------------------------------------------------
+# summary subcommand
+# ---------------------------------------------------------------------------
+
+
+class TestCmdSummary:
+    def test_summary_all_ok(self, capsys: pytest.CaptureFixture[str]) -> None:
+        mf_path = _create_empty_manifest()
+        cmd_append(_append_args(manifest=mf_path, name="a", path="a.txt", ok="1", cmd="echo a"))
+        cmd_append(_append_args(manifest=mf_path, name="b", path="b.txt", ok="1", cmd="echo b"))
+        cmd_append(_append_args(manifest=mf_path, name="c", path="c.txt", ok="1", cmd="echo c"))
+
+        rc = cmd_summary(argparse.Namespace(command="summary", manifest=mf_path))
+        assert rc == 0
+        out = capsys.readouterr().out.strip()
+        assert out == "mode=local artifacts=3 failed=0 warnings=0 next_steps=0"
+
+    def test_summary_with_failures(self, capsys: pytest.CaptureFixture[str]) -> None:
+        mf_path = _create_empty_manifest()
+        cmd_append(_append_args(manifest=mf_path, name="a", path="a.txt", ok="1", cmd="echo a"))
+        cmd_append(
+            _append_args(
+                manifest=mf_path,
+                name="b",
+                path="b.txt",
+                ok="0",
+                cmd="curl x",
+                error="exit=7",
+                warning=["b failed"],
+                next_step=["check b"],
+            )
+        )
+        cmd_append(
+            _append_args(
+                manifest=mf_path,
+                name="c",
+                path="c.txt",
+                ok="0",
+                cmd="curl y",
+                error="exit=7",
+                next_step=["check c"],
+            )
+        )
+
+        rc = cmd_summary(argparse.Namespace(command="summary", manifest=mf_path))
+        assert rc == 0
+        out = capsys.readouterr().out.strip()
+        assert out == "mode=local artifacts=3 failed=2 warnings=1 next_steps=2"
+
+    def test_summary_via_main(self, capsys: pytest.CaptureFixture[str]) -> None:
+        mf_path = _create_empty_manifest()
+        rc = main(["summary", "--manifest", mf_path])
+        assert rc == 0
+        out = capsys.readouterr().out.strip()
+        assert "mode=local" in out
+        assert "artifacts=" in out
+
+    def test_summary_missing_file_returns_2(self) -> None:
+        rc = main(["summary", "--manifest", "/tmp/nonexistent_manifest_xyz.json"])
+        assert rc == 2
+
+    def test_summary_invalid_json_returns_2(self) -> None:
+        with tempfile.NamedTemporaryFile(suffix=".json", delete=False, mode="w") as f:
+            f.write("not valid json{{{")
+            bad_path = f.name
+        rc = main(["summary", "--manifest", bad_path])
+        assert rc == 2
 
 
 # ---------------------------------------------------------------------------
