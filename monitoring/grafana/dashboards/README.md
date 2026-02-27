@@ -44,3 +44,15 @@ grep -rn '"uid": "grinder-overview"' monitoring/grafana/dashboards/
 ```bash
 grep -n 'dashboard_uid:' monitoring/alert_rules.yml
 ```
+
+## Import / provisioning
+
+Dashboards are auto-loaded via Grafana provisioning when using Docker Compose:
+
+```bash
+docker compose -f docker-compose.observability.yml up -d
+```
+
+To import manually: Grafana UI > Dashboards > Import > upload JSON file > select `prometheus` datasource.
+
+All dashboards use the `prometheus` datasource UID. If your Prometheus datasource has a different UID, update the JSON files or use Grafana's import variable mapping.
