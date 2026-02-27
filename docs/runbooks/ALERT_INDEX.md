@@ -57,7 +57,7 @@ rg -n 'alert: <NAME>' monitoring/alert_rules.yml
 | `FillIngestNoPolls` | fills | availability | `grinder-overview` | [26_FILL_TRACKER_TRIAGE](26_FILL_TRACKER_TRIAGE.md#fillingestnopolls) | Reconcile loop may be stuck |
 | `FillCursorSaveErrors` | fills | integrity | `grinder-overview` | [26_FILL_TRACKER_TRIAGE](26_FILL_TRACKER_TRIAGE.md#fillcursorsaveerrors) | Check disk permissions, path |
 
-### Warning (25 alerts)
+### Warning (27 alerts)
 
 | Alert | component | category | `dashboard_uid` | Runbook | First look |
 |-------|-----------|----------|-----------------|---------|------------|
@@ -98,7 +98,7 @@ rg -n 'alert: <NAME>' monitoring/alert_rules.yml
 | `GrinderHttpReadRetriesSpike` | exchange | latency | — | [24_LATENCY_RETRY_TRIAGE](24_LATENCY_RETRY_TRIAGE.md#grinderhttpreadretriesspike) | Sustained retries waste latency budget |
 | `GrinderHttp429RateLimitSpike` | exchange | capacity | — | [24_LATENCY_RETRY_TRIAGE](24_LATENCY_RETRY_TRIAGE.md#grinderhttp429ratelimitspike) | Reduce reconcile interval or request freq |
 
-### Info (9 alerts)
+### Info (7 alerts)
 
 | Alert | component | category | `dashboard_uid` | Runbook | First look |
 |-------|-----------|----------|-----------------|---------|------------|
@@ -118,9 +118,10 @@ rg -n 'alert: <NAME>' monitoring/alert_rules.yml
 |----------|-------|---------------------|
 | critical | 9 | 9 (100%) |
 | page | 6 | 6 (100%) |
-| warning | 25 | 0 |
+| warning | 27 | 0 |
 | ticket | 4 | 0 |
 | info | 7 | 0 |
+
 | **Total** | **53** | **15** |
 
 > `dashboard_uid` is required for `critical` and `page` alerts (OBS-3/OBS-4 contract).
