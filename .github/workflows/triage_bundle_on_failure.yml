@@ -30,11 +30,13 @@ jobs:
         run: |
           set +e
           mkdir -p /tmp/triage
-          OUT="/tmp/triage/triage_bundle_${{ github.event.workflow_run.id }}.txt"
-          bash scripts/triage_bundle.sh --out "$OUT" || true
+          OUT="/tmp/triage/triage_bundle_${{ github.event.workflow_run.id }}.tgz"
+          bash scripts/triage_bundle.sh --mode ci --bundle-format tgz --out "$OUT" || true
           echo "OUT=$OUT" >> "$GITHUB_ENV"
           echo "=== NEXT STEPS (preview) ==="
-          awk '/^===== NEXT STEPS =====/{p=1} p{print} /^===== END TRIAGE BUNDLE =====/{exit}' "$OUT" 2>/dev/null || true
+          # Extract combined text from tgz, then awk for NEXT STEPS
+          tar -xzf "$OUT" -O triage_bundle.txt 2>/dev/null \
+            | awk '/^===== NEXT STEPS =====/{p=1} p{print} /^===== END TRIAGE BUNDLE =====/{exit}' || true
           exit 0
 
       - name: Upload triage bundle artifact
@@ -49,10 +51,10 @@ jobs:
         shell: bash
         run: |
           set +e
-          COMPACT_OUT="/tmp/triage/compact_${{ github.event.workflow_run.id }}.txt"
-          bash scripts/triage_bundle.sh --compact --out "$COMPACT_OUT" 2>&1 || true
-          # Extract just NEXT STEPS section (most actionable)
-          PREVIEW=$(awk '/^===== NEXT STEPS =====/{p=1; next} /^===== END TRIAGE BUNDLE =====/{exit} p{print}' "$COMPACT_OUT" 2>/dev/null | head -10 || true)
+          # Extract NEXT STEPS from the tgz bundle (no second run needed)
+          PREVIEW=$(tar -xzf "$OUT" -O triage_bundle.txt 2>/dev/null \
+            | awk '/^===== NEXT STEPS =====/{p=1; next} /^===== END TRIAGE BUNDLE =====/{exit} p{print}' \
+            | head -10 || true)
           if [[ -z "$PREVIEW" ]]; then
             PREVIEW="(no hints available)"
           fi

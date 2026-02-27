@@ -164,6 +164,10 @@ bash scripts/triage_bundle.sh 2>&1 | tee /tmp/triage_$(date +%s).txt
 bash scripts/triage_bundle.sh --compact 2>&1
 ```
 
+**Modes:** Use `--mode local` (default auto-detect), `--mode ci`, or `--mode prod` (reads `PROMETHEUS_URL`/`GRINDER_BASE_URL` env vars for URL defaults).
+
+**Structured output:** `--bundle-format tgz` creates a tarball with individual artifacts and `triage_manifest.json` describing each collected artifact (name, ok/fail, command, bytes).
+
 **Where to find CI triage artifacts:**
 - PR comments: look for "Latest triage hints" block (compact preview)
 - GitHub Actions artifacts: download full bundle from the workflow run
