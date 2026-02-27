@@ -3,6 +3,7 @@
 Response procedures for Prometheus alerts defined in `monitoring/alert_rules.yml`.
 
 **SSOT references:**
+- Alert routing index (quick lookup): [`ALERT_INDEX.md`](ALERT_INDEX.md)
 - SLO definitions & PromQL: [`docs/OBSERVABILITY_SLOS.md`](../OBSERVABILITY_SLOS.md)
 - Alert rules source: [`monitoring/alert_rules.yml`](../../monitoring/alert_rules.yml)
 - Metrics contract: [`src/grinder/observability/metrics_contract.py`](../../src/grinder/observability/metrics_contract.py)
@@ -190,7 +191,7 @@ bash scripts/triage_bundle.sh --compact 2>&1
 ## Alert label/annotation contract (OBS-3)
 
 Every alert in `monitoring/alert_rules.yml` MUST carry these labels and annotations.
-This contract is enforced by code review; automated validation is planned (OBS-4).
+This contract is enforced by `scripts/verify_alert_rules.py` (OBS-4).
 
 ### Required labels
 
