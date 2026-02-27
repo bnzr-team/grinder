@@ -205,6 +205,39 @@ def cmd_append(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# Summary subcommand
+# ---------------------------------------------------------------------------
+
+
+def cmd_summary(args: argparse.Namespace) -> int:
+    """Print a one-line manifest summary to stdout (read-only)."""
+    mf_path = Path(args.manifest)
+    if not mf_path.exists():
+        print(f"error: manifest not found: {mf_path}", file=sys.stderr)
+        return 2
+    try:
+        mf = _load_manifest(mf_path)
+    except (json.JSONDecodeError, ValueError) as exc:
+        print(f"error: invalid manifest: {exc}", file=sys.stderr)
+        return 2
+
+    mode = mf.get("mode", "unknown")
+    artifacts = mf.get("artifacts", [])
+    if not isinstance(artifacts, list):
+        print("error: manifest artifacts is not a list", file=sys.stderr)
+        return 2
+    total = len(artifacts)
+    failed = sum(1 for a in artifacts if isinstance(a, dict) and not a.get("ok", True))
+    warnings_count = len(mf.get("warnings", []))
+    next_steps_count = len(mf.get("next_steps", []))
+    print(
+        f"mode={mode} artifacts={total} failed={failed}"
+        f" warnings={warnings_count} next_steps={next_steps_count}"
+    )
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -241,12 +274,18 @@ def main(argv: list[str] | None = None) -> int:
         "--next-step", action="append", default=[], help="Next-step hint (repeatable)"
     )
 
+    # -- summary --
+    p_summary = sub.add_parser("summary", help="Print one-line manifest summary")
+    p_summary.add_argument("--manifest", required=True, help="Path to triage_manifest.json")
+
     args = parser.parse_args(argv)
 
     if args.command == "init":
         return cmd_init(args)
     if args.command == "append":
         return cmd_append(args)
+    if args.command == "summary":
+        return cmd_summary(args)
 
     parser.print_help()
     return 2

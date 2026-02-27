@@ -55,11 +55,24 @@ jobs:
           PREVIEW=$(tar -xzf "$OUT" -O triage_bundle.txt 2>/dev/null \
             | awk '/^===== NEXT STEPS =====/{p=1; next} /^===== END TRIAGE BUNDLE =====/{exit} p{print}' \
             | head -10 || true)
-          if [[ -z "$PREVIEW" ]]; then
-            PREVIEW="(no hints available)"
+          PREVIEW_LINES=$(printf "%s" "$PREVIEW" | sed '/^[[:space:]]*$/d' | wc -l | tr -d ' ')
+          echo "preview_lines=${PREVIEW_LINES}"
+          if [[ -z "${PREVIEW}" || "${PREVIEW_LINES}" -eq 0 ]]; then
+            PREVIEW="(preview empty — open artifact for full bundle)"
           fi
           # Save to file (avoid env var size limits)
           echo "$PREVIEW" > /tmp/triage/compact_preview.txt
+
+          # Extract manifest summary (best-effort)
+          MANIFEST_SUMMARY=""
+          tar -xzf "$OUT" -O triage_manifest.json > /tmp/triage/manifest.json 2>/dev/null || true
+          MANIFEST_BYTES=$(wc -c < /tmp/triage/manifest.json 2>/dev/null | tr -d ' ' || echo 0)
+          echo "manifest_bytes=${MANIFEST_BYTES}"
+          if [[ -s /tmp/triage/manifest.json ]]; then
+            MANIFEST_SUMMARY=$(python3 scripts/triage_manifest.py summary --manifest /tmp/triage/manifest.json 2>/dev/null || true)
+          fi
+          echo "$MANIFEST_SUMMARY" > /tmp/triage/manifest_summary.txt
+          echo "manifest_summary=${MANIFEST_SUMMARY}"
           exit 0
 
       - name: Comment on PR (dedup)
@@ -76,11 +89,15 @@ jobs:
             const artifactName = `triage-bundle-${runId}`;
             const nowIso = new Date().toISOString();
 
-            // Read compact preview (best-effort)
+            // Read compact preview and manifest summary (best-effort)
             const fs = require('fs');
             let compactPreview = "(no preview available)";
             try {
               compactPreview = fs.readFileSync('/tmp/triage/compact_preview.txt', 'utf8').trim();
+            } catch { /* file may not exist */ }
+            let manifestSummary = "";
+            try {
+              manifestSummary = fs.readFileSync('/tmp/triage/manifest_summary.txt', 'utf8').trim();
             } catch { /* file may not exist */ }
 
             const prs = context.payload.workflow_run.pull_requests || [];
@@ -146,6 +163,7 @@ jobs:
                 `Updated: ${nowIso} • Events tracked: ${total} (showing last ${MAX})`,
                 `Last run: ${latest.run_url || "N/A"}`,
                 `Artifacts: ${latest.run_url ? latest.run_url + "#artifacts" : "N/A"}`,
+                ...(manifestSummary ? [`Bundle: \`${manifestSummary}\``] : []),
               ].join("\n");
 
               const preview = compactPreview && compactPreview !== "(no preview available)"
