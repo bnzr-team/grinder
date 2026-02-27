@@ -126,3 +126,5 @@ rg -n 'alert: <NAME>' monitoring/alert_rules.yml
 
 > `dashboard_uid` is required for `critical` and `page` alerts (OBS-3/OBS-4 contract).
 > Enforced by `scripts/verify_alert_rules.py`.
+>
+> This index is validated against `monitoring/alert_rules.yml` by `scripts/verify_alert_index.py` (OBS-7).

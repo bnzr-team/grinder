@@ -54,6 +54,12 @@ jobs:
       - name: Unicode security scan
         run: python scripts/check_unicode.py
 
+      - name: Verify alert rules
+        run: python -m scripts.verify_alert_rules monitoring/alert_rules.yml
+
+      - name: Verify alert index
+        run: python -m scripts.verify_alert_index docs/runbooks/ALERT_INDEX.md monitoring/alert_rules.yml
+
       - name: Mypy
         if: github.event_name == 'push' || needs.changes.outputs.code == 'true'
         run: python3 -m mypy .
