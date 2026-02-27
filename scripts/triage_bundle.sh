@@ -501,7 +501,8 @@ exec 1>&3 2>&4
 sleep 0.2
 
 if [[ "${BUNDLE_FORMAT}" == "tgz" ]]; then
-  tar -czf "${OUT}" -C "${OUTDIR}" .
+  # Pack without ./ prefix so `tar -xzf ... -O triage_bundle.txt` works
+  (cd "${OUTDIR}" && tar -czf "${OUT}" *)
 else
   # txt mode: tee already wrote to ${OUT}; copy manifest alongside
   cp "${OUTDIR}/triage_manifest.json" "${OUT%.txt}_manifest.json" 2>/dev/null || true
