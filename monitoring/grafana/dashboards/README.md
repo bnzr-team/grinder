@@ -29,6 +29,8 @@
 The `dashboard_uid` values used in `monitoring/alert_rules.yml` are validated by `scripts/verify_alert_rules.py` (OBS-4).
 The SSOT enum lives in `scripts/verify_alert_rules.py:DASHBOARD_UID_ENUM`.
 
+> **SSOT note:** ML metrics, SLO targets, and panel details live in `docs/OBSERVABILITY_SLOS.md` — do not duplicate here.
+
 ## How to find a dashboard JSON by UID
 
 ```bash
