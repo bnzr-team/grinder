@@ -4053,3 +4053,18 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
   - Reordering existing gates will break contract tests (correct behavior — ordering is normative).
   - Smoke test (`scripts/smoke_futures_no_orders.sh`) complements contract tests: it proves zero network I/O end-to-end with all gates open on fixture data. It does NOT prove that kill-switch/drawdown correctly block at runtime (that is the contract tests' job).
 - **Rationale for ordering:** (1) Fail-fast: cheapest checks first (bool flag < model inference). (2) Determinism: same input always hits the same first blocking gate. (3) Operator expectations: `armed=False` is the master kill — it always wins.
+
+## ADR-077 — Policy Interface Contract: GridPolicy + GridPlan Normative Lockdown (TRD-2)
+- **Date:** 2026-02-28
+- **Status:** accepted
+- **Context:** `GridPolicy` ABC and `GridPlan` dataclass form the contract between policy evaluation and the execution engine. Two concrete policies (`StaticGridPolicy`, `AdaptiveGridPolicy`) depend on this contract. However, the field set, structural invariants, and protocol requirements were implicit in code — no normative specification or contract tests prevented accidental breakage (field addition/removal, type changes, invariant violations).
+- **Decision:**
+  - Declare `GridPlan` field set **normative**: exactly 11 fields (`mode`, `center_price`, `spacing_bps`, `levels_up`, `levels_down`, `size_schedule`, `skew_bps`, `regime`, `width_bps`, `reset_action`, `reason_codes`).
+  - Declare structural invariants normative: `spacing_bps > 0`, `levels >= 0`, `center_price > 0`, non-empty `size_schedule` when grid has levels, non-negative sizes.
+  - Declare determinism normative: same features → identical GridPlan (required by ADR-001 replay).
+  - Contract tests (`tests/unit/test_policy_contract.py`) freeze the interface via field enumeration, type assertions, invariant checks, and determinism proofs.
+  - SSOT document: `docs/22_POLICY_CONTRACT.md`.
+- **Consequences:**
+  - Adding or removing a `GridPlan` field requires updating: (1) `base.py`, (2) `docs/22_POLICY_CONTRACT.md` field table, (3) contract tests, (4) this ADR. This friction is intentional — field changes affect the policy-engine contract.
+  - Contract tests do NOT verify adaptive math correctness or regime classification — those are covered by implementation-specific tests. The contract tests verify the **interface**, not the **behavior**.
+  - `AdaptiveGridPolicy.evaluate()` extends the base signature with extra kwargs (`kill_switch_active`, `toxicity_result`, `l2_features`, `dd_budget_ratio`). These are NOT part of the ABC contract — they are adaptive-specific extension points.
