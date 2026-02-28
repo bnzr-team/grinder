@@ -16,7 +16,7 @@
 | `imbalance_l1_bps` | **Implemented** | FeatureEngine v1 | L1 queue imbalance |
 | `thin_l1` | **Implemented** | FeatureEngine v1 | Boolean thin-book flag |
 | `atr` | **Implemented** | FeatureEngine v1 | ATR from mid-bars |
-| `natr_bps` | **Implemented** | FeatureEngine v1 | Normalized ATR in bps |
+| `natr_bps` | **Implemented (contract-locked)** | FeatureEngine v1 | Normalized ATR in bps. SSOT: `docs/23_NATR_CONTRACT.md`, ADR-078 |
 | `sum_abs_returns_bps` | **Implemented** | FeatureEngine v1 | Range horizon feature |
 | `net_return_bps` | **Implemented** | FeatureEngine v1 | Range horizon feature |
 | `range_score` | **Implemented** | FeatureEngine v1 | Chop detection score |
