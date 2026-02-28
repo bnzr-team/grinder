@@ -61,15 +61,17 @@ class ExecutionEngineConfig:
 
 @dataclass(frozen=True)
 class SymbolConstraints:
-    """Exchange symbol constraints for qty validation (M7-05, ADR-059).
+    """Exchange symbol constraints for order validation (M7-05, ADR-059).
 
     Attributes:
         step_size: Lot size step for qty rounding (e.g., 0.001 for BTC)
         min_qty: Minimum order quantity (e.g., 0.001 for BTC)
+        tick_size: Price filter tick size (e.g., 0.10 for BTCUSDT futures)
     """
 
     step_size: Decimal
     min_qty: Decimal
+    tick_size: Decimal = Decimal("0")
 
 
 def floor_to_step(qty: Decimal, step_size: Decimal) -> Decimal:
@@ -180,8 +182,12 @@ class ExecutionEngine:
         self._constraints_loaded = True
         return self._symbol_constraints
 
-    def _round_price(self, price: Decimal) -> Decimal:
-        """Round price to configured precision."""
+    def _round_price(self, price: Decimal, symbol: str = "") -> Decimal:
+        """Round price to tick_size if available, else to configured precision."""
+        if symbol and self._config.constraints_enabled:
+            sc = self._get_symbol_constraints().get(symbol)
+            if sc is not None and sc.tick_size > 0:
+                return floor_to_step(price, sc.tick_size)
         quantize_str = "0." + "0" * self._price_precision
         return price.quantize(Decimal(quantize_str), rounding=ROUND_DOWN)
 
@@ -305,7 +311,7 @@ class ExecutionEngine:
         content = json.dumps(plan_dict, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(content.encode()).hexdigest()[:16]
 
-    def _compute_grid_levels(self, plan: GridPlan, symbol: str) -> list[GridLevel]:  # noqa: ARG002
+    def _compute_grid_levels(self, plan: GridPlan, symbol: str) -> list[GridLevel]:
         """Compute grid levels from plan.
 
         Grid level computation:
@@ -337,7 +343,7 @@ class ExecutionEngine:
                 for _ in range(i):
                     price = price * spacing_factor
 
-                price = self._round_price(price)
+                price = self._round_price(price, symbol)
                 size_idx = min(i - 1, len(plan.size_schedule) - 1)
                 quantity = self._round_quantity(plan.size_schedule[size_idx])
 
@@ -358,7 +364,7 @@ class ExecutionEngine:
                 for _ in range(i):
                     price = price * spacing_factor_down
 
-                price = self._round_price(price)
+                price = self._round_price(price, symbol)
                 size_idx = min(i - 1, len(plan.size_schedule) - 1)
                 quantity = self._round_quantity(plan.size_schedule[size_idx])
 

@@ -135,13 +135,44 @@ Root cause: clientOrderId "grinder_default_BTCUSDT_1_<ms_ts>_1" = 41 chars, Bina
 Fix: PR #308 — shorten DEFAULT_STRATEGY_ID "default" → "d", truncate ts millis → seconds.
 ```
 
-### Startup — Attempt 2 (pending fix merge)
+### Startup — Attempt 2 (FAILED — tick size)
+
+```
+Date: 2026-02-28
+Symbol allowlist: BTCUSDT
+Exchange port: futures
+Command:
+  python3 -m scripts.run_trading --mainnet --armed --exchange-port futures \
+    --symbols BTCUSDT --paper-size-per-level 0.001 --metrics-port 9092
+
+Startup log:
+  WARNING: live_trade mode requires ALLOW_MAINNET_TRADE=1 (enforced by connector)
+  HA mode: DISABLED (set GRINDER_HA_ENABLED=true to enable)
+  GRINDER TRADING LOOP | mode=live_trade symbols=['BTCUSDT'] port=futures armed=True ha=False net=mainnet max_notional=100
+  Paper size_per_level: 0.001
+  Health endpoint: http://localhost:9092/healthz
+  Fill model loaded: 5 bins, prior=6250 bps
+  Engine initialized: grinder_live_engine_initialized=1
+  /readyz now returning 200 (if HA permits)
+
+STOP-THE-LINE triggered:
+  FILL_PROB_CIRCUIT_BREAKER_TRIPPED block_count=1 total_count=1 block_rate_pct=100 window_seconds=300
+  Non-retryable error on PLACE: Binance error -4014: Price not increased by tick size.
+  Non-retryable error on PLACE: Order count limit reached: 1 orders per run.
+
+Root cause: BTCUSDT futures tick_size=0.10 but _round_price() only rounds to 2 decimal places
+  (e.g., 85123.01 is NOT a multiple of 0.10 → Binance -4014).
+  Symbol constraints (tick_size) not loaded — ConstraintProvider not wired into run_trading.py.
+Fix: PR #309 — add tick_size to SymbolConstraints, parse PRICE_FILTER, wire ConstraintProvider.
+```
+
+### Startup — Attempt 3 (pending tick size fix merge)
 
 ```
 Symbol allowlist: BTCUSDT
 Exchange port: futures
 Startup log (FILL_PROB_THRESHOLD_RESOLUTION_OK line):
-  (awaiting PR #308 merge + retry)
+  (awaiting PR #309 merge + retry)
 Post-restart metrics:
   enforce_enabled=
   allowlist_enabled=

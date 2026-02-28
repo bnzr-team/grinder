@@ -95,6 +95,25 @@ def parse_lot_size_filter(filters: list[dict[str, Any]]) -> tuple[Decimal, Decim
     return None
 
 
+def parse_price_filter(filters: list[dict[str, Any]]) -> Decimal | None:
+    """Parse PRICE_FILTER tick_size from symbol filters.
+
+    Args:
+        filters: List of filter dicts from exchangeInfo symbol
+
+    Returns:
+        tick_size as Decimal, or None if no PRICE_FILTER
+    """
+    for f in filters:
+        if f.get("filterType") == "PRICE_FILTER":
+            try:
+                return Decimal(str(f["tickSize"]))
+            except (KeyError, ValueError, InvalidOperation) as e:
+                logger.warning("Failed to parse PRICE_FILTER: %s", e)
+                return None
+    return None
+
+
 def parse_exchange_info(data: dict[str, Any]) -> dict[str, SymbolConstraints]:
     """Parse exchangeInfo response into SymbolConstraints dict.
 
@@ -119,18 +138,21 @@ def parse_exchange_info(data: dict[str, Any]) -> dict[str, SymbolConstraints]:
 
         filters = symbol_info.get("filters", [])
         lot_size = parse_lot_size_filter(filters)
+        tick_size = parse_price_filter(filters)
 
         if lot_size is not None:
             step_size, min_qty = lot_size
             constraints[symbol] = SymbolConstraints(
                 step_size=step_size,
                 min_qty=min_qty,
+                tick_size=tick_size or Decimal("0"),
             )
             logger.debug(
-                "Parsed constraints for %s: step_size=%s, min_qty=%s",
+                "Parsed constraints for %s: step_size=%s, min_qty=%s, tick_size=%s",
                 symbol,
                 step_size,
                 min_qty,
+                tick_size,
             )
 
     logger.info("Parsed constraints for %d symbols", len(constraints))
