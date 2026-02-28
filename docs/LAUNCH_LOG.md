@@ -339,38 +339,78 @@ Date: 2026-02-28
 ```
 Date:
 Operator:
-Main commit: baa8f0b9d4b8bd6565fc3f631af377d9f4cf2e90
+Main commit: e148de978f688fbf0ee57a1b67784b55f2ff87fd
 C3 evidence: [x] recorded above with PASS
 Kill-switch tested: [x] trip + recovery verified (fire drill 14/14 PASS)
 ```
 
-### Startup
+### Launch config
 
 ```
-GRINDER_FILL_PROB_ENFORCE_SYMBOLS= (empty = all)
-Exchange port: futures
-Startup log (FILL_PROB_THRESHOLD_RESOLUTION_OK line):
+GRINDER_FILL_MODEL_ENFORCE=1
+GRINDER_FILL_PROB_ENFORCE_SYMBOLS=   (empty = all symbols)
+GRINDER_FILL_PROB_AUTO_THRESHOLD=0
+GRINDER_FILL_PROB_MIN_BPS=6600
+
+python3 -m scripts.run_trading \
+  --mainnet --armed --exchange-port futures --metrics-port 9092
+```
+
+### Segments (accumulative 24h)
+
+**Rule:** only segments >= 30 min count. Total valid time must reach **24:00:00**.
+
+| # | Start (UTC) | End (UTC) | Duration | enforce | allowlist | cb_trips (start-end) | Notes |
+|---|-------------|-----------|----------|---------|-----------|----------------------|-------|
+| 1 |             |           |          | 1       | 0         | 0-0                  |       |
+| 2 |             |           |          | 1       | 0         | 0-0                  |       |
+| 3 |             |           |          | 1       | 0         | 0-0                  |       |
+
+**Total valid time:** 00:00:00 / 24:00:00
+
+### Restart evidence (paste verbatim each restart)
+
+```
+FILL_PROB_THRESHOLD_RESOLUTION_OK line:
   (paste verbatim)
-Post-restart metrics:
+
+Metrics snapshot (curl -s http://localhost:9092/metrics | grep -E 'enforce|allowlist|cb_trips'):
   enforce_enabled=
   allowlist_enabled=
   cb_trips=
 ```
 
-### Observation window (24h minimum)
+### Observation notes (periodic, every 1-2h)
 
 ```
-Start time:
-End time:
-Duration:
+Timestamp (UTC):
 blocks_total=
-cb_trips=
-Block rate (approx %):
-Budget/drawdown status:
-Alerts fired (list or "none"):
+cb_trips delta=
+block rate approx=
+budget/drawdown status=
+alerts fired (or "none")=
+unexpected writes (Y/N)=
 ```
 
-### Phase 5 — Auto-threshold (optional)
+### Stop-the-line
+
+If any STOP happens, record:
+
+```
+Timestamp (UTC):
+Trigger: (cb_trips>0 / drawdown / kill-switch / alert / unexpected write)
+Evidence (logs/metrics):
+Action taken (rollback ref):
+```
+
+**Stop-the-line triggers:**
+- `cb_trips > 0`
+- budget/drawdown limit reached
+- kill-switch fired outside expected context
+- unexpected write-ops / behavior
+- critical alerts (per `docs/runbooks/ALERT_INDEX.md`) without explanation
+
+### Phase 5 — Auto-threshold (optional, after 24h stable)
 
 ```
 Enabled: Y/N
