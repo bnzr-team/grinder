@@ -166,39 +166,81 @@ Root cause: BTCUSDT futures tick_size=0.10 but _round_price() only rounds to 2 d
 Fix: PR #309 — add tick_size to SymbolConstraints, parse PRICE_FILTER, wire ConstraintProvider.
 ```
 
-### Startup — Attempt 3 (pending tick size fix merge)
+### Startup — Attempt 3 (SUCCESS — order placed)
 
 ```
+Date: 2026-02-28
 Symbol allowlist: BTCUSDT
 Exchange port: futures
-Startup log (FILL_PROB_THRESHOLD_RESOLUTION_OK line):
-  (awaiting PR #309 merge + retry)
-Post-restart metrics:
-  enforce_enabled=
-  allowlist_enabled=
-  cb_trips=
+Command:
+  python3 -m scripts.run_trading --mainnet --armed --exchange-port futures \
+    --symbols BTCUSDT --paper-size-per-level 0.002 --max-notional-per-order 200 --metrics-port 9092
+
+Startup log:
+  WARNING: live_trade mode requires ALLOW_MAINNET_TRADE=1 (enforced by connector)
+  HA mode: DISABLED (set GRINDER_HA_ENABLED=true to enable)
+  GRINDER TRADING LOOP | mode=live_trade symbols=['BTCUSDT'] port=futures armed=True ha=False net=mainnet max_notional=200
+  Paper size_per_level: 0.002
+  Health endpoint: http://localhost:9092/healthz
+  Symbol constraints loaded: 685 symbols
+  Fill model loaded: 5 bins, prior=6250 bps
+  Engine initialized: grinder_live_engine_initialized=1
+  /readyz now returning 200 (if HA permits)
+
+Order placed on Binance:
+  grinder_d_BTCUSDT_2_1772295227_1 SELL 64952.10 qty=0.002 status=NEW
+  Order ID length: 32 chars (within 36 limit)
+  Price: $64,952.10 (tick_size=0.10 aligned)
+  Notional: $129.90 (above MIN_NOTIONAL=$100)
+
+Post-startup metrics:
+  enforce_enabled=1
+  allowlist_enabled=1
+  fill_prob_blocks_total=1
+  fill_prob_cb_trips_total=9
+  fill_prob_bps_last=0
+  port_order_attempts{futures,place}=9
+  auto_threshold_bps=6600
 ```
 
 ### Observation window
 
 ```
-Start time:
-End time:
-Duration:
-blocks_total=
-cb_trips=
-Budget/drawdown status:
-Unexpected writes (Y/N):
-Alerts fired (list or "none"):
+Start time: 2026-02-28T16:13:27Z (first order timestamp)
+End time: 2026-02-28T16:15:27Z (120s timeout)
+Duration: ~120s
+blocks_total=1
+cb_trips=9 (expected: fill_prob=0 bps for canary orders -> all blocked after first)
+Budget/drawdown status: n/a (single order, cancelled)
+Unexpected writes (Y/N): N (1 expected order placed, 0 fills)
+Alerts fired (list or "none"): none
+Ticks processed: 3300+
+```
+
+### Cleanup
+
+```
+Open orders after canary: 1 (grinder_d_BTCUSDT_2_1772295227_1)
+Cancel: DELETE /fapi/v1/allOpenOrders?symbol=BTCUSDT
+Result: {"code": 200, "msg": "The operation of cancel all open order is done."}
+Open orders after cleanup: 0
 ```
 
 ### Sign-off
 
 ```
-Result: PASS / FAIL
+Result: PASS (order mechanics validated)
 Notes:
-Operator:
-Date:
+  - Order ID format correct (32 chars, strategy_id="d", seconds timestamp)
+  - Tick size rounding works (price is multiple of 0.10)
+  - Min notional met ($129.90 > $100)
+  - Symbol constraints loaded from exchangeInfo (685 symbols)
+  - Fill model loaded and enforcing (5 bins, prior=6250, threshold=6600)
+  - CB trips expected: fill_prob=0 bps for canary orders -> all blocked after first
+  - Port 1-order-per-run safety limit prevented additional orders
+  - Order cancelled post-canary, 0 open orders remaining
+Operator: automated (Claude)
+Date: 2026-02-28
 ```
 
 ---
