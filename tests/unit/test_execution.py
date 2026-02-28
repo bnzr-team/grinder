@@ -1515,3 +1515,75 @@ class TestL2ExecutionGuard:
         assert len(skip_events) == 2  # Both BUY and SELL skipped
         for event in skip_events:
             assert event.details["reason"] == "EXEC_L2_STALE"  # L2 guard, not qty
+
+
+class TestRoundPriceTickSize:
+    """Tests for _round_price with tick_size from SymbolConstraints."""
+
+    def test_round_price_with_tick_size_010(self) -> None:
+        """BTCUSDT futures: tick_size=0.10, price floors to 0.10 multiple."""
+        constraints = {
+            "BTCUSDT": SymbolConstraints(
+                step_size=Decimal("0.001"), min_qty=Decimal("0.001"), tick_size=Decimal("0.10")
+            )
+        }
+        engine = ExecutionEngine(
+            port=NoOpExchangePort(),
+            symbol_constraints=constraints,
+            config=ExecutionEngineConfig(constraints_enabled=True),
+        )
+        # 85123.45 → floor to 85123.40 (nearest 0.10 below)
+        result = engine._round_price(Decimal("85123.45"), "BTCUSDT")
+        assert result == Decimal("85123.4")
+
+    def test_round_price_with_tick_size_001(self) -> None:
+        """ETHUSDT: tick_size=0.01, price floors to 0.01 multiple."""
+        constraints = {
+            "ETHUSDT": SymbolConstraints(
+                step_size=Decimal("0.01"), min_qty=Decimal("0.01"), tick_size=Decimal("0.01")
+            )
+        }
+        engine = ExecutionEngine(
+            port=NoOpExchangePort(),
+            symbol_constraints=constraints,
+            config=ExecutionEngineConfig(constraints_enabled=True),
+        )
+        result = engine._round_price(Decimal("3456.789"), "ETHUSDT")
+        assert result == Decimal("3456.78")
+
+    def test_round_price_no_tick_size_falls_back(self) -> None:
+        """No tick_size → falls back to price_precision=2."""
+        engine = ExecutionEngine(port=NoOpExchangePort(), price_precision=2)
+        result = engine._round_price(Decimal("85123.456"), "BTCUSDT")
+        assert result == Decimal("85123.45")
+
+    def test_round_price_constraints_disabled_ignores_tick_size(self) -> None:
+        """constraints_enabled=False → ignores tick_size, uses price_precision."""
+        constraints = {
+            "BTCUSDT": SymbolConstraints(
+                step_size=Decimal("0.001"), min_qty=Decimal("0.001"), tick_size=Decimal("0.10")
+            )
+        }
+        engine = ExecutionEngine(
+            port=NoOpExchangePort(),
+            symbol_constraints=constraints,
+            config=ExecutionEngineConfig(constraints_enabled=False),
+        )
+        result = engine._round_price(Decimal("85123.45"), "BTCUSDT")
+        # Falls back to price_precision=2 → no tick_size rounding
+        assert result == Decimal("85123.45")
+
+    def test_round_price_unknown_symbol_falls_back(self) -> None:
+        """Unknown symbol → falls back to price_precision=2."""
+        constraints = {
+            "BTCUSDT": SymbolConstraints(
+                step_size=Decimal("0.001"), min_qty=Decimal("0.001"), tick_size=Decimal("0.10")
+            )
+        }
+        engine = ExecutionEngine(
+            port=NoOpExchangePort(),
+            symbol_constraints=constraints,
+            config=ExecutionEngineConfig(constraints_enabled=True),
+        )
+        result = engine._round_price(Decimal("85123.45"), "XYZUSDT")
+        assert result == Decimal("85123.45")  # price_precision=2 fallback

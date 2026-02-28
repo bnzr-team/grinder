@@ -34,6 +34,7 @@ from grinder.execution.constraint_provider import (
     load_constraints_from_file,
     parse_exchange_info,
     parse_lot_size_filter,
+    parse_price_filter,
 )
 from grinder.execution.engine import ExecutionEngineConfig, SymbolConstraints
 from grinder.policies.base import GridPlan
@@ -115,6 +116,38 @@ class TestParseLotSizeFilter:
         assert result is None
 
 
+# --- Tests: parse_price_filter ---
+
+
+class TestParsePriceFilter:
+    """Tests for PRICE_FILTER parsing."""
+
+    def test_parse_tick_size_btc(self) -> None:
+        """BTCUSDT futures tickSize=0.10."""
+        filters = [
+            {
+                "filterType": "PRICE_FILTER",
+                "minPrice": "556.80",
+                "maxPrice": "4529764",
+                "tickSize": "0.10",
+            },
+        ]
+        result = parse_price_filter(filters)
+        assert result == Decimal("0.10")
+
+    def test_parse_tick_size_missing(self) -> None:
+        """No PRICE_FILTER → None."""
+        filters = [{"filterType": "LOT_SIZE", "stepSize": "0.001", "minQty": "0.001"}]
+        result = parse_price_filter(filters)
+        assert result is None
+
+    def test_parse_tick_size_invalid(self) -> None:
+        """Invalid tickSize → None."""
+        filters = [{"filterType": "PRICE_FILTER", "tickSize": "invalid"}]
+        result = parse_price_filter(filters)
+        assert result is None
+
+
 # --- Tests: parse_exchange_info ---
 
 
@@ -131,12 +164,13 @@ class TestParseExchangeInfo:
         assert "SOLUSDT" in constraints
 
     def test_parse_btc_constraints(self, exchange_info_data: dict[str, Any]) -> None:
-        """Test BTCUSDT constraints parsed correctly."""
+        """Test BTCUSDT constraints parsed correctly (incl. tick_size)."""
         constraints = parse_exchange_info(exchange_info_data)
 
         btc = constraints["BTCUSDT"]
         assert btc.step_size == Decimal("0.001")
         assert btc.min_qty == Decimal("0.001")
+        assert btc.tick_size == Decimal("0.10")
 
     def test_parse_sol_constraints(self, exchange_info_data: dict[str, Any]) -> None:
         """Test SOLUSDT constraints parsed correctly (integer qty)."""

@@ -58,6 +58,7 @@ import time
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from grinder.connectors.binance_ws import BINANCE_WS_MAINNET, FakeWsTransport
 from grinder.connectors.live_connector import (
@@ -69,6 +70,10 @@ from grinder.execution.binance_futures_port import (
     BINANCE_FUTURES_MAINNET_URL,
     BinanceFuturesPort,
     BinanceFuturesPortConfig,
+)
+from grinder.execution.constraint_provider import (
+    ConstraintProvider,
+    ConstraintProviderConfig,
 )
 from grinder.execution.port import ExchangePort, NoOpExchangePort
 from grinder.execution.port_metrics import get_port_metrics
@@ -87,6 +92,9 @@ from grinder.observability import (
 )
 from grinder.paper.engine import PaperEngine
 from scripts.http_measured_client import RequestsHttpClient, build_measured_client
+
+if TYPE_CHECKING:
+    from grinder.execution.engine import SymbolConstraints
 
 # Module-level readiness flags.
 _loop_ready = False
@@ -365,6 +373,35 @@ def build_connector(
     return LiveConnectorV0(config=config)
 
 
+def _load_symbol_constraints() -> dict[str, SymbolConstraints] | None:
+    """Load symbol constraints from exchange info (fail-open).
+
+    Tries local cache first, then Binance Futures API.
+    Returns None if both fail (constraints will be skipped).
+    """
+    provider = ConstraintProvider(
+        config=ConstraintProviderConfig(allow_fetch=False),
+    )
+    constraints = provider.get_constraints()
+    if constraints:
+        return constraints
+
+    # Try API fetch (requires network)
+    try:
+        http = RequestsHttpClient(port_name="constraint_fetch")
+        api_provider = ConstraintProvider(
+            http_client=http,
+            config=ConstraintProviderConfig(allow_fetch=True),
+        )
+        constraints = api_provider.get_constraints()
+        if constraints:
+            return constraints
+    except Exception as e:
+        print(f"  Constraint fetch failed (fail-open): {e}")
+
+    return None
+
+
 def build_engine(
     mode: SafeMode,
     *,
@@ -379,6 +416,9 @@ def build_engine(
     If GRINDER_FILL_MODEL_DIR is set, loads FillModelV0 for fill probability
     gating (fail-open: load error -> None -> gate skipped).
 
+    Loads symbol constraints (tick_size, step_size) from exchange info
+    for price/qty rounding (fail-open: if unavailable, uses price_precision only).
+
     Args:
         mode: SafeMode for engine config.
         armed: Arm engine gate chain (lets actions flow to fill-prob gate).
@@ -392,10 +432,25 @@ def build_engine(
     Returns:
         Configured LiveEngineV0 instance (gauge set to 1 after init).
     """
-    if paper_size_per_level is not None:
-        paper_engine = PaperEngine(size_per_level=paper_size_per_level)
+    # Load symbol constraints for tick_size rounding (fail-open)
+    symbol_constraints = _load_symbol_constraints()
+    constraints_enabled = symbol_constraints is not None
+    if constraints_enabled and symbol_constraints is not None:
+        print(f"  Symbol constraints loaded: {len(symbol_constraints)} symbols")
     else:
-        paper_engine = PaperEngine()
+        print("  Symbol constraints not available (fail-open, using price_precision only)")
+
+    if paper_size_per_level is not None:
+        paper_engine = PaperEngine(
+            size_per_level=paper_size_per_level,
+            constraints_enabled=constraints_enabled,
+            symbol_constraints=symbol_constraints,
+        )
+    else:
+        paper_engine = PaperEngine(
+            constraints_enabled=constraints_enabled,
+            symbol_constraints=symbol_constraints,
+        )
     port = exchange_port if exchange_port is not None else NoOpExchangePort()
     config = LiveEngineConfig(armed=armed, mode=mode)
 
