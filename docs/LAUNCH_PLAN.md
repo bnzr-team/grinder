@@ -13,25 +13,107 @@ Launch v1 = **first sustained ACTIVE window on mainnet with real capital at risk
 
 Every item below must be PASS (measurable, not "in general ready").
 
-| # | Criterion | How to verify | Status |
-|---|-----------|---------------|--------|
-| D1 | Mainnet safe-by-default (3-layer dry-run) | TRD-1 contract tests: `pytest tests/unit/test_safety_envelope.py` | DONE (PR #301) |
-| D2 | Policy contract locked (GridPolicy + GridPlan) | TRD-2 contract tests: `pytest tests/unit/test_policy_contract.py` | DONE (PR #302) |
-| D3 | Volatility SSOT (natr_bps encoding) | TRD-3a contract tests: `pytest tests/unit/test_natr_contract.py` | DONE (PR #304) |
-| D4 | Volatility→spacing hook locked | TRD-3b contract tests: `pytest tests/unit/test_adaptive_policy_natr_hook_contract.py` | DONE (PR #305) |
-| D5 | OPS runbooks + triage bundles | `ls docs/runbooks/*.md` (32 runbooks) + `scripts/triage_bundle.sh` | DONE (PR #280–#300) |
-| D6 | OBS alerts + SLO registry + alert index | `python -m scripts.verify_alert_rules monitoring/alert_rules.yml` + `python -m scripts.verify_alert_index docs/runbooks/ALERT_INDEX.md monitoring/alert_rules.yml` | DONE (PR #291–#298) |
-| D7 | CI smoke gate (3 jobs) | smoke-clean-shutdown + smoke-ha-metrics + smoke-futures-no-orders | DONE (PR #267) |
-| D8 | Canary criteria documented | Runbook 32 + canary decision tree | DONE (PR #247–#249) |
-| D9 | Fill-prob model + controlled rollout | CB + preflight + auto-threshold + SOR gate | DONE (Track C: PR #232–#245) |
-| D10 | Production trading loop (HA-gated) | `scripts/run_trading.py` with `--armed --exchange-port futures` | DONE (PR #252–#255) |
-| D11 | Graceful shutdown (no Task-destroyed) | smoke_no_task_destroyed.sh in CI | DONE (PR #256, #258) |
-| D12 | Alerting pack (3 critical alerts) | EngineInitDown + FillProbBlocksSpike + ReadyzNotReady in alert_rules.yml | DONE (PR #257, #259–#260) |
-| D13 | Fixture network airgap | Socket-level block in `--fixture` mode | DONE (PR #266) |
-| D14 | Runbook 32 ceremony (read_only + live_trade rehearsal) | Phase 0–5 COMPLETE on NoOpExchangePort | DONE |
-| D15 | Budget/risk limits verified in smoke | `--paper-size-per-level` + drawdown guard + kill-switch | DONE (PR #254) |
+### D1 — Mainnet safe-by-default (3-layer dry-run)
 
-**Result: 15/15 DONE.** All measurable criteria met.
+- **How to verify:** `pytest tests/unit/test_safety_envelope.py`
+- **Evidence:** PR [#301](https://github.com/bnzr-team/grinder/pull/301) @ `117f45e`
+- **SSOT doc:** `docs/20_SAFETY_ENVELOPE.md`
+- **Status:** DONE
+
+### D2 — Policy contract locked (GridPolicy + GridPlan)
+
+- **How to verify:** `pytest tests/unit/test_policy_contract.py`
+- **Evidence:** PR [#302](https://github.com/bnzr-team/grinder/pull/302) @ `aacca7f`
+- **SSOT doc:** `docs/22_POLICY_CONTRACT.md`
+- **Status:** DONE
+
+### D3 — Volatility SSOT (natr_bps encoding)
+
+- **How to verify:** `pytest tests/unit/test_natr_contract.py`
+- **Evidence:** PR [#304](https://github.com/bnzr-team/grinder/pull/304) @ `92dd4f5`
+- **SSOT doc:** `docs/23_NATR_CONTRACT.md`, ADR-078
+- **Status:** DONE
+
+### D4 — Volatility→spacing hook locked
+
+- **How to verify:** `pytest tests/unit/test_adaptive_policy_natr_hook_contract.py`
+- **Evidence:** PR [#305](https://github.com/bnzr-team/grinder/pull/305) @ `158b470`
+- **SSOT doc:** `docs/24_NATR_SPACING_HOOK.md`
+- **Status:** DONE
+
+### D5 — OPS runbooks + triage bundles
+
+- **How to verify:** `ls docs/runbooks/*.md | wc -l` (32 runbooks) + `bash scripts/triage_bundle.sh --help`
+- **Evidence:** PR [#280](https://github.com/bnzr-team/grinder/pull/280) @ `736abad` (triage_bundle.sh), PR [#300](https://github.com/bnzr-team/grinder/pull/300) @ `498bafe` (preview guard + manifest)
+- **SSOT doc:** `docs/runbooks/README.md`
+- **Status:** DONE
+
+### D6 — OBS alerts + SLO registry + alert index
+
+- **How to verify:** `python -m scripts.verify_alert_rules monitoring/alert_rules.yml` + `python -m scripts.verify_alert_index docs/runbooks/ALERT_INDEX.md monitoring/alert_rules.yml`
+- **Evidence:** PR [#291](https://github.com/bnzr-team/grinder/pull/291) @ `0125a1f` (SLO registry), PR [#295](https://github.com/bnzr-team/grinder/pull/295) @ `cbf7603` (alert contract enforcement), PR [#298](https://github.com/bnzr-team/grinder/pull/298) @ `c1d3b5b` (alert index guard)
+- **SSOT doc:** `docs/OBSERVABILITY_SLOS.md`, `docs/runbooks/ALERT_INDEX.md`
+- **Status:** DONE
+
+### D7 — CI smoke gate (3 jobs)
+
+- **How to verify:** CI workflow `smoke_gate.yml` runs 3 jobs on every PR
+- **Evidence:** PR [#267](https://github.com/bnzr-team/grinder/pull/267) @ `95f23d0`
+- **SSOT doc:** `.github/workflows/smoke_gate.yml`
+- **Status:** DONE
+
+### D8 — Canary criteria documented
+
+- **How to verify:** `docs/runbooks/32_MAINNET_ROLLOUT_FILL_PROB.md` has "Canary by Symbol" + decision tree
+- **Evidence:** PR [#247](https://github.com/bnzr-team/grinder/pull/247) @ `97caebc` (runbook section), PR [#248](https://github.com/bnzr-team/grinder/pull/248) @ `c6029ef` (allowlist code), PR [#249](https://github.com/bnzr-team/grinder/pull/249) @ `3eae60d` (decision tree)
+- **Status:** DONE
+
+### D9 — Fill-prob model + controlled rollout
+
+- **How to verify:** `pytest tests/unit/test_fill_model*.py tests/unit/test_router_fill_prob*.py`
+- **Evidence:** Track C chain: PR [#232](https://github.com/bnzr-team/grinder/pull/232) @ `3901e61` (dataset) through PR [#245](https://github.com/bnzr-team/grinder/pull/245) @ `4d08b3b` (auto-threshold ceremony)
+- **SSOT doc:** `docs/runbooks/31_FILL_PROB_ROLLOUT.md`
+- **Status:** DONE
+
+### D10 — Production trading loop (HA-gated)
+
+- **How to verify:** `python3 scripts/run_trading.py --help` shows `--armed`, `--exchange-port`, `--mainnet`
+- **Evidence:** PR [#252](https://github.com/bnzr-team/grinder/pull/252) @ `3747281` (entrypoint), PR [#255](https://github.com/bnzr-team/grinder/pull/255) @ `478555c` (HA-gated + selectable port)
+- **Status:** DONE
+
+### D11 — Graceful shutdown (no Task-destroyed)
+
+- **How to verify:** `bash scripts/smoke_no_task_destroyed.sh` (CI: smoke-clean-shutdown job)
+- **Evidence:** PR [#256](https://github.com/bnzr-team/grinder/pull/256) @ `e32e925` (shutdown + metrics), PR [#258](https://github.com/bnzr-team/grinder/pull/258) @ `34b8eee` (fixture runs)
+- **Status:** DONE
+
+### D12 — Alerting pack (3 critical alerts)
+
+- **How to verify:** `grep -c 'alert:' monitoring/alert_rules.yml` shows 53 alerts including EngineInitDown, FillProbBlocksSpike, ReadyzNotReady
+- **Evidence:** PR [#257](https://github.com/bnzr-team/grinder/pull/257) @ `6380650` (initial pack), PR [#260](https://github.com/bnzr-team/grinder/pull/260) @ `9dd29a4` (FillProbBlocksHigh + polish)
+- **Status:** DONE
+
+### D13 — Fixture network airgap
+
+- **How to verify:** `pytest tests/unit/test_fixture_guard.py`
+- **Evidence:** PR [#266](https://github.com/bnzr-team/grinder/pull/266) @ `856f589`
+- **SSOT doc:** ADR-075 in `docs/DECISIONS.md`
+- **Status:** DONE
+
+### D14 — Runbook 32 ceremony (read_only + live_trade rehearsal)
+
+- **How to verify:** Operator ceremony, not automated. Artifacts in session transcripts.
+- **Evidence:** Runbook 32 read_only Phase 0–5 COMPLETE. Runbook 32 live_trade+armed Phase 2–5 COMPLETE. blocks_total=5→10→10→10, cb_trips=0 across all phases. NoOpExchangePort (zero real orders).
+- **SSOT doc:** `docs/runbooks/32_MAINNET_ROLLOUT_FILL_PROB.md`
+- **Status:** DONE
+
+### D15 — Budget/risk limits verified in smoke
+
+- **How to verify:** `python3 scripts/run_trading.py --fixture ... --paper-size-per-level 0.001` with drawdown + kill-switch
+- **Evidence:** PR [#254](https://github.com/bnzr-team/grinder/pull/254) @ `c6e6b40` (rehearsal knobs)
+- **Status:** DONE
+
+**Result: 15/15 DONE.** Every criterion has a PR link + commit hash as evidence.
 
 ---
 
