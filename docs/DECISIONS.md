@@ -4068,3 +4068,21 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
   - Adding or removing a `GridPlan` field is a **breaking change** to the policy-engine contract. It requires updating: (1) `base.py`, (2) `docs/22_POLICY_CONTRACT.md` field table, (3) contract tests (update `GRIDPLAN_EXPECTED_FIELDS` frozenset), (4) this ADR. This friction is intentional — field changes must be conscious and reviewed.
   - Contract tests do NOT verify adaptive math correctness or regime classification — those are covered by implementation-specific tests. The contract tests verify the **interface**, not the **behavior**.
   - `AdaptiveGridPolicy.evaluate()` extends the base signature with extra kwargs (`kill_switch_active`, `toxicity_result`, `l2_features`, `dd_budget_ratio`). These are NOT part of the ABC contract — they are adaptive-specific extension points.
+
+## ADR-078 — NATR(14) Volatility Feature Contract: natr_bps as SSOT (TRD-3a)
+- **Date:** 2026-02-28
+- **Status:** accepted
+- **Context:** `compute_natr_bps()` in `src/grinder/features/indicators.py` computes Normalized ATR(14) as integer basis points (x10000 encoding). The result is stored in `FeatureSnapshot.natr_bps` and consumed by `AdaptiveGridPolicy` for step/width calculations. However, the encoding, invariants, and warmup behavior were implicit in code — no normative specification or contract tests existed. A proposal to add a second NATR field (`natr_14_x1000`, x1000 encoding) was considered but rejected to avoid drift between redundant representations of the same metric.
+- **Decision:**
+  - Declare `natr_bps` (x10000 integer bps) as the **single source of truth** for NATR volatility in the feature pipeline.
+  - Encoding formula: `int((ATR(14) / close * 10000).quantize(Decimal("1")))`.
+  - No dual encoding: consumers needing different scales (x1000, float ratio) must derive from `natr_bps` at the call site.
+  - Structural invariants: non-negative, 0 during warmup (< period+1 bars), 0 on zero close.
+  - Determinism: same bars → identical int result (Decimal arithmetic, no float).
+  - Contract tests (`tests/unit/test_natr_contract.py`) freeze the encoding, invariants, warmup boundary, and determinism.
+  - SSOT document: `docs/23_NATR_CONTRACT.md`.
+- **Consequences:**
+  - Changing the encoding (e.g., from x10000 to x1000) is a **breaking change**. It requires updating: (1) `indicators.py`, (2) `docs/23_NATR_CONTRACT.md`, (3) contract tests (golden fixture value), (4) all consumers (AdaptiveGridPolicy step/width math), (5) this ADR.
+  - Adding a second NATR field to `FeatureSnapshot` requires justification via a new ADR — the default position is one field per metric.
+  - Contract tests do NOT verify ATR algorithm correctness (SMA vs EMA) — that is covered by `tests/unit/test_indicators.py::TestATR`.
+- **Alternatives rejected:** Adding `natr_14_x1000` (x1000 encoding) alongside `natr_bps` — rejected because two fields representing the same metric with different scales creates drift risk and consumer confusion.
