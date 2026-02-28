@@ -72,7 +72,7 @@ def observed_order() -> ObservedOrder:
     Uses v1 format: {prefix}{strategy_id}_{symbol}_{level_id}_{ts}_{seq}
     """
     return ObservedOrder(
-        client_order_id="grinder_default_BTCUSDT_L1_1234567890_0",
+        client_order_id="grinder_d_BTCUSDT_L1_1234567890_0",
         symbol="BTCUSDT",
         order_id=12345,
         side=OrderSide.BUY,
@@ -107,7 +107,7 @@ def _make_fully_enabled_executor(port: MagicMock) -> RemediationExecutor:
         dry_run=False,
         allow_active_remediation=True,
         remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
-        remediation_strategy_allowlist={"default"},
+        remediation_strategy_allowlist={"d"},
         remediation_symbol_allowlist={"BTCUSDT"},
         max_calls_per_day=100,
         max_notional_per_day=Decimal("10000"),

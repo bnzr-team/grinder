@@ -9,8 +9,8 @@ This module provides:
 - is_ours(): Check if an order belongs to our allowed strategies
 - generate_client_order_id(): Generate a clientOrderId with identity
 
-Format v1: {prefix}{strategy_id}_{symbol}_{level_id}_{ts}_{seq}
-Example: grinder_momentum_BTCUSDT_1_1704067200000_1
+Format v1: {prefix}{strategy_id}_{symbol}_{level_id}_{ts_seconds}_{seq}
+Example: grinder_d_BTCUSDT_1_1704067200_1
 
 Legacy format: grinder_{symbol}_{level_id}_{ts}_{seq}
 Example: grinder_BTCUSDT_1_1704067200000_1
@@ -27,7 +27,10 @@ ENV_ALLOW_LEGACY_ORDER_ID = "ALLOW_LEGACY_ORDER_ID"
 
 # Default values
 DEFAULT_PREFIX = "grinder_"
-DEFAULT_STRATEGY_ID = "default"
+DEFAULT_STRATEGY_ID = "d"
+
+# Binance enforces clientOrderId <= 36 chars (error -4015).
+BINANCE_MAX_CLIENT_ORDER_ID_LEN = 36
 LEGACY_STRATEGY_ID = "__legacy__"  # Internal marker for legacy orders
 
 
@@ -212,14 +215,24 @@ def generate_client_order_id(
         seq: Sequence number
 
     Returns:
-        Formatted clientOrderId
+        Formatted clientOrderId (guaranteed <= 36 chars for Binance)
+
+    Raises:
+        ValueError: If generated ID exceeds 36 characters
 
     Example:
-        >>> config = OrderIdentityConfig(strategy_id="momentum")
+        >>> config = OrderIdentityConfig(strategy_id="d")
         >>> generate_client_order_id(config, "BTCUSDT", 1, 1704067200000, 1)
-        'grinder_momentum_BTCUSDT_1_1704067200000_1'
+        'grinder_d_BTCUSDT_1_1704067200_1'
     """
-    return f"{config.prefix}{config.strategy_id}_{symbol}_{level_id}_{ts}_{seq}"
+    # Truncate millis → seconds to save 3 chars (Binance 36-char limit).
+    ts_sec = ts // 1000
+    cid = f"{config.prefix}{config.strategy_id}_{symbol}_{level_id}_{ts_sec}_{seq}"
+    if len(cid) > BINANCE_MAX_CLIENT_ORDER_ID_LEN:
+        raise ValueError(
+            f"clientOrderId too long ({len(cid)} chars, max {BINANCE_MAX_CLIENT_ORDER_ID_LEN}): {cid}"
+        )
+    return cid
 
 
 # Singleton default config (can be replaced at runtime)

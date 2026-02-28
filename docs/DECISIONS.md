@@ -2002,8 +2002,9 @@
         allow_legacy_format: bool = False  # Env: ALLOW_LEGACY_ORDER_ID=1
         identity_format_version: int = 1
     ```
-  - **clientOrderId Format v1:** `{prefix}{strategy_id}_{symbol}_{level_id}_{ts}_{seq}`
-    - Example: `grinder_momentum_BTCUSDT_1_1704067200000_1`
+  - **clientOrderId Format v1:** `{prefix}{strategy_id}_{symbol}_{level_id}_{ts_seconds}_{seq}`
+    - Example: `grinder_d_BTCUSDT_1_1704067200_1`
+    - Timestamp truncated from millis to seconds (Binance 36-char limit)
   - **Legacy Format:** `grinder_{symbol}_{level_id}_{ts}_{seq}` (no strategy_id)
     - Supported via `allow_legacy_format=True` or `ALLOW_LEGACY_ORDER_ID=1` env var
     - Parsed strategy_id: `__legacy__` (internal marker)
@@ -2028,7 +2029,7 @@
     - Legacy orders (`__legacy__`) allowed only if `allow_legacy_format=True`
     - `require_strategy_allowlist=False` → accept any strategy
   - **Backward compatibility:**
-    - v1 format includes strategy_id: `grinder_default_BTCUSDT_...` (differs from legacy `grinder_BTCUSDT_...`)
+    - v1 format includes strategy_id: `grinder_d_BTCUSDT_...` (differs from legacy `grinder_BTCUSDT_...`)
     - Legacy format parsing enabled via env var (`ALLOW_LEGACY_ORDER_ID=1`) or config flag
     - GRINDER_PREFIX constant preserved in remediation.py for backward compat
 

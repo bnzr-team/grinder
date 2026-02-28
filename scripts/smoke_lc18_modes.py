@@ -53,7 +53,7 @@ def make_mock_port() -> MagicMock:
 def make_test_order() -> ObservedOrder:
     """Create test order with grinder_ prefix."""
     return ObservedOrder(
-        client_order_id="grinder_default_BTCUSDT_1_1704067200000_1",
+        client_order_id="grinder_d_BTCUSDT_1_1704067200000_1",
         symbol="BTCUSDT",
         order_id=12345678,
         side=OrderSide.BUY,
@@ -88,7 +88,7 @@ def make_executor(
         dry_run=False,
         allow_active_remediation=True,
         remediation_mode=mode,
-        remediation_strategy_allowlist=strategy_allowlist or {"default"},
+        remediation_strategy_allowlist=strategy_allowlist or {"d"},
         max_flatten_notional_usdt=Decimal("1000"),
         max_calls_per_run=100,
         max_notional_per_run=Decimal("100000"),

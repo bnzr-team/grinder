@@ -444,7 +444,7 @@ class TestFactoryFunctions:
             mode="live",
             action="cancel_all",
             symbol="BTCUSDT",
-            client_order_id="grinder_default_BTCUSDT_1_1000_1",
+            client_order_id="grinder_d_BTCUSDT_1_1000_1",
             mismatch_type="ORDER_EXISTS_UNEXPECTED",
         )
 
@@ -454,7 +454,7 @@ class TestFactoryFunctions:
         assert event.mode == "live"
         assert event.action == "cancel_all"
         assert event.symbols == ("BTCUSDT",)
-        assert event.details["client_order_id"] == "grinder_default_BTCUSDT_1_1000_1"
+        assert event.details["client_order_id"] == "grinder_d_BTCUSDT_1_1000_1"
         assert event.details["mismatch_type"] == "ORDER_EXISTS_UNEXPECTED"
 
     def test_create_remediate_result_event(self) -> None:
@@ -465,7 +465,7 @@ class TestFactoryFunctions:
             mode="dry_run",
             action="cancel_all",
             symbol="BTCUSDT",
-            client_order_id="grinder_default_BTCUSDT_1_1000_1",
+            client_order_id="grinder_d_BTCUSDT_1_1000_1",
             mismatch_type="ORDER_EXISTS_UNEXPECTED",
             status="PLANNED",
             block_reason=None,
@@ -501,7 +501,7 @@ class TestFactoryFunctions:
             mode="live",
             action="cancel_all",
             symbol="BTCUSDT",
-            client_order_id="grinder_default_BTCUSDT_1_1000_1",
+            client_order_id="grinder_d_BTCUSDT_1_1000_1",
             mismatch_type="ORDER_EXISTS_UNEXPECTED",
             status="FAILED",
             error="Connection timeout",
