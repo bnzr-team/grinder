@@ -4036,3 +4036,20 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
   - Socket-level patch catches all Python network libraries (httpx, websockets, aiohttp, urllib, raw socket).
 - **Consequences:** Fixture runs are provably air-gapped. Any code path attempting external network I/O during fixture replay crashes immediately with clear error message. Existing smokes unaffected (use `--fixture` + localhost only). Integration test runs `run_trading.py` as a subprocess and sets `PYTHONPATH` to include both `src/` (for `grinder.*`) and repo root (for `scripts.*`, since `run_trading.py` imports `scripts.http_measured_client`).
 - **Alternatives:** "Library-level guard (patch httpx.Client)" — rejected (doesn't catch websockets, raw sockets, or future libraries). "DNS-level block" — rejected (OS-dependent, can't block IP-literal connections). "Warn-only mode" — rejected (silent leaks are worse than crashes).
+
+## ADR-076 — Safety Envelope: Normative Gate Ordering Contract (TRD-1)
+- **Date:** 2026-02-28
+- **Status:** accepted
+- **Context:** The engine gate chain in `LiveEngineV0._process_action()` has grown to 7 sequential safety gates (arming, mode, kill-switch, whitelist, drawdown, FSM, fill-prob). Gate ordering is safety-critical: fail-fast behavior ensures the cheapest/most-decisive check runs first, and operators rely on deterministic BlockReason codes for triage. However, the ordering was implicit in code — no normative specification or contract tests existed to prevent accidental reordering.
+- **Decision:**
+  - Declare gate ordering **normative** (not just implementation detail).
+  - Gate chain: 1. armed → 2. mode → 3. kill-switch → 4. whitelist → 5. drawdown → 6. FSM → 7. fill-prob → (SOR routing, not a safety gate) → execute.
+  - Dry-run contract formula: **writes impossible unless** `armed=True AND mode=LIVE_TRADE AND exchange_port=futures`. Defaults: `armed=False`, `mode=READ_ONLY`, `exchange_port=noop`.
+  - ConsecutiveLossGuard is documented as an **indirect** gate: CLG trips → sets `GRINDER_OPERATOR_OVERRIDE=PAUSE` → FSM transitions to PAUSE → Gate 6 blocks.
+  - Contract tests (`tests/unit/test_safety_envelope.py`) freeze ordering via semantic behavior (observed BlockReason + spy guards proving later gates not called), not brittle line-number assertions.
+  - SSOT document: `docs/20_SAFETY_ENVELOPE.md`.
+- **Consequences:**
+  - Adding a new gate requires updating: (1) engine code, (2) `docs/20_SAFETY_ENVELOPE.md` gate table, (3) contract tests, (4) this ADR. This friction is intentional — gate changes are safety-critical and must be conscious.
+  - Reordering existing gates will break contract tests (correct behavior — ordering is normative).
+  - Smoke test (`scripts/smoke_futures_no_orders.sh`) complements contract tests: it proves zero network I/O end-to-end with all gates open on fixture data. It does NOT prove that kill-switch/drawdown correctly block at runtime (that is the contract tests' job).
+- **Rationale for ordering:** (1) Fail-fast: cheapest checks first (bool flag < model inference). (2) Determinism: same input always hits the same first blocking gate. (3) Operator expectations: `armed=False` is the master kill — it always wins.
