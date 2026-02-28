@@ -58,6 +58,7 @@ import signal
 import sys
 import threading
 import time
+import urllib.request
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -354,7 +355,22 @@ def build_exchange_port(
             max_notional_per_order=max_notional,
             max_orders_per_run=max_orders_per_run,
         )
-        return BinanceFuturesPort(http_client=http_client, config=config)  # type: ignore[return-value]
+
+        # Compute clock offset vs Binance server (WSL2 clock drift workaround)
+        ts_offset_ms = 0
+        try:
+            resp = urllib.request.urlopen(f"{BINANCE_FUTURES_MAINNET_URL}/fapi/v1/time", timeout=5)
+            server_ts = json.loads(resp.read())["serverTime"]
+            local_ts = int(time.time() * 1000)
+            ts_offset_ms = max(0, local_ts - server_ts)
+            if ts_offset_ms > 0:
+                print(f"  CLOCK_OFFSET_MS={ts_offset_ms} (local ahead of Binance)")
+        except Exception:
+            pass  # fail-open: offset stays 0
+
+        return BinanceFuturesPort(
+            http_client=http_client, config=config, _ts_offset_ms=ts_offset_ms
+        )  # type: ignore[return-value]
 
     print(f"ERROR: Unknown exchange port: {port_name!r}. Must be: noop, futures")
     sys.exit(1)

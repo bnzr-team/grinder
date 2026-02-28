@@ -210,6 +210,7 @@ class BinanceFuturesPort:
     _order_counter: int = field(default=0, repr=False)
     _position_mode: str | None = field(default=None, repr=False)
     _leverage_set: dict[str, int] = field(default_factory=dict, repr=False)
+    _ts_offset_ms: int = field(default=0, repr=False)
 
     def _validate_mode(self, op: str) -> None:
         """Validate SafeMode allows write operations."""
@@ -247,7 +248,7 @@ class BinanceFuturesPort:
 
     def _sign_request(self, params: dict[str, Any]) -> dict[str, Any]:
         """Add timestamp and signature to request params."""
-        params["timestamp"] = int(time.time() * 1000)
+        params["timestamp"] = int(time.time() * 1000) - self._ts_offset_ms
         params["recvWindow"] = self.config.recv_window_ms
 
         query_string = urllib.parse.urlencode(params)
