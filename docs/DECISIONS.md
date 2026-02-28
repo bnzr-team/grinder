@@ -4065,6 +4065,6 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
   - Contract tests (`tests/unit/test_policy_contract.py`) freeze the interface via field enumeration, type assertions, invariant checks, and determinism proofs.
   - SSOT document: `docs/22_POLICY_CONTRACT.md`.
 - **Consequences:**
-  - Adding or removing a `GridPlan` field requires updating: (1) `base.py`, (2) `docs/22_POLICY_CONTRACT.md` field table, (3) contract tests, (4) this ADR. This friction is intentional — field changes affect the policy-engine contract.
+  - Adding or removing a `GridPlan` field is a **breaking change** to the policy-engine contract. It requires updating: (1) `base.py`, (2) `docs/22_POLICY_CONTRACT.md` field table, (3) contract tests (update `GRIDPLAN_EXPECTED_FIELDS` frozenset), (4) this ADR. This friction is intentional — field changes must be conscious and reviewed.
   - Contract tests do NOT verify adaptive math correctness or regime classification — those are covered by implementation-specific tests. The contract tests verify the **interface**, not the **behavior**.
   - `AdaptiveGridPolicy.evaluate()` extends the base signature with extra kwargs (`kill_switch_active`, `toxicity_result`, `l2_features`, `dd_budget_ratio`). These are NOT part of the ABC contract — they are adaptive-specific extension points.

@@ -46,8 +46,9 @@ they are extension points specific to the adaptive implementation.
 | 10 | `reset_action` | `ResetAction` | `NONE` | no | Auto-reset action |
 | 11 | `reason_codes` | `list[str]` | `[]` | no | Diagnostic reason codes |
 
-Adding or removing a field changes the policy-engine contract.
-Contract tests will fail if the field set changes.
+Adding or removing a field is a **breaking change** to the policy-engine contract.
+Contract tests will fail if the field set changes. To add a field:
+update `base.py`, this doc, `GRIDPLAN_EXPECTED_FIELDS` in contract tests, and ADR-077.
 
 ### Structural invariants
 
