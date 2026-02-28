@@ -15,6 +15,8 @@ Exchange port selection:
                                 4. GRINDER_REAL_PORT_ACK=YES_I_REALLY_WANT_MAINNET
                                 5. BINANCE_API_KEY + BINANCE_API_SECRET set
     --max-notional-per-order    Max notional per order in USD (default 100, rehearsal cap)
+    --max-orders-per-run        Max orders per port instance (default 1, canary safety cap).
+                                Values >1 require GRINDER_MAX_ORDERS_ACK=YES_I_ACCEPT_MULTI_ORDER.
 
 HA mode (GRINDER_HA_ENABLED=true):
     - Starts LeaderElector for single-active coordination
@@ -28,6 +30,7 @@ Env vars:
     GRINDER_FILL_MODEL_DIR      Path to fill model directory (enables fill-prob gate)
     ALLOW_MAINNET_TRADE         Existing guard (enforced by connector for live_trade)
     GRINDER_REAL_PORT_ACK       Must be YES_I_REALLY_WANT_MAINNET for --exchange-port futures
+    GRINDER_MAX_ORDERS_ACK      Must be YES_I_ACCEPT_MULTI_ORDER for --max-orders-per-run >1
     GRINDER_HA_ENABLED          true|1|yes to enable HA leader election
     BINANCE_API_KEY             Required for --exchange-port futures
     BINANCE_API_SECRET          Required for --exchange-port futures
@@ -285,12 +288,30 @@ def validate_real_port_gates(mode: SafeMode, armed: bool) -> None:
         sys.exit(1)
 
 
+def validate_max_orders_ack(max_orders: int) -> None:
+    """Validate ACK env var for multi-order mode.
+
+    Raises:
+        SystemExit: If max_orders > 1 and ACK env var is missing.
+    """
+    if max_orders <= 1:
+        return
+    ack = os.environ.get("GRINDER_MAX_ORDERS_ACK", "")
+    if ack != "YES_I_ACCEPT_MULTI_ORDER":
+        print(
+            f"ERROR: --max-orders-per-run {max_orders} requires "
+            "GRINDER_MAX_ORDERS_ACK=YES_I_ACCEPT_MULTI_ORDER"
+        )
+        sys.exit(1)
+
+
 def build_exchange_port(
     port_name: str,
     mode: SafeMode,
     armed: bool,
     symbols: list[str],
     max_notional: Decimal,
+    max_orders_per_run: int = 1,
 ) -> ExchangePort:
     """Build exchange port by name.
 
@@ -300,6 +321,7 @@ def build_exchange_port(
         armed: Whether engine is armed.
         symbols: Trading symbols (used as whitelist for futures).
         max_notional: Max notional per order (for futures config).
+        max_orders_per_run: Max orders per port instance (default 1).
 
     Returns:
         ExchangePort instance.
@@ -330,6 +352,7 @@ def build_exchange_port(
             symbol_whitelist=symbols,
             allow_mainnet=True,
             max_notional_per_order=max_notional,
+            max_orders_per_run=max_orders_per_run,
         )
         return BinanceFuturesPort(http_client=http_client, config=config)  # type: ignore[return-value]
 
@@ -566,6 +589,13 @@ def build_parser() -> argparse.ArgumentParser:
         default="100",
         help="Max notional per order in USD (default 100, rehearsal cap). Used with --exchange-port futures.",
     )
+    parser.add_argument(
+        "--max-orders-per-run",
+        type=int,
+        default=1,
+        help="Max orders per run (default 1, canary safety cap). "
+        "Values >1 require GRINDER_MAX_ORDERS_ACK=YES_I_ACCEPT_MULTI_ORDER.",
+    )
     return parser
 
 
@@ -602,7 +632,12 @@ def main() -> None:  # noqa: PLR0915
     elector = start_ha_elector()
 
     # Exchange port
-    port = build_exchange_port(args.exchange_port, mode, args.armed, symbols, max_notional)
+    max_orders = args.max_orders_per_run
+    if max_orders > 1:
+        validate_max_orders_ack(max_orders)
+    port = build_exchange_port(
+        args.exchange_port, mode, args.armed, symbols, max_notional, max_orders
+    )
 
     # Boot summary
     print(
@@ -613,6 +648,11 @@ def main() -> None:  # noqa: PLR0915
     )
     if paper_size is not None:
         print(f"  Paper size_per_level: {paper_size}")
+    if args.exchange_port == "futures":
+        print(
+            f"  FUTURES_PORT_CONFIG_OK max_orders_per_run={max_orders} "
+            f"max_notional_per_order={max_notional}"
+        )
     if args.fixture:
         print(f"  Fixture: {args.fixture}")
         print("  Network guard: ACTIVE (external connections blocked)")

@@ -30,6 +30,7 @@ from scripts.run_trading import (
     reset_trading_state,
     trading_loop,
     validate_env,
+    validate_max_orders_ack,
     validate_real_port_gates,
 )
 
@@ -331,6 +332,51 @@ class TestBuildExchangePort:
         with pytest.raises(SystemExit) as exc_info:
             build_exchange_port("unknown", SafeMode.READ_ONLY, False, ["BTCUSDT"], Decimal("100"))
         assert exc_info.value.code == 1
+
+    def test_futures_max_orders_passed_to_config(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """max_orders_per_run is forwarded to BinanceFuturesPortConfig."""
+        monkeypatch.setenv("ALLOW_MAINNET_TRADE", "1")
+        monkeypatch.setenv("GRINDER_REAL_PORT_ACK", "YES_I_REALLY_WANT_MAINNET")
+        monkeypatch.setenv("BINANCE_API_KEY", "test-key")
+        monkeypatch.setenv("BINANCE_API_SECRET", "test-secret")
+        monkeypatch.delenv("LATENCY_RETRY_ENABLED", raising=False)
+        port = build_exchange_port(
+            "futures",
+            SafeMode.LIVE_TRADE,
+            True,
+            ["BTCUSDT"],
+            Decimal("100"),
+            max_orders_per_run=50,
+        )
+        assert isinstance(port, BinanceFuturesPort)
+        assert port.config.max_orders_per_run == 50
+
+
+class TestValidateMaxOrdersAck:
+    """Test validate_max_orders_ack() ACK guard."""
+
+    def test_max_1_no_ack_needed(self) -> None:
+        """max_orders=1 does not require ACK."""
+        validate_max_orders_ack(1)  # Should not raise
+
+    def test_max_gt1_without_ack_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """max_orders>1 without ACK env exits."""
+        monkeypatch.delenv("GRINDER_MAX_ORDERS_ACK", raising=False)
+        with pytest.raises(SystemExit) as exc_info:
+            validate_max_orders_ack(50)
+        assert exc_info.value.code == 1
+
+    def test_max_gt1_wrong_ack_exits(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """max_orders>1 with wrong ACK value exits."""
+        monkeypatch.setenv("GRINDER_MAX_ORDERS_ACK", "WRONG")
+        with pytest.raises(SystemExit) as exc_info:
+            validate_max_orders_ack(50)
+        assert exc_info.value.code == 1
+
+    def test_max_gt1_with_correct_ack_passes(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """max_orders>1 with correct ACK passes."""
+        monkeypatch.setenv("GRINDER_MAX_ORDERS_ACK", "YES_I_ACCEPT_MULTI_ORDER")
+        validate_max_orders_ack(50)  # Should not raise
 
 
 class TestHAGatingReadyz:
