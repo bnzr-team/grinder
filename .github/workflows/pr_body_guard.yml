@@ -82,9 +82,10 @@ jobs:
             print("FAIL: '## Proof' section must include at least one real command/output (pytest/ruff/docker/etc).")
             sys.exit(1)
 
-          # Reject obvious placeholder text
-          bad_phrases = ["paste output", "TODO", "tbd", "later"]
-          if any(bp.lower() in stripped.lower() for bp in bad_phrases):
+          # Reject obvious placeholder text (word-boundary match to avoid
+          # false positives like "bilateral" matching "later")
+          bad_phrases = [r"paste output", r"\bTODO\b", r"\btbd\b", r"\blater\b"]
+          if any(re.search(bp, stripped, re.IGNORECASE) for bp in bad_phrases):
             print("FAIL: '## Proof' contains placeholder text. Replace placeholders with real outputs.")
             sys.exit(1)
 
