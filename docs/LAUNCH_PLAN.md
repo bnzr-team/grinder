@@ -202,16 +202,22 @@ bash scripts/smoke_futures_no_orders.sh
 All post-launch work lives in `docs/POST_LAUNCH_ROADMAP.md` § 3 (P2 Backlog, 12 gaps).
 It is explicitly **out of scope** for Launch v1.
 
-### Known gaps vs specs (documented, not blocking Launch v1)
+### P0 Blocker: RISK-EE-1 (Emergency Exit)
 
-| Gap | Spec ref | What exists | What's missing | Post-launch item |
-|-----|----------|-------------|----------------|------------------|
-| Emergency Exit (auto-close positions) | `10_RISK_SPEC.md` § 10.6 | Prevention gates (DrawdownGuard, KillSwitch, CLG, CB) block new orders | `emergency_exit()` sequence: cancel all + MARKET IOC reduce_only + verify closed + FSM PAUSED | RISK-EE-1 (P1) |
-| Per-RT loss limit | `15_CONSTANTS.md` § 4.3 | `LOSS_RT_MAX_BPS = -50` constant defined | `RiskMonitor.record_round_trip()` not implemented; constant unused in code | RISK-EE-1 (P1) |
-| FSM position_reduced wiring | `08_STATE_MACHINE.md` | `position_reduced` field in OrchestratorInputs; EMERGENCY→PAUSED transition | Hardcoded `False` in `engine.py:451`; position reducer not written | RISK-EE-1 (P1) |
+**C4 is PAUSED until RISK-EE-1 is implemented and merged.**
 
-**Launch v1 safety posture:** prevention-only (block new risk) + operator kill-switch + manual reduce-only.
-Auto-close is designed (§ 10.6) but not implemented. Tracked as post-launch P1: RISK-EE-1.
+During C4 Segment 1 (2026-02-28), the grid held a short position for 5h+ without any
+position cycling (no fills, no closes). The system cannot auto-close underwater positions
+because `10_RISK_SPEC.md` § 10.6 (Emergency Exit Sequence) is not implemented.
+This makes 24h observation invalid as a stability validator.
+
+| Gap | Spec ref | What exists | What's missing | Priority |
+|-----|----------|-------------|----------------|----------|
+| Emergency Exit (auto-close positions) | `10_RISK_SPEC.md` § 10.6 | Prevention gates (DrawdownGuard, KillSwitch, CLG, CB) block new orders | `emergency_exit()` sequence: cancel all + MARKET IOC reduce_only + verify closed + FSM PAUSED | **P0 blocker** |
+| FSM position_reduced wiring | `08_STATE_MACHINE.md` | `position_reduced` field in OrchestratorInputs; EMERGENCY→PAUSED transition | Hardcoded `False` in `engine.py:451`; position reducer not written | **P0 blocker** |
+| Per-RT loss limit | `15_CONSTANTS.md` § 4.3 | `LOSS_RT_MAX_BPS = -50` constant defined | `RiskMonitor.record_round_trip()` not implemented; constant unused in code | P2 (deferred) |
+
+**Sequence:** RISK-EE-1 PR → merge → restart C4 with `GRINDER_EMERGENCY_EXIT_ENABLED=true` → accumulate 24h.
 
 ---
 
@@ -352,8 +358,8 @@ See `docs/runbooks/32_MAINNET_ROLLOUT_FILL_PROB.md` Phase 4–5 for full config.
 
 **DONE when:** 24h stable with full enforcement, all evidence in LAUNCH_LOG.md, operator sign-off. **This is Launch v1.**
 
-**Launch v1 DoD does NOT include auto-close of positions.** Safety posture is prevention-only
-(block new risk) + operator kill-switch + manual reduce-only. Auto-close is post-launch P1: RISK-EE-1.
+**Launch v1 DoD now REQUIRES auto-close of positions (RISK-EE-1).** C4 is paused until
+`EmergencyExitExecutor` is implemented, merged, and enabled. See P0 Blocker table above.
 
 ---
 
@@ -362,7 +368,8 @@ See `docs/runbooks/32_MAINNET_ROLLOUT_FILL_PROB.md` Phase 4–5 for full config.
 > **No new TRD/OPS/OBS code PRs until C4 is DONE**, unless the work is explicitly listed in
 > `docs/POST_LAUNCH_ROADMAP.md` Section 3 (P2 Backlog).
 >
-> Exception: CI/tooling fixes that do not touch `src/` (e.g., acceptance packet unicode fix).
+> Exception 1: CI/tooling fixes that do not touch `src/` (e.g., acceptance packet unicode fix).
+> Exception 2: **RISK-EE-1 (P0 blocker)** — required before C4 can resume.
 
 ---
 
@@ -371,4 +378,5 @@ See `docs/runbooks/32_MAINNET_ROLLOUT_FILL_PROB.md` Phase 4–5 for full config.
 | Date | Change |
 |------|--------|
 | 2026-02-28 | Add ceremony tracker (C3/C4), evidence requirements, scope rule. |
+| 2026-02-28 | RISK-EE-1 escalated P1→P0 blocker. C4 paused until emergency exit implemented. |
 | 2026-02-28 | Initial version. All D1–D15 met. C1–C2 ceremonies done. |

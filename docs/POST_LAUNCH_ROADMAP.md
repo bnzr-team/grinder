@@ -163,11 +163,11 @@ The system operates "blind" with respect to exchange state:
   - artifacts are produced where relevant
   - `EVIDENCE_REF` lines are present and greppable for any incident-relevant mode
 
-## 2b) Post-Launch P1: Emergency Exit (RISK-EE-1)
+## 2b) P0 Blocker: Emergency Exit (RISK-EE-1)
 
-> **Priority:** P1 (first post-launch item, before P2 backlog)
+> **Priority:** P0 — blocks C4 (was P1, escalated 2026-02-28)
 > **Spec ref:** `docs/10_RISK_SPEC.md` § 10.6 (Emergency Exit Sequence)
-> **Status:** NOT STARTED — gap identified during C4 full rollout
+> **Status:** NOT STARTED — C4 paused until this is implemented and merged
 
 ### Problem
 
