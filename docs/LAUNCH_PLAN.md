@@ -3,7 +3,7 @@
 > **SSOT** for "when is this product launched?" and "what remains?"
 >
 > Last updated: 2026-02-28
-> Main: `158b470` (after TRD-3b, PR #305)
+> Main: `2aeda58` (after LAUNCH-SSOT-1, PR #306)
 
 ---
 
@@ -250,8 +250,111 @@ Any of these **blocks GO** until resolved:
 
 ---
 
+## 7) Ceremony Tracker
+
+All ceremony evidence is recorded in [`docs/LAUNCH_LOG.md`](LAUNCH_LOG.md) with dated entries.
+
+| Ceremony | Owner | Preconditions | Runbook ref | Status |
+|----------|-------|---------------|-------------|--------|
+| C3 Canary | Operator | D1–D15 DONE, C1–C2 DONE, API creds, mainnet access | RB32 Phase 2–3 | NOT STARTED |
+| C4 Full rollout | Operator | C3 DONE (with evidence in LAUNCH_LOG) | RB32 Phase 4–5 | NOT STARTED |
+
+### C3 — Canary (1 symbol, real BinanceFuturesPort)
+
+**Preconditions (must-pass before starting):**
+
+1. All release gates (Section 2) PASS on current main
+2. API credentials configured for Binance Futures mainnet
+3. `GRINDER_FILL_MODEL_DIR` and `GRINDER_FILL_PROB_EVAL_DIR` populated
+4. Preflight passes:
+   ```bash
+   python3 -m scripts.preflight_fill_prob \
+       --model "$GRINDER_FILL_MODEL_DIR" \
+       --eval "$GRINDER_FILL_PROB_EVAL_DIR" \
+       --auto-threshold
+   ```
+
+**Launch command (reference — adapt env vars to deployment):**
+
+```bash
+GRINDER_FILL_MODEL_ENFORCE=1 \
+GRINDER_FILL_PROB_ENFORCE_SYMBOLS="BTCUSDT" \
+GRINDER_FILL_PROB_AUTO_THRESHOLD=0 \
+python3 scripts/run_trading.py \
+    --mainnet --armed --exchange-port futures \
+    --paper-size-per-level 0.001
+```
+
+See `docs/runbooks/32_MAINNET_ROLLOUT_FILL_PROB.md` Phase 2 for full config and post-restart checks.
+
+**Evidence required (record in LAUNCH_LOG.md):**
+
+1. Preflight output (all checks PASS)
+2. Startup log: `FILL_PROB_THRESHOLD_RESOLUTION_OK`
+3. Post-restart metrics: `enforce_enabled=1`, `allowlist_enabled=1`, `cb_trips=0`
+4. Observation metrics (after 4h minimum): `blocks_total>0`, `cb_trips=0`
+5. Budget metrics: drawdown within limits, no kill-switch trip
+6. Confirm: no unexpected HTTP writes beyond canary symbol
+
+**Observation window:** 4h minimum, 24h preferred.
+
+**Stop-the-line (any of these = STOP, do not proceed to C4):**
+
+- `cb_trips > 0` → rollback R1 (disable enforcement)
+- 100% block rate for canary symbol → rollback R2 (investigate threshold)
+- Unexpected write-ops or fills outside canary symbol → R1 immediately
+- Budget/drawdown limits hit → kill-switch activates
+- Any critical alert firing (see `docs/runbooks/ALERT_INDEX.md`)
+
+**DONE when:** All 6 evidence items recorded in LAUNCH_LOG.md with timestamps, zero stop-the-line triggers during observation window, operator sign-off.
+
+### C4 — Full rollout (all symbols, ACTIVE)
+
+**Preconditions:**
+
+1. C3 DONE with evidence in LAUNCH_LOG.md
+2. No unresolved issues from C3 observation
+3. Kill-switch tested and recovery verified (Section 6, rule 4)
+
+**Launch command (reference):**
+
+```bash
+GRINDER_FILL_MODEL_ENFORCE=1 \
+GRINDER_FILL_PROB_ENFORCE_SYMBOLS= \
+GRINDER_FILL_PROB_AUTO_THRESHOLD=0 \
+python3 scripts/run_trading.py \
+    --mainnet --armed --exchange-port futures
+```
+
+See `docs/runbooks/32_MAINNET_ROLLOUT_FILL_PROB.md` Phase 4–5 for full config.
+
+**Evidence required (record in LAUNCH_LOG.md):**
+
+1. Post-restart metrics: `enforce_enabled=1`, `allowlist_enabled=0`, `cb_trips=0`
+2. 24h observation: `cb_trips=0`, block rate reasonable (not 100%), no unexpected alerts
+3. Budget metrics: drawdown within limits across all symbols
+4. (Optional) Phase 5: auto-threshold enabled, `mode=auto_apply` confirmed
+
+**Observation window:** 24h minimum.
+
+**Stop-the-line:** Same as C3 (any CB trip, budget hit, or critical alert = rollback per RB32).
+
+**DONE when:** 24h stable with full enforcement, all evidence in LAUNCH_LOG.md, operator sign-off. **This is Launch v1.**
+
+---
+
+## 8) Scope Rule
+
+> **No new TRD/OPS/OBS code PRs until C4 is DONE**, unless the work is explicitly listed in
+> `docs/POST_LAUNCH_ROADMAP.md` Section 3 (P2 Backlog).
+>
+> Exception: CI/tooling fixes that do not touch `src/` (e.g., acceptance packet unicode fix).
+
+---
+
 ## Changelog
 
 | Date | Change |
 |------|--------|
+| 2026-02-28 | Add ceremony tracker (C3/C4), evidence requirements, scope rule. |
 | 2026-02-28 | Initial version. All D1–D15 met. C1–C2 ceremonies done. |
