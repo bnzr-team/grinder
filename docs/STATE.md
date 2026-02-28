@@ -4,6 +4,15 @@ Goal: document **what actually works now** (not what we wish worked). Update in 
 
 Next steps and progress tracker: `docs/ROADMAP.md`.
 Post-launch roadmap (P1 hardening + P2 backlog): `docs/POST_LAUNCH_ROADMAP.md`.
+**Launch readiness SSOT:** `docs/LAUNCH_PLAN.md` — definition of done, release gates, remaining work.
+
+## Launch readiness
+
+All 15 launch criteria (D1–D15) are **DONE**. See `docs/LAUNCH_PLAN.md` for details.
+
+Next actions are **operational** (not code):
+- C3: Canary (1 symbol, real BinanceFuturesPort) — TODO
+- C4: Full rollout (all symbols, ACTIVE) — TODO
 
 **Note on H-labels:** Throughout this document, labels like `(H1)`, `(H2)`, etc. are informal shorthand for connector hardening ADRs:
 - H1 = ADR-024 (Timeouts + Clean Shutdown)
