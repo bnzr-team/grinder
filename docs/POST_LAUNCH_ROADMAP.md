@@ -163,6 +163,49 @@ The system operates "blind" with respect to exchange state:
   - artifacts are produced where relevant
   - `EVIDENCE_REF` lines are present and greppable for any incident-relevant mode
 
+## 2b) Post-Launch P1: Emergency Exit (RISK-EE-1)
+
+> **Priority:** P1 (first post-launch item, before P2 backlog)
+> **Spec ref:** `docs/10_RISK_SPEC.md` § 10.6 (Emergency Exit Sequence)
+> **Status:** NOT STARTED — gap identified during C4 full rollout
+
+### Problem
+
+Launch v1 has prevention-only safety: DrawdownGuard/KillSwitch/CLG/CB block new orders
+but **cannot auto-close an underwater position**. The spec (`10_RISK_SPEC.md` § 10.6)
+describes a full emergency exit sequence (cancel all + MARKET IOC reduce_only + verify + PAUSED),
+but it is not implemented. The FSM has a `position_reduced` field (hardcoded `False`).
+
+### Scope (opt-in, safe-by-default)
+
+1. `EmergencyExitExecutor` — implements § 10.6 sequence:
+   - Cancel all pending orders
+   - MARKET IOC reduce_only per open position
+   - Bounded wait for fills (timeout → alert operator)
+   - Verify positions closed (partial → log + alert)
+   - FSM transition: `position_reduced=True` → EMERGENCY → PAUSED
+2. Trigger wiring — DrawdownGuard DRAWDOWN + configurable threshold → executor
+3. Env flag: `GRINDER_EMERGENCY_EXIT_ENABLED=false` (opt-in)
+4. Wire `position_reduced` in `engine.py` (replace hardcoded `False`)
+5. Contract tests (fake port, sequence verification, partial fill, timeout)
+6. Runbook update: operator next-steps after auto-exit
+
+### Non-scope
+
+- Per-RT stop-loss (`LOSS_RT_MAX_BPS`) — separate item, depends on RT accounting
+- Auto-recovery from PAUSED — explicit operator reset only (deterministic)
+
+### Acceptance criteria
+
+- [ ] `GRINDER_EMERGENCY_EXIT_ENABLED=false` by default (no behavior change)
+- [ ] When enabled: drawdown breach → cancel + MARKET reduce_only → PAUSED
+- [ ] Partial fill / timeout → operator alert, not silent
+- [ ] Contract tests: sequence order, reduce_only flag, FSM transition
+- [ ] Smoke test: fixture mode with fake port proves full sequence
+- [ ] Runbook: "what happened, what to check, how to resume"
+
+---
+
 ## 3) P2 Target State Pack (Backlog shaping)
 
 > These are **post single-venue stabilization**. We keep them in a ranked list with dependencies.

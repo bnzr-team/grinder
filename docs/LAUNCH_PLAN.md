@@ -202,6 +202,17 @@ bash scripts/smoke_futures_no_orders.sh
 All post-launch work lives in `docs/POST_LAUNCH_ROADMAP.md` § 3 (P2 Backlog, 12 gaps).
 It is explicitly **out of scope** for Launch v1.
 
+### Known gaps vs specs (documented, not blocking Launch v1)
+
+| Gap | Spec ref | What exists | What's missing | Post-launch item |
+|-----|----------|-------------|----------------|------------------|
+| Emergency Exit (auto-close positions) | `10_RISK_SPEC.md` § 10.6 | Prevention gates (DrawdownGuard, KillSwitch, CLG, CB) block new orders | `emergency_exit()` sequence: cancel all + MARKET IOC reduce_only + verify closed + FSM PAUSED | RISK-EE-1 (P1) |
+| Per-RT loss limit | `15_CONSTANTS.md` § 4.3 | `LOSS_RT_MAX_BPS = -50` constant defined | `RiskMonitor.record_round_trip()` not implemented; constant unused in code | RISK-EE-1 (P1) |
+| FSM position_reduced wiring | `08_STATE_MACHINE.md` | `position_reduced` field in OrchestratorInputs; EMERGENCY→PAUSED transition | Hardcoded `False` in `engine.py:451`; position reducer not written | RISK-EE-1 (P1) |
+
+**Launch v1 safety posture:** prevention-only (block new risk) + operator kill-switch + manual reduce-only.
+Auto-close is designed (§ 10.6) but not implemented. Tracked as post-launch P1: RISK-EE-1.
+
 ---
 
 ## 4) Timeline — Effort Remaining
@@ -340,6 +351,9 @@ See `docs/runbooks/32_MAINNET_ROLLOUT_FILL_PROB.md` Phase 4–5 for full config.
 **Stop-the-line:** Same as C3 (any CB trip, budget hit, or critical alert = rollback per RB32).
 
 **DONE when:** 24h stable with full enforcement, all evidence in LAUNCH_LOG.md, operator sign-off. **This is Launch v1.**
+
+**Launch v1 DoD does NOT include auto-close of positions.** Safety posture is prevention-only
+(block new risk) + operator kill-switch + manual reduce-only. Auto-close is post-launch P1: RISK-EE-1.
 
 ---
 
