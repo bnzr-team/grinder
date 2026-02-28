@@ -14,15 +14,18 @@
   - We keep **Launch-13/14/15** only for P1 (to preserve continuity),
   - Then move to **P2 Packs** (no more endless "Launch-XX" by default).
 
-## 1) Current baseline (as of 2026-02-21)
+## 1) Current baseline (as of 2026-02-28)
 
 - Milestones M1–M8: DONE
 - Launch-01–12: DONE
 - Launch-13 (FSM): DONE (main @ `7793045`)
-- Launch-14 (SmartOrderRouter): DONE (main @ `e5b177c`, existing=None scope)
+- Launch-14 (SmartOrderRouter): DONE (main @ `7967d43`, existing=None scope)
+- Launch-15 (AccountSyncer): DONE (main @ `34fac6c`)
+- **P1 Hardening Pack: COMPLETE** (all 3 launches shipped)
 - P0 blockers: none
-- P1 gaps open: 1 (PositionSyncer/RoundTrip)
+- P1 gaps open: 0
 - P2 backlog open: 12 (see section 3)
+- **Launch readiness:** see `docs/LAUNCH_PLAN.md` for DoD + release gates
 
 ## 2) P1 Hardening Pack (ASAP post-launch)
 
