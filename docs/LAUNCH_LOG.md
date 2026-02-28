@@ -245,6 +245,91 @@ Date: 2026-02-28
 
 ---
 
+## Kill-switch test (pre-C4 precondition)
+
+**Status:** PASS
+
+### Fire drill execution
+
+```
+Date: 2026-02-28
+Operator: automated (Claude)
+Main commit: baa8f0b9d4b8bd6565fc3f631af377d9f4cf2e90
+Script: bash scripts/fire_drill_risk_killswitch_drawdown.sh
+Evidence dir: .artifacts/risk_fire_drill/20260228T163142
+Results: 14 passed, 0 failed, 0 skipped
+```
+
+### Drill A: KillSwitch latch + enforcement gate
+
+```
+Trip method: kill_switch.trip(KillSwitchReason.MANUAL, ts=1700000000)
+kill_switch_triggered: True
+kill_switch_reason: MANUAL
+Idempotent: PASS (second trip no-op, reason unchanged)
+
+Gate enforcement:
+  INCREASE_RISK: BLOCKED (kill-switch active)
+  REDUCE_RISK:   BLOCKED (kill-switch active)
+  CANCEL:        ALLOWED (safety: can always cancel)
+
+Metrics:
+  grinder_kill_switch_triggered 1
+  grinder_kill_switch_trips_total{reason="MANUAL"} 1
+```
+
+### Drill B: DrawdownGuardV1 intent blocking
+
+```
+Initial state: NORMAL
+After 5% DD: state=NORMAL (below 10% limit)
+After 12% DD: state=DRAWDOWN (12% >= 10% limit, triggered)
+Trigger reason: DD_PORTFOLIO_BREACH
+
+Intent blocking in DRAWDOWN state:
+  INCREASE_RISK: BLOCKED (reason=DD_PORTFOLIO_BREACH)
+  REDUCE_RISK:   ALLOWED (reason=REDUCE_RISK_ALLOWED)
+  CANCEL:        ALLOWED (reason=CANCEL_ALWAYS_ALLOWED)
+
+Latching: DRAWDOWN persists after equity recovery (no auto-recovery)
+
+Metrics:
+  grinder_drawdown_pct 12.00
+  grinder_high_water_mark 100000.00
+```
+
+### Recovery verification
+
+```
+Recovery method: service restart (kill-switch state is in-memory, not persisted)
+After restart: kill_switch_triggered=0, state=NORMAL
+Resume: engine gates ready (armed/live config), no KILL_SWITCH_ACTIVE block reason
+
+Artifact integrity (sha256):
+  9673c76c  drill_a_log.txt
+  20aaeb2e  drill_a_metrics.txt
+  e61e17ea  drill_b_log.txt
+  c1bfa900  drill_b_metrics.txt
+  8b1b0b0e  summary.txt
+```
+
+### Sign-off
+
+```
+Result: PASS
+Notes:
+  - Kill-switch trip works (MANUAL reason, idempotent)
+  - PLACE/REPLACE blocked, CANCEL allowed (safety envelope TRD-1 Gate 3)
+  - Drawdown guard triggers at 12% DD (> 10% limit), blocks INCREASE_RISK
+  - REDUCE_RISK and CANCEL always allowed in DRAWDOWN state
+  - State is latched (no auto-recovery) — requires restart
+  - 14/14 assertions passed
+Operator: automated (Claude)
+Date: 2026-02-28
+```
+
+---
+
 ## C4 — Full Rollout
 
 **Status:** NOT STARTED
@@ -254,9 +339,9 @@ Date: 2026-02-28
 ```
 Date:
 Operator:
-Main commit:
-C3 evidence: [ ] recorded above with PASS
-Kill-switch tested: [ ] trip + recovery verified
+Main commit: baa8f0b9d4b8bd6565fc3f631af377d9f4cf2e90
+C3 evidence: [x] recorded above with PASS
+Kill-switch tested: [x] trip + recovery verified (fire drill 14/14 PASS)
 ```
 
 ### Startup
