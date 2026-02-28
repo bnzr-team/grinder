@@ -192,7 +192,7 @@ class TestOrderExistsUnexpected(TestReconcileEngine):
                 ts=10000000,
                 symbol="BTCUSDT",
                 order_id=12345678,
-                client_order_id="grinder_default_BTCUSDT_1_1000000_1",
+                client_order_id="grinder_d_BTCUSDT_1_1000000_1",
                 side=OrderSide.BUY,
                 status=OrderState.OPEN,
                 price=Decimal("42500.00"),
@@ -214,7 +214,7 @@ class TestOrderExistsUnexpected(TestReconcileEngine):
 
         assert len(mismatches) == 1
         assert mismatches[0].mismatch_type == MismatchType.ORDER_EXISTS_UNEXPECTED
-        assert mismatches[0].client_order_id == "grinder_default_BTCUSDT_1_1000000_1"
+        assert mismatches[0].client_order_id == "grinder_d_BTCUSDT_1_1000000_1"
 
     def test_ignores_non_grinder_orders(
         self,
@@ -518,7 +518,7 @@ class TestReconcileEngineMultipleMismatches(TestReconcileEngine):
         # Missing order (created 10s ago) - v1 format with strategy_id
         expected_store.record_order(
             ExpectedOrder(
-                client_order_id="grinder_default_BTCUSDT_1_1000000_1",
+                client_order_id="grinder_d_BTCUSDT_1_1000000_1",
                 symbol="BTCUSDT",
                 side=OrderSide.BUY,
                 order_type="LIMIT",
@@ -534,7 +534,7 @@ class TestReconcileEngineMultipleMismatches(TestReconcileEngine):
                 ts=10000000,
                 symbol="ETHUSDT",
                 order_id=99999999,
-                client_order_id="grinder_default_ETHUSDT_1_1000000_1",
+                client_order_id="grinder_d_ETHUSDT_1_1000000_1",
                 side=OrderSide.SELL,
                 status=OrderState.OPEN,
                 price=Decimal("3000.00"),

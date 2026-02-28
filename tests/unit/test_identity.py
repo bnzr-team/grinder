@@ -14,6 +14,7 @@ from collections.abc import Generator
 import pytest
 
 from grinder.reconcile.identity import (
+    BINANCE_MAX_CLIENT_ORDER_ID_LEN,
     DEFAULT_PREFIX,
     DEFAULT_STRATEGY_ID,
     ENV_ALLOW_LEGACY_ORDER_ID,
@@ -303,10 +304,10 @@ class TestGenerateClientOrderId:
     """Tests for generate_client_order_id function."""
 
     def test_generate_v1_format(self) -> None:
-        """Generate v1 format with all components."""
+        """Generate v1 format — ts millis truncated to seconds."""
         config = OrderIdentityConfig(
             prefix="grinder_",
-            strategy_id="momentum",
+            strategy_id="m",
         )
         result = generate_client_order_id(
             config=config,
@@ -315,25 +316,25 @@ class TestGenerateClientOrderId:
             ts=1704067200000,
             seq=42,
         )
-        assert result == "grinder_momentum_BTCUSDT_1_1704067200000_42"
+        assert result == "grinder_m_BTCUSDT_1_1704067200_42"
 
     def test_generate_with_string_level_id(self) -> None:
-        """Generate with string level_id (e.g., cleanup)."""
-        config = OrderIdentityConfig(strategy_id="scalper")
+        """Generate with short string level_id (e.g., c for cleanup)."""
+        config = OrderIdentityConfig(strategy_id="s")
         result = generate_client_order_id(
             config=config,
             symbol="ETHUSDT",
-            level_id="cleanup",
+            level_id="c",
             ts=1704067200000,
             seq=5,
         )
-        assert result == "grinder_scalper_ETHUSDT_cleanup_1704067200000_5"
+        assert result == "grinder_s_ETHUSDT_c_1704067200_5"
 
     def test_generate_with_custom_prefix(self) -> None:
         """Generate with custom prefix."""
         config = OrderIdentityConfig(
             prefix="mybot_",
-            strategy_id="arb",
+            strategy_id="a",
         )
         result = generate_client_order_id(
             config=config,
@@ -342,11 +343,11 @@ class TestGenerateClientOrderId:
             ts=1704067200000,
             seq=1,
         )
-        assert result == "mybot_arb_BTCUSDT_2_1704067200000_1"
+        assert result == "mybot_a_BTCUSDT_2_1704067200_1"
 
     def test_generate_then_parse_roundtrip(self) -> None:
         """Generated ID can be parsed back correctly."""
-        config = OrderIdentityConfig(strategy_id="test")
+        config = OrderIdentityConfig(strategy_id="t")
         generated = generate_client_order_id(
             config=config,
             symbol="BTCUSDT",
@@ -361,13 +362,13 @@ class TestGenerateClientOrderId:
         assert parsed.strategy_id == config.strategy_id
         assert parsed.symbol == "BTCUSDT"
         assert parsed.level_id == "5"
-        assert parsed.ts == 1704067200000
+        assert parsed.ts == 1704067200  # seconds, not millis
         assert parsed.seq == 99
         assert parsed.is_legacy is False
 
     def test_generate_then_is_ours_returns_true(self) -> None:
         """Generated ID passes is_ours check."""
-        config = OrderIdentityConfig(strategy_id="momentum")
+        config = OrderIdentityConfig(strategy_id="m")
         generated = generate_client_order_id(
             config=config,
             symbol="BTCUSDT",
@@ -376,6 +377,34 @@ class TestGenerateClientOrderId:
             seq=1,
         )
         assert is_ours(generated, config) is True
+
+    def test_generate_respects_36_char_limit(self) -> None:
+        """Generated ID never exceeds Binance 36-char limit."""
+        config = OrderIdentityConfig(strategy_id="d")
+        result = generate_client_order_id(
+            config=config,
+            symbol="BTCUSDT",
+            level_id=1,
+            ts=1772292240701,
+            seq=1,
+        )
+        assert len(result) <= BINANCE_MAX_CLIENT_ORDER_ID_LEN
+        assert result == "grinder_d_BTCUSDT_1_1772292240_1"
+
+    def test_generate_raises_if_too_long(self) -> None:
+        """ValueError raised when generated ID exceeds 36 chars."""
+        config = OrderIdentityConfig(
+            prefix="grinder_",
+            strategy_id="toolong",
+        )
+        with pytest.raises(ValueError, match="clientOrderId too long"):
+            generate_client_order_id(
+                config=config,
+                symbol="BTCUSDT",
+                level_id=1,
+                ts=1772292240000,
+                seq=1,
+            )
 
 
 # =============================================================================

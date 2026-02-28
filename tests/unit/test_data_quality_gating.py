@@ -67,14 +67,14 @@ def _clean_env() -> Generator[None, None, None]:
 def mock_port() -> MagicMock:
     port = MagicMock()
     port.cancel_order.return_value = True
-    port.place_market_order.return_value = "grinder_default_BTCUSDT_cleanup_123_1"
+    port.place_market_order.return_value = "grinder_d_BTCUSDT_cleanup_123_1"
     return port
 
 
 @pytest.fixture
 def observed_order() -> ObservedOrder:
     return ObservedOrder(
-        client_order_id="grinder_default_BTCUSDT_1_1704067200000_1",
+        client_order_id="grinder_d_BTCUSDT_1_1704067200000_1",
         symbol="BTCUSDT",
         order_id=12345678,
         side=OrderSide.BUY,

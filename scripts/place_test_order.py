@@ -2,7 +2,7 @@
 """Place a single test order for Stage D testing.
 
 This script places one limit order far from market to test reconcile cancel.
-The order uses grinder_default_... clientOrderId format.
+The order uses grinder_d_... clientOrderId format.
 
 Usage:
     source .env.stage_d
@@ -105,7 +105,7 @@ def main() -> int:
     print(f"  Quantity: {quantity}")
     print(f"  Notional: ${price * quantity}")
     print()
-    print("  ClientOrderId format: grinder_default_BTCUSDT_...")
+    print("  ClientOrderId format: grinder_d_BTCUSDT_...")
     print("=" * 60)
 
     # Create port with identity config

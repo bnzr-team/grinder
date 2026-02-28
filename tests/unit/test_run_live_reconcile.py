@@ -296,7 +296,7 @@ class TestFullConfigScenarios:
         """Test Stage D: EXECUTE_CANCEL_ALL with strict limits."""
         env = {
             "REMEDIATION_MODE": "execute_cancel_all",
-            "REMEDIATION_STRATEGY_ALLOWLIST": "default",
+            "REMEDIATION_STRATEGY_ALLOWLIST": "d",
             "REMEDIATION_SYMBOL_ALLOWLIST": "BTCUSDT",
             "MAX_CALLS_PER_DAY": "10",
             "MAX_NOTIONAL_PER_DAY": "1000",
@@ -311,7 +311,7 @@ class TestFullConfigScenarios:
 
         assert config.remediation_mode == RemediationMode.EXECUTE_CANCEL_ALL
         assert config.action == RemediationAction.CANCEL_ALL
-        assert config.remediation_strategy_allowlist == {"default"}
+        assert config.remediation_strategy_allowlist == {"d"}
         assert config.remediation_symbol_allowlist == {"BTCUSDT"}
         assert config.max_calls_per_day == 10
         assert config.max_notional_per_day == Decimal("1000")

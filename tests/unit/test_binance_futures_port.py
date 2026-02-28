@@ -119,8 +119,8 @@ class TestTrueDryRunMode:
         )
 
         assert order_id is not None
-        # v1 format: grinder_{strategy}_{symbol}_{level}_{ts}_{seq}
-        assert "grinder_default_BTCUSDT_1_1000000" in order_id
+        # v1 format: grinder_{strategy}_{symbol}_{level}_{ts_seconds}_{seq}
+        assert "grinder_d_BTCUSDT_1_1000" in order_id
         assert len(noop_client.calls) == 0
 
     def test_cancel_order_dry_run_zero_http_calls(
@@ -728,8 +728,8 @@ class TestCancelOrderIdentityParsing:
         """cancel_order correctly parses v1 format with longer strategy_id."""
         port = BinanceFuturesPort(http_client=futures_noop_client, config=live_trade_config)
 
-        # strategy_id = "default", symbol = "BTCUSDT"
-        port.cancel_order("grinder_default_BTCUSDT_1_1704067200000_1")
+        # strategy_id = "d", symbol = "BTCUSDT"
+        port.cancel_order("grinder_d_BTCUSDT_1_1704067200_1")
 
         assert len(futures_noop_client.calls) == 1
         call = futures_noop_client.calls[0]

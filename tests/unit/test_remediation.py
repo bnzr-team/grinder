@@ -35,7 +35,7 @@ def mock_port() -> MagicMock:
     """Create mock BinanceFuturesPort."""
     port = MagicMock()
     port.cancel_order.return_value = True
-    port.place_market_order.return_value = "grinder_default_BTCUSDT_cleanup_123_1"
+    port.place_market_order.return_value = "grinder_d_BTCUSDT_cleanup_123_1"
     return port
 
 
@@ -43,7 +43,7 @@ def mock_port() -> MagicMock:
 def observed_order() -> ObservedOrder:
     """Create a sample observed order with grinder_ prefix (v1 format with strategy_id)."""
     return ObservedOrder(
-        client_order_id="grinder_default_BTCUSDT_1_1704067200000_1",
+        client_order_id="grinder_d_BTCUSDT_1_1704067200000_1",
         symbol="BTCUSDT",
         order_id=12345678,
         side=OrderSide.BUY,
@@ -192,7 +192,7 @@ class TestRemediationSafetyGates:
             mock_port,
             action=RemediationAction.NONE,
             remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
-            strategy_allowlist={"default"},
+            strategy_allowlist={"d"},
         )
 
         result = executor.remediate_cancel(observed_order)
@@ -213,7 +213,7 @@ class TestRemediationSafetyGates:
             armed=True,
             whitelist=["BTCUSDT"],
             remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
-            strategy_allowlist={"default"},
+            strategy_allowlist={"d"},
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -235,7 +235,7 @@ class TestRemediationSafetyGates:
             armed=True,
             whitelist=["BTCUSDT"],
             remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
-            strategy_allowlist={"default"},
+            strategy_allowlist={"d"},
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -257,7 +257,7 @@ class TestRemediationSafetyGates:
             armed=False,  # Gate fails here
             whitelist=["BTCUSDT"],
             remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
-            strategy_allowlist={"default"},
+            strategy_allowlist={"d"},
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -280,7 +280,7 @@ class TestRemediationSafetyGates:
             armed=True,
             whitelist=["BTCUSDT"],
             remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
-            strategy_allowlist={"default"},
+            strategy_allowlist={"d"},
         )
 
         result = executor.remediate_cancel(observed_order)
@@ -302,7 +302,7 @@ class TestRemediationSafetyGates:
             whitelist=["BTCUSDT"],
             cooldown_seconds=3600,  # 1 hour cooldown
             remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
-            strategy_allowlist={"default"},
+            strategy_allowlist={"d"},
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -327,7 +327,7 @@ class TestRemediationSafetyGates:
             armed=True,
             whitelist=["ETHUSDT"],  # BTCUSDT not whitelisted
             remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
-            strategy_allowlist={"default"},
+            strategy_allowlist={"d"},
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -405,7 +405,7 @@ class TestRemediationExecution:
             armed=True,
             whitelist=["BTCUSDT"],
             remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
-            strategy_allowlist={"default"},
+            strategy_allowlist={"d"},
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -459,7 +459,7 @@ class TestRemediationExecution:
             max_orders=2,
             cooldown_seconds=0,  # Disable cooldown for this test
             remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
-            strategy_allowlist={"default"},
+            strategy_allowlist={"d"},
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -485,13 +485,13 @@ class TestRemediationExecution:
             max_symbols=2,
             cooldown_seconds=0,  # Disable cooldown for this test
             remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
-            strategy_allowlist={"default"},
+            strategy_allowlist={"d"},
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
         # Execute for 2 different symbols
         order1 = ObservedOrder(
-            client_order_id="grinder_default_BTCUSDT_1_1704067200000_1",
+            client_order_id="grinder_d_BTCUSDT_1_1704067200000_1",
             symbol="BTCUSDT",
             order_id=1,
             side=OrderSide.BUY,
@@ -503,7 +503,7 @@ class TestRemediationExecution:
             ts_observed=1,
         )
         order2 = ObservedOrder(
-            client_order_id="grinder_default_ETHUSDT_1_1704067200000_1",
+            client_order_id="grinder_d_ETHUSDT_1_1704067200000_1",
             symbol="ETHUSDT",
             order_id=2,
             side=OrderSide.BUY,
@@ -515,7 +515,7 @@ class TestRemediationExecution:
             ts_observed=1,
         )
         order3 = ObservedOrder(
-            client_order_id="grinder_default_SOLUSDT_1_1704067200000_1",
+            client_order_id="grinder_d_SOLUSDT_1_1704067200000_1",
             symbol="SOLUSDT",
             order_id=3,
             side=OrderSide.BUY,
@@ -558,7 +558,7 @@ class TestRemediationKillSwitch:
             whitelist=["BTCUSDT"],
             kill_switch=True,  # Kill-switch active
             remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
-            strategy_allowlist={"default"},
+            strategy_allowlist={"d"},
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -609,7 +609,7 @@ class TestRemediationMetrics:
             action=RemediationAction.CANCEL_ALL,
             dry_run=True,  # Dry-run mode
             remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
-            strategy_allowlist={"default"},
+            strategy_allowlist={"d"},
         )
 
         executor.remediate_cancel(observed_order)
@@ -631,7 +631,7 @@ class TestRemediationMetrics:
             armed=True,
             whitelist=["BTCUSDT"],
             remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
-            strategy_allowlist={"default"},
+            strategy_allowlist={"d"},
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -651,7 +651,7 @@ class TestRemediationMetrics:
             dry_run=False,
             allow_active=False,  # This will cause block
             remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
-            strategy_allowlist={"default"},
+            strategy_allowlist={"d"},
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -674,7 +674,7 @@ class TestRemediationResult:
         result = RemediationResult(
             mismatch_type="ORDER_EXISTS_UNEXPECTED",
             symbol="BTCUSDT",
-            client_order_id="grinder_default_BTCUSDT_1_1704067200000_1",
+            client_order_id="grinder_d_BTCUSDT_1_1704067200000_1",
             status=RemediationStatus.EXECUTED,
             action="cancel_all",
         )
@@ -683,7 +683,7 @@ class TestRemediationResult:
 
         assert extra["mismatch_type"] == "ORDER_EXISTS_UNEXPECTED"
         assert extra["symbol"] == "BTCUSDT"
-        assert extra["client_order_id"] == "grinder_default_BTCUSDT_1_1704067200000_1"
+        assert extra["client_order_id"] == "grinder_d_BTCUSDT_1_1704067200000_1"
         assert extra["status"] == "executed"
         assert extra["action"] == "cancel_all"
         assert extra["block_reason"] is None
@@ -817,7 +817,7 @@ class TestWhitelistRequired:
             whitelist=[],  # Empty whitelist
             require_whitelist=True,
             remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
-            strategy_allowlist={"default"},
+            strategy_allowlist={"d"},
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -839,7 +839,7 @@ class TestWhitelistRequired:
             whitelist=[],
             require_whitelist=False,  # Not required
             remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
-            strategy_allowlist={"default"},
+            strategy_allowlist={"d"},
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -905,7 +905,7 @@ class TestRemediationModeSemantics:
             armed=True,
             whitelist=["BTCUSDT"],
             remediation_mode=RemediationMode.DETECT_ONLY,  # Default, explicit here
-            strategy_allowlist={"default"},
+            strategy_allowlist={"d"},
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -927,7 +927,7 @@ class TestRemediationModeSemantics:
             armed=True,
             whitelist=["BTCUSDT"],
             remediation_mode=RemediationMode.PLAN_ONLY,
-            strategy_allowlist={"default"},
+            strategy_allowlist={"d"},
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -949,7 +949,7 @@ class TestRemediationModeSemantics:
             armed=True,
             whitelist=["BTCUSDT"],
             remediation_mode=RemediationMode.BLOCKED,
-            strategy_allowlist={"default"},
+            strategy_allowlist={"d"},
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -972,7 +972,7 @@ class TestRemediationModeSemantics:
             armed=True,
             whitelist=["BTCUSDT"],
             remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
-            strategy_allowlist={"default"},
+            strategy_allowlist={"d"},
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -1036,7 +1036,7 @@ class TestRemediationModeSemantics:
             armed=True,
             whitelist=["BTCUSDT"],
             remediation_mode=RemediationMode.EXECUTE_FLATTEN,
-            strategy_allowlist={"default"},
+            strategy_allowlist={"d"},
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -1068,7 +1068,7 @@ class TestStrategyAllowlist:
             armed=True,
             whitelist=["BTCUSDT"],
             remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
-            strategy_allowlist={"default"},  # Order uses "default" strategy
+            strategy_allowlist={"d"},  # Order uses "d" strategy
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -1088,7 +1088,7 @@ class TestStrategyAllowlist:
             armed=True,
             whitelist=["BTCUSDT"],
             remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
-            strategy_allowlist={"other_strategy"},  # Order uses "default", not allowed
+            strategy_allowlist={"other_strategy"},  # Order uses "d", not allowed
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -1138,7 +1138,7 @@ class TestBudgetGates:
             armed=True,
             whitelist=["BTCUSDT"],
             remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
-            strategy_allowlist={"default"},
+            strategy_allowlist={"d"},
             max_calls_per_run=2,  # Only 2 calls allowed per run
             cooldown_seconds=0,
         )
@@ -1190,7 +1190,7 @@ class TestBudgetGates:
             armed=True,
             whitelist=["BTCUSDT"],
             remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
-            strategy_allowlist={"default"},
+            strategy_allowlist={"d"},
             max_calls_per_run=2,
             cooldown_seconds=0,
         )
@@ -1235,7 +1235,7 @@ class TestHALeaderOnlyRemediation:
             armed=True,
             whitelist=["BTCUSDT"],
             remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
-            strategy_allowlist={"default"},
+            strategy_allowlist={"d"},
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -1280,7 +1280,7 @@ class TestHALeaderOnlyRemediation:
             armed=True,
             whitelist=["BTCUSDT"],
             remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
-            strategy_allowlist={"default"},
+            strategy_allowlist={"d"},
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -1304,7 +1304,7 @@ class TestHALeaderOnlyRemediation:
             armed=True,
             whitelist=["BTCUSDT"],
             remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
-            strategy_allowlist={"default"},
+            strategy_allowlist={"d"},
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -1351,7 +1351,7 @@ class TestHALeaderOnlyRemediation:
             armed=True,
             whitelist=["BTCUSDT"],
             remediation_mode=RemediationMode.EXECUTE_CANCEL_ALL,
-            strategy_allowlist={"default"},
+            strategy_allowlist={"d"},
         )
         os.environ["ALLOW_MAINNET_TRADE"] = "1"
 
@@ -1385,7 +1385,7 @@ class TestHALeaderOnlyRemediation:
         can_exec, reason = executor.can_execute(
             symbol="BTCUSDT",
             is_cancel=True,
-            client_order_id="grinder_default_BTCUSDT_1_1704067200000_1",
+            client_order_id="grinder_d_BTCUSDT_1_1704067200000_1",
         )
 
         assert can_exec is False
