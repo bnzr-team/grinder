@@ -1336,7 +1336,8 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - Note: drawdown_breached replaced by drawdown_pct (PR-A3), position_reduced replaced by position_notional_usd (PR-A4)
     - Migration: any parser matching feed_stale= or toxicity_level= must switch to feed_gap_ms=/spread_bps=/toxicity_score_bps=
     - CANON_TEXT + CANON_SHA256 updated in test_fsm_evidence.py
-    - Deferred: drawdown_pct (PR-A3), position_notional (PR-A4), regime (PR-A5)
+    - Deferred: drawdown_pct (PR-A3), position_notional (PR-A4)
+    - Dropped: regime (PR-A5) — no FSM consumer; regime lives in policy artifacts (GridPlan.regime)
   - PR-A3: drawdown_breached → drawdown_pct (numeric DD fraction):
     - OrchestratorInputs: drawdown_breached: bool → drawdown_pct: float (0.20 = 20%)
     - FsmConfig: added drawdown_threshold_pct: float = 0.20 (was DrawdownGuardV1Config default)
@@ -1344,7 +1345,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - DrawdownGuardV1: added current_drawdown_pct property (float accessor)
     - Engine: passes guard.current_drawdown_pct instead of guard.is_drawdown
     - Evidence v2 signal: drawdown_breached → drawdown_pct (CANON_TEXT + SHA256 updated)
-    - Deferred: regime (PR-A5)
+    - Dropped: regime (PR-A5) — no FSM consumer; see GridPlan.regime for policy-level regime
   - PR-A4: position_reduced → position_notional_usd (live position notional):
     - OrchestratorInputs: position_reduced: bool → position_notional_usd: float | None (Σ|qty|×mark_price USDT; None = unknown)
     - FsmConfig: added position_notional_threshold_usd: float = 10.0 (recovery threshold, not exchange MIN_NOTIONAL)
@@ -1352,6 +1353,9 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - Source: AccountSyncer only (pure live measurement, no override/latch)
     - None = unknown → conservatively blocks recovery (safe default)
     - Evidence v2 signal: position_reduced → position_notional_usd (CANON_TEXT + SHA256 updated)
+  - A-series COMPLETE (PR-A1 → A2a → A2b → A3 → A4). PR-A5 (regime) dropped: no FSM consumer.
+    Regime is policy-internal (GridPlan.regime via classify_regime). Future FSM regime-aware
+    transitions require separate ADR + spec + tests.
 - [DONE] Launch-14 (P1): SmartOrderRouter (existing=None scope) — COMPLETE (main @ `e5b177c`).
   - PR0 (#219) — Spec/decision matrix + invariants (merged @ `8ff7339`)
   - PR1 (#220) — Router core + table-driven tests (merged @ `d98008d`)
