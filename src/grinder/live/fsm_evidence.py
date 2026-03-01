@@ -25,7 +25,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-ARTIFACT_VERSION = "fsm_evidence_v1"
+ARTIFACT_VERSION = "fsm_evidence_v2"
 ENV_ENABLE = "GRINDER_FSM_EVIDENCE"
 ENV_ARTIFACT_DIR = "GRINDER_ARTIFACT_DIR"
 
@@ -53,34 +53,26 @@ def _fmt_value(v: object) -> str:
 def render_evidence_text(
     event: TransitionEvent,
     inputs: OrchestratorInputs,
-    config: FsmConfig | None = None,
+    config: FsmConfig | None = None,  # noqa: ARG001 — kept for caller API compat
 ) -> str:
     """Render canonical evidence text for a transition event.
 
     Format is deterministic: fixed field order, sorted signal keys,
-    trailing newline. Same event+inputs+config always produces identical output.
+    trailing newline. Same event+inputs always produces identical output.
 
-    Backward compat (PR-A2a): maps numeric fields back to v1 signal names
-    using config thresholds (no hardcoded magic numbers). Default FsmConfig
-    produces identical output to prior bool/str fields with default values.
+    v2 (PR-A2b): native numeric fields replace v1 bool/str surrogates.
+    Breaking change: feed_stale/toxicity_level removed, replaced by
+    feed_gap_ms/spread_bps/toxicity_score_bps.
+
+    The config parameter is accepted for caller API compat but unused in v2
+    (signals are emitted as-is, no threshold interpretation needed).
     """
-    from grinder.live.fsm_orchestrator import FsmConfig as _FsmConfig  # noqa: PLC0415
-
-    if config is None:
-        config = _FsmConfig()  # default thresholds as fallback
     signals: dict[str, object] = {
         "kill_switch_active": inputs.kill_switch_active,
         "drawdown_breached": inputs.drawdown_breached,
-        "feed_stale": (
-            inputs.feed_gap_ms > 0 and inputs.feed_gap_ms > config.feed_stale_threshold_ms
-        ),
-        "toxicity_level": (
-            "HIGH"
-            if inputs.toxicity_score_bps > config.toxicity_high_threshold_bps
-            else "MID"
-            if inputs.spread_bps > config.spread_spike_threshold_bps
-            else "LOW"
-        ),
+        "feed_gap_ms": inputs.feed_gap_ms,
+        "spread_bps": inputs.spread_bps,
+        "toxicity_score_bps": inputs.toxicity_score_bps,
         "position_reduced": inputs.position_reduced,
         "operator_override": inputs.operator_override,
     }

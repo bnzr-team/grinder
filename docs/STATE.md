@@ -1328,7 +1328,14 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - Thresholds moved from engine to FsmConfig (feed_stale_threshold_ms, spread_spike_threshold_bps, toxicity_high_threshold_bps)
     - ToxicityGate.price_impact_bps() typed method (no dict-fishing)
     - Evidence v1 backward compat: render_evidence_text() maps numerics to v1 names via FsmConfig
-    - Deferred: fsm_evidence_v2 (PR-A2b), drawdown_pct (PR-A3), position_notional (PR-A4), regime (PR-A5)
+  - PR-A2b: fsm_evidence_v2 (BREAKING CHANGE):
+    - ARTIFACT_VERSION bumped: fsm_evidence_v1 → fsm_evidence_v2
+    - Removed v1 signal fields: feed_stale (bool), toxicity_level (str "LOW"/"MID"/"HIGH")
+    - Added v2 signal fields: feed_gap_ms (int), spread_bps (float), toxicity_score_bps (float)
+    - Unchanged fields: kill_switch_active, drawdown_breached, position_reduced, operator_override
+    - Migration: any parser matching feed_stale= or toxicity_level= must switch to feed_gap_ms=/spread_bps=/toxicity_score_bps=
+    - CANON_TEXT + CANON_SHA256 updated in test_fsm_evidence.py
+    - Deferred: drawdown_pct (PR-A3), position_notional (PR-A4), regime (PR-A5)
 - [DONE] Launch-14 (P1): SmartOrderRouter (existing=None scope) — COMPLETE (main @ `e5b177c`).
   - PR0 (#219) — Spec/decision matrix + invariants (merged @ `8ff7339`)
   - PR1 (#220) — Router core + table-driven tests (merged @ `d98008d`)

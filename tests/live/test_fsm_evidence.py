@@ -27,23 +27,27 @@ from grinder.live.fsm_evidence import (
 )
 from grinder.live.fsm_orchestrator import OrchestratorInputs, TransitionEvent, TransitionReason
 
-# Canonical golden text for regression testing
+# Canonical golden text for regression testing.
+# v2 (PR-A2b): native numeric fields replace v1 bool/str surrogates.
+# Breaking change: feed_stale/toxicity_level removed, replaced by
+# feed_gap_ms/spread_bps/toxicity_score_bps.
 CANON_TEXT = (
-    "artifact_version=fsm_evidence_v1\n"
+    "artifact_version=fsm_evidence_v2\n"
     "ts_ms=2000\n"
     "from_state=ACTIVE\n"
     "to_state=EMERGENCY\n"
     "reason=KILL_SWITCH\n"
     "signals:\n"
     "  drawdown_breached=False\n"
-    "  feed_stale=False\n"
+    "  feed_gap_ms=0\n"
     "  kill_switch_active=True\n"
     "  operator_override=None\n"
     "  position_reduced=False\n"
-    "  toxicity_level=LOW\n"
+    "  spread_bps=0.0\n"
+    "  toxicity_score_bps=0.0\n"
 )
 
-CANON_SHA256 = "dde0f354e767ab8e43823bba24b46fda5e98e34b458abf71e99e853d2e7fd008"
+CANON_SHA256 = "f733bb65b6cf2bdc0a7dc8864bd87c38c847529a8dcd49d5d9a9be0cc1777de7"
 
 
 def _mk_event(
@@ -65,14 +69,13 @@ def _mk_inputs(
     kill_switch_active: bool = True,
     operator_override: str | None = None,
 ) -> OrchestratorInputs:
-    # Numeric defaults map to v1 evidence: feed_stale=False, toxicity_level=LOW
     return OrchestratorInputs(
         ts_ms=ts_ms,
         kill_switch_active=kill_switch_active,
         drawdown_breached=False,
-        feed_gap_ms=0,  # 0 = first tick → feed_stale=False in v1 compat
-        spread_bps=0.0,  # 0.0 < 50.0 threshold → toxicity_level=LOW in v1 compat
-        toxicity_score_bps=0.0,  # 0.0 < 500.0 threshold → toxicity_level=LOW in v1 compat
+        feed_gap_ms=0,
+        spread_bps=0.0,
+        toxicity_score_bps=0.0,
         position_reduced=False,
         operator_override=operator_override,
     )
