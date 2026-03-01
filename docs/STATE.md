@@ -1190,6 +1190,17 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - **Unit tests:** `tests/unit/test_risk.py` (25 tests)
   - **Integration tests:** `tests/integration/test_kill_switch_integration.py` (9 tests)
   - See ADR-013 for design decisions
+- **KillSwitch + EmergencyExit integrated semantics** (PR-B, main @ 9a98648):
+  - **Trigger gate**: EmergencyExit fires ONLY when FSM state == EMERGENCY (engine.py:436-443). Outside EMERGENCY = no-op.
+  - **Latch**: `_emergency_exit_executed` flag (engine.py:440,558). Second trigger = no-op. One execution per engine lifetime.
+  - **State transition**: EMERGENCY -> executor fires -> AccountSyncer measures position_notional_usd (confirmed, not override) -> if notional < $10 threshold AND not kill_switch AND not dd_breached -> PAUSED (fsm_orchestrator.py:367-381).
+  - **Recovery conditions** (all must be true): `position_notional_usd is not None`, `position_notional_usd < position_notional_threshold_usd (10.0)`, `kill_switch_active == False`, `drawdown_pct < drawdown_threshold_pct (0.20)`.
+  - **INIT protection**: _check_emergency skipped when state == INIT (fsm_orchestrator.py:231). INIT + kill_switch -> stays INIT.
+  - **KillSwitch SSOT**: `LiveEngineConfig.kill_switch_active` (config.py:33). No separate env var — config is the single source.
+  - **KillSwitch priority in FSM**: Priority 1 in _check_emergency (fsm_orchestrator.py:250). kill_switch_active -> EMERGENCY from any non-INIT state.
+  - **KillSwitch effect on trading ops**: Gate 3 (engine.py:652-664). PLACE/REPLACE blocked (`BlockReason.KILL_SWITCH_ACTIVE`), CANCEL allowed.
+  - **Metrics**: `grinder_emergency_exit_enabled` (gauge), `grinder_emergency_exit_total{result}` (counter), `grinder_emergency_exit_orders_cancelled_total` (counter), `grinder_emergency_exit_positions_closed_total` (counter). See emergency_exit_metrics.py.
+  - **Contract tests**: `tests/unit/test_killswitch_emergency_semantics.py` (8 tests covering trigger gate, latch, state transition, metrics, kill switch priority/effect, INIT edge case, recovery-blocked-by-killswitch).
 - **Soak Gate v0** (`scripts/run_soak_fixtures.py`, `.github/workflows/soak_gate.yml`):
   - Fixture-based soak runner for CI release gate
   - **Metrics collected:**
