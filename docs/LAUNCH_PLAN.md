@@ -246,6 +246,7 @@ This makes 24h observation invalid as a stability validator.
 | `docs/runbooks/06_ALERT_RESPONSE.md` | First-60s alert response |
 | `docs/runbooks/ALERT_INDEX.md` | Alert → runbook routing |
 | `docs/runbooks/32_MAINNET_ROLLOUT_FILL_PROB.md` | Mainnet rollout ceremony |
+| `docs/runbooks/33_FSM_ACTIVATION_AND_ROLLBACK.md` | Trading loop activation, monitoring, rollback |
 | `docs/20_SAFETY_ENVELOPE.md` | TRD-1: gate ordering contract |
 | `docs/22_POLICY_CONTRACT.md` | TRD-2: GridPolicy/GridPlan lockdown |
 | `docs/23_NATR_CONTRACT.md` | TRD-3a: natr_bps encoding SSOT |
