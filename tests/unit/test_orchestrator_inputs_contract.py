@@ -88,11 +88,24 @@ class TestBuildInputsValidation:
     """build_inputs() rejects negative numeric fields."""
 
     def test_negative_drawdown_pct_raises(self) -> None:
-        with pytest.raises(ValueError, match="drawdown_pct must be >= 0"):
+        with pytest.raises(ValueError, match=r"drawdown_pct must be in \[0\.0, 1\.0\]"):
             build_inputs(
                 ts_ms=1000,
                 kill_switch_active=False,
                 drawdown_pct=-0.01,
+                feed_gap_ms=0,
+                spread_bps=0.0,
+                toxicity_score_bps=0.0,
+                position_reduced=False,
+                operator_override=None,
+            )
+
+    def test_drawdown_pct_above_one_raises(self) -> None:
+        with pytest.raises(ValueError, match=r"drawdown_pct must be in \[0\.0, 1\.0\]"):
+            build_inputs(
+                ts_ms=1000,
+                kill_switch_active=False,
+                drawdown_pct=1.01,
                 feed_gap_ms=0,
                 spread_bps=0.0,
                 toxicity_score_bps=0.0,

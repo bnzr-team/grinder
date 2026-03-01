@@ -50,8 +50,8 @@ def build_inputs(
     Raises:
         ValueError: If numeric fields are negative or operator_override is invalid.
     """
-    if drawdown_pct < 0.0:
-        raise ValueError(f"drawdown_pct must be >= 0, got {drawdown_pct}")
+    if drawdown_pct < 0.0 or drawdown_pct > 1.0:
+        raise ValueError(f"drawdown_pct must be in [0.0, 1.0], got {drawdown_pct}")
     if feed_gap_ms < 0:
         raise ValueError(f"feed_gap_ms must be >= 0, got {feed_gap_ms}")
     if spread_bps < 0.0:
