@@ -509,8 +509,10 @@ class LiveEngineV0:
         self._fsm_driver.step(
             ts_ms=ts_ms,
             kill_switch_active=self._config.kill_switch_active,
-            drawdown_breached=(
-                self._drawdown_guard.is_drawdown if self._drawdown_guard is not None else False
+            drawdown_pct=(
+                self._drawdown_guard.current_drawdown_pct
+                if self._drawdown_guard is not None
+                else 0.0
             ),
             feed_gap_ms=feed_gap_ms,
             spread_bps=spread_bps,

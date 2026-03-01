@@ -38,7 +38,7 @@ def build_inputs(
     *,
     ts_ms: int,
     kill_switch_active: bool,
-    drawdown_breached: bool,
+    drawdown_pct: float,
     feed_gap_ms: int,
     spread_bps: float,
     toxicity_score_bps: float,
@@ -50,6 +50,8 @@ def build_inputs(
     Raises:
         ValueError: If numeric fields are negative or operator_override is invalid.
     """
+    if drawdown_pct < 0.0:
+        raise ValueError(f"drawdown_pct must be >= 0, got {drawdown_pct}")
     if feed_gap_ms < 0:
         raise ValueError(f"feed_gap_ms must be >= 0, got {feed_gap_ms}")
     if spread_bps < 0.0:
@@ -64,7 +66,7 @@ def build_inputs(
     return OrchestratorInputs(
         ts_ms=ts_ms,
         kill_switch_active=kill_switch_active,
-        drawdown_breached=drawdown_breached,
+        drawdown_pct=drawdown_pct,
         feed_gap_ms=feed_gap_ms,
         spread_bps=spread_bps,
         toxicity_score_bps=toxicity_score_bps,
@@ -98,7 +100,7 @@ class FsmDriver:
         *,
         ts_ms: int,
         kill_switch_active: bool,
-        drawdown_breached: bool,
+        drawdown_pct: float,
         feed_gap_ms: int,
         spread_bps: float,
         toxicity_score_bps: float,
@@ -113,7 +115,7 @@ class FsmDriver:
         inputs = build_inputs(
             ts_ms=ts_ms,
             kill_switch_active=kill_switch_active,
-            drawdown_breached=drawdown_breached,
+            drawdown_pct=drawdown_pct,
             feed_gap_ms=feed_gap_ms,
             spread_bps=spread_bps,
             toxicity_score_bps=toxicity_score_bps,

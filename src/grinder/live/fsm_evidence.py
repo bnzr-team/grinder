@@ -61,15 +61,15 @@ def render_evidence_text(
     trailing newline. Same event+inputs always produces identical output.
 
     v2 (PR-A2b): native numeric fields replace v1 bool/str surrogates.
-    Breaking change: feed_stale/toxicity_level removed, replaced by
-    feed_gap_ms/spread_bps/toxicity_score_bps.
+    Breaking changes: feed_stale/toxicity_level removed (PR-A2b),
+    drawdown_breached replaced by drawdown_pct (PR-A3).
 
     The config parameter is accepted for caller API compat but unused in v2
     (signals are emitted as-is, no threshold interpretation needed).
     """
     signals: dict[str, object] = {
         "kill_switch_active": inputs.kill_switch_active,
-        "drawdown_breached": inputs.drawdown_breached,
+        "drawdown_pct": inputs.drawdown_pct,
         "feed_gap_ms": inputs.feed_gap_ms,
         "spread_bps": inputs.spread_bps,
         "toxicity_score_bps": inputs.toxicity_score_bps,
