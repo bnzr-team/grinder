@@ -17,6 +17,13 @@ For kill-switch details, see [Runbook 04](04_KILL_SWITCH.md).
 Every variable below is consumed in code. `Source:` comments point to the exact file.
 
 ```bash
+# --- FSM (must be set BEFORE trading mode) ---
+export GRINDER_FSM_ENABLED=1
+# Source: scripts/run_trading.py:511 ("FSM + guards" block, default=false)
+# Enables FSM + DrawdownGuard + ToxicityGate wiring in the entrypoint.
+# Without this, the engine runs with NO state machine — no EMERGENCY transitions,
+# no drawdown gating, no toxicity gating. Required for C4.
+
 # --- Trading mode ---
 export GRINDER_TRADING_MODE=live_trade
 # Source: scripts/run_trading.py:203 (SafeMode enum)
@@ -228,8 +235,9 @@ docker compose stop grinder
 ### 5.2 Controlled rollback (env flip + restart)
 
 ```bash
-# 1. Disable live trading
+# 1. Disable live trading + FSM
 export GRINDER_TRADING_MODE=read_only
+export GRINDER_FSM_ENABLED=0
 unset GRINDER_TRADING_LOOP_ACK
 unset ALLOW_MAINNET_TRADE
 
