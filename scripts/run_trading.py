@@ -504,11 +504,35 @@ def build_engine(
         else:
             print("  Fill model load FAILED (fail-open, gate skipped)")
 
+    # FSM + guards (opt-in via GRINDER_FSM_ENABLED, default=false → zero behavior change, PR-A1)
+    fsm_driver = None
+    drawdown_guard = None
+    toxicity_gate = None
+    fsm_enabled = os.environ.get("GRINDER_FSM_ENABLED", "").lower() in ("true", "1", "yes")
+    if fsm_enabled:
+        from grinder.gating.toxicity_gate import ToxicityGate  # noqa: PLC0415
+        from grinder.live.fsm_driver import FsmDriver  # noqa: PLC0415
+        from grinder.live.fsm_orchestrator import FsmConfig, OrchestratorFSM  # noqa: PLC0415
+        from grinder.risk.drawdown_guard_v1 import (  # noqa: PLC0415
+            DrawdownGuardV1,
+            DrawdownGuardV1Config,
+        )
+
+        fsm = OrchestratorFSM(config=FsmConfig())
+        fsm_driver = FsmDriver(fsm)
+        dd_config = DrawdownGuardV1Config(portfolio_dd_limit=Decimal("0.20"))
+        drawdown_guard = DrawdownGuardV1(dd_config)
+        toxicity_gate = ToxicityGate()
+        print("  FSM enabled (feed_stale + toxicity wired)")
+
     return LiveEngineV0(
         paper_engine=paper_engine,
         exchange_port=port,
         config=config,
         fill_model=fill_model,
+        fsm_driver=fsm_driver,
+        drawdown_guard=drawdown_guard,
+        toxicity_gate=toxicity_gate,
     )
 
 

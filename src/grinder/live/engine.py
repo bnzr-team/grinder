@@ -65,6 +65,7 @@ from grinder.execution.smart_order_router import (
 )
 from grinder.execution.sor_metrics import get_sor_metrics
 from grinder.execution.types import ActionType, ExecutionAction
+from grinder.gating.types import GateReason
 from grinder.ml.fill_model_loader import extract_online_features
 from grinder.ml.threshold_resolver import (
     resolve_threshold_result,
@@ -79,6 +80,7 @@ if TYPE_CHECKING:
     from grinder.account.syncer import AccountSyncer
     from grinder.contracts import Snapshot
     from grinder.execution.port import ExchangePort
+    from grinder.gating.toxicity_gate import ToxicityGate
     from grinder.live.config import LiveEngineConfig
     from grinder.live.fsm_driver import FsmDriver
     from grinder.ml.fill_model_v0 import FillModelV0
@@ -234,6 +236,7 @@ class LiveEngineV0:
         exchange_filters: ExchangeFilters | None = None,
         account_syncer: AccountSyncer | None = None,
         fill_model: FillModelV0 | None = None,
+        toxicity_gate: ToxicityGate | None = None,
     ) -> None:
         """Initialize LiveEngineV0.
 
@@ -247,6 +250,7 @@ class LiveEngineV0:
             exchange_filters: Optional exchange filters for SOR (Launch-14)
             account_syncer: Optional account syncer for position/order sync (Launch-15)
             fill_model: Optional FillModelV0 for fill probability gating (PR-C5)
+            toxicity_gate: Optional ToxicityGate for toxicity signal (PR-A1)
         """
         self._paper_engine = paper_engine
         self._exchange_port = exchange_port
@@ -257,7 +261,20 @@ class LiveEngineV0:
         self._exchange_filters = exchange_filters
         self._account_syncer = account_syncer
         self._fill_model = fill_model
+        self._toxicity_gate = toxicity_gate
         self._last_snapshot: Snapshot | None = None
+        # Per-symbol feed staleness tracking (ms timestamps, PR-A1)
+        self._prev_snapshot_ts: dict[str, int] = {}
+        self._feed_stale_threshold_ms: int = (
+            parse_int(
+                "GRINDER_FEED_STALE_MS",
+                default=5000,
+                min_value=1000,
+                max_value=60000,
+                strict=False,
+            )
+            or 5000
+        )
         # Read GRINDER_SOR_ENABLED once at init (via env_parse SSOT)
         self._sor_env_override = parse_bool("GRINDER_SOR_ENABLED", default=False, strict=False)
         # Read GRINDER_ACCOUNT_SYNC_ENABLED once at init (Launch-15)
@@ -416,12 +433,16 @@ class LiveEngineV0:
         # Store snapshot for SOR market data (Launch-14 PR2)
         self._last_snapshot = snapshot
 
+        # Record price for toxicity gate (needs history before check, PR-A1)
+        if self._toxicity_gate is not None:
+            self._toxicity_gate.record_price(snapshot.ts, snapshot.symbol, snapshot.mid_price)
+
         # Step 1: Get paper engine decisions
         paper_output = self._paper_engine.process_snapshot(snapshot)
 
         # FSM tick: update state before action processing (Launch-13 PR3)
         if self._fsm_driver is not None:
-            self._tick_fsm(snapshot.ts)
+            self._tick_fsm(snapshot.ts, snapshot.symbol)
 
         # RISK-EE-1: Emergency exit trigger (after FSM tick, before action processing)
         if (
@@ -459,14 +480,16 @@ class LiveEngineV0:
             kill_switch_active=self._config.kill_switch_active,
         )
 
-    def _tick_fsm(self, ts_ms: int) -> None:
+    def _tick_fsm(self, ts_ms: int, symbol: str) -> None:
         """Tick FSM driver with current runtime signals.
 
         Reads kill_switch, drawdown from existing guards.
         operator_override from GRINDER_OPERATOR_OVERRIDE env var.
-        feed_stale and toxicity_level pinned to safe defaults.
+        feed_stale from per-symbol snapshot gap detection (PR-A1).
+        toxicity_level from ToxicityGate check (PR-A1).
 
         Uses snapshot clock (ts_ms) for deterministic duration tracking.
+        All timestamps in milliseconds (Snapshot.ts contract).
         """
         assert self._fsm_driver is not None  # caller guards
 
@@ -478,14 +501,40 @@ class LiveEngineV0:
             strict=False,
         )
 
+        # Compute feed_stale from per-symbol snapshot gap (PR-A1)
+        prev_ts = self._prev_snapshot_ts.get(symbol, 0)
+        feed_stale = prev_ts > 0 and (ts_ms - prev_ts) > self._feed_stale_threshold_ms
+        self._prev_snapshot_ts[symbol] = ts_ms
+
+        # Compute toxicity_level from ToxicityGate (PR-A1)
+        toxicity_level = "LOW"
+        if self._toxicity_gate is not None and self._last_snapshot is not None:
+            snap = self._last_snapshot
+            tox_result = self._toxicity_gate.check(
+                ts_ms,
+                snap.symbol,
+                snap.spread_bps,
+                snap.mid_price,
+            )
+            if not tox_result.allowed:
+                if tox_result.reason == GateReason.SPREAD_SPIKE:
+                    toxicity_level = "MID"
+                elif tox_result.reason == GateReason.PRICE_IMPACT_HIGH:
+                    toxicity_level = "HIGH"
+                else:
+                    toxicity_level = "MID"
+                    logger.warning(
+                        "Unknown toxicity reason %s, defaulting to MID", tox_result.reason
+                    )
+
         self._fsm_driver.step(
             ts_ms=ts_ms,
             kill_switch_active=self._config.kill_switch_active,
             drawdown_breached=(
                 self._drawdown_guard.is_drawdown if self._drawdown_guard is not None else False
             ),
-            feed_stale=False,  # TODO: wire from DataConnector staleness
-            toxicity_level="LOW",  # TODO: wire from ToxicityGate
+            feed_stale=feed_stale,
+            toxicity_level=toxicity_level,
             position_reduced=self._position_reduced,  # RISK-EE-1
             operator_override=override,
         )
