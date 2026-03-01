@@ -63,7 +63,7 @@ echo "==> Current body: $(wc -c < "${BODY_FILE}") bytes."
 # --- Step 3: Build updated body (Python handles escaping + JSON) ---
 echo "==> Building updated body..."
 python3 << 'PYEOF'
-import json, os, re, sys
+import json, os, sys
 
 body_file = os.environ["BODY_FILE"]
 packet_file = os.environ["PACKET_FILE"]
@@ -91,11 +91,15 @@ END_MARKER = "<!-- ACCEPTANCE_PACKET_END -->"
 
 if START_MARKER in current_body:
     # Replace existing block (idempotent)
-    # Greedy match: captures from first START to LAST END.
-    # Needed because the packet's PR diff may contain these markers
+    # String slicing: first START to last END.
+    # Last END needed because the packet's PR diff may contain these markers
     # as literal strings in source code (e.g. acceptance_packet_paste.sh).
-    pattern = re.escape(START_MARKER) + r".*" + re.escape(END_MARKER)
-    new_body = re.sub(pattern, new_block, current_body, count=1, flags=re.DOTALL)
+    # NOTE: re.sub was used before but it interprets backslash sequences
+    # in the replacement string (\u, \n, etc.) causing re.error when the
+    # packet contains Unicode escapes. String slicing avoids this entirely.
+    start_idx = current_body.index(START_MARKER)
+    end_idx = current_body.rindex(END_MARKER) + len(END_MARKER)
+    new_body = current_body[:start_idx] + new_block + current_body[end_idx:]
     print("Mode: REPLACE (existing block found)")
 else:
     # Append
