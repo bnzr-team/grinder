@@ -172,9 +172,13 @@ jobs:
           start_marker = '<!-- ACCEPTANCE_PACKET_START -->'
 
           if start_marker in current_body:
-              # Greedy: first START to LAST END (handles markers inside diff content)
-              replace_pattern = re.escape(start_marker) + r'.*' + re.escape('<!-- ACCEPTANCE_PACKET_END -->')
-              new_body = re.sub(replace_pattern, new_block, current_body, count=1, flags=re.DOTALL)
+              # String slicing: first START to last END (handles markers inside diff content)
+              # NOTE: re.sub was used before but it interprets backslash sequences (\u, \n, etc.)
+              # in the replacement string, causing re.error when the packet contains Unicode escapes.
+              end_marker = '<!-- ACCEPTANCE_PACKET_END -->'
+              start_idx = current_body.index(start_marker)
+              end_idx = current_body.rindex(end_marker) + len(end_marker)
+              new_body = current_body[:start_idx] + new_block + current_body[end_idx:]
           else:
               new_body = current_body.rstrip() + '\n\n' + new_block
 
