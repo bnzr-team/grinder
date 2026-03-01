@@ -65,12 +65,14 @@ def _mk_inputs(
     kill_switch_active: bool = True,
     operator_override: str | None = None,
 ) -> OrchestratorInputs:
+    # Numeric defaults map to v1 evidence: feed_stale=False, toxicity_level=LOW
     return OrchestratorInputs(
         ts_ms=ts_ms,
         kill_switch_active=kill_switch_active,
         drawdown_breached=False,
-        feed_stale=False,
-        toxicity_level="LOW",
+        feed_gap_ms=0,  # 0 = first tick → feed_stale=False in v1 compat
+        spread_bps=0.0,  # 0.0 < 50.0 threshold → toxicity_level=LOW in v1 compat
+        toxicity_score_bps=0.0,  # 0.0 < 500.0 threshold → toxicity_level=LOW in v1 compat
         position_reduced=False,
         operator_override=operator_override,
     )

@@ -1322,6 +1322,13 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - toxicity_level: ToxicityGate mapping (SPREAD_SPIKE→MID, PRICE_IMPACT_HIGH→HIGH)
     - run_trading.py: FSM+DrawdownGuard+ToxicityGate (GRINDER_FSM_ENABLED, default false)
     - Deferred: OrchestratorInputs type alignment (bool/enum → float/int) → PR-A2
+  - PR-A2a: OrchestratorInputs numeric type alignment:
+    - feed_stale: bool → feed_gap_ms: int (FSM owns threshold via FsmConfig)
+    - toxicity_level: str → spread_bps: float + toxicity_score_bps: float
+    - Thresholds moved from engine to FsmConfig (feed_stale_threshold_ms, spread_spike_threshold_bps, toxicity_high_threshold_bps)
+    - ToxicityGate.price_impact_bps() typed method (no dict-fishing)
+    - Evidence v1 backward compat: render_evidence_text() maps numerics to v1 names via FsmConfig
+    - Deferred: fsm_evidence_v2 (PR-A2b), drawdown_pct (PR-A3), position_notional (PR-A4), regime (PR-A5)
 - [DONE] Launch-14 (P1): SmartOrderRouter (existing=None scope) — COMPLETE (main @ `e5b177c`).
   - PR0 (#219) — Spec/decision matrix + invariants (merged @ `8ff7339`)
   - PR1 (#220) — Router core + table-driven tests (merged @ `d98008d`)

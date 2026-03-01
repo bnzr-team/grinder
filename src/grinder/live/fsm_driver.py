@@ -31,7 +31,6 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-VALID_TOX_LEVELS = frozenset({"LOW", "MID", "HIGH"})
 VALID_OVERRIDES = frozenset({"PAUSE", "EMERGENCY"})
 
 
@@ -40,20 +39,23 @@ def build_inputs(
     ts_ms: int,
     kill_switch_active: bool,
     drawdown_breached: bool,
-    feed_stale: bool,
-    toxicity_level: str,
+    feed_gap_ms: int,
+    spread_bps: float,
+    toxicity_score_bps: float,
     position_reduced: bool,
     operator_override: str | None,
 ) -> OrchestratorInputs:
     """Build frozen OrchestratorInputs snapshot with validation.
 
     Raises:
-        ValueError: If toxicity_level or operator_override has an invalid value.
+        ValueError: If numeric fields are negative or operator_override is invalid.
     """
-    if toxicity_level not in VALID_TOX_LEVELS:
-        raise ValueError(
-            f"Invalid toxicity_level={toxicity_level!r}, expected one of {sorted(VALID_TOX_LEVELS)}"
-        )
+    if feed_gap_ms < 0:
+        raise ValueError(f"feed_gap_ms must be >= 0, got {feed_gap_ms}")
+    if spread_bps < 0.0:
+        raise ValueError(f"spread_bps must be >= 0, got {spread_bps}")
+    if toxicity_score_bps < 0.0:
+        raise ValueError(f"toxicity_score_bps must be >= 0, got {toxicity_score_bps}")
     if operator_override is not None and operator_override not in VALID_OVERRIDES:
         raise ValueError(
             f"Invalid operator_override={operator_override!r}, "
@@ -63,8 +65,9 @@ def build_inputs(
         ts_ms=ts_ms,
         kill_switch_active=kill_switch_active,
         drawdown_breached=drawdown_breached,
-        feed_stale=feed_stale,
-        toxicity_level=toxicity_level,
+        feed_gap_ms=feed_gap_ms,
+        spread_bps=spread_bps,
+        toxicity_score_bps=toxicity_score_bps,
         position_reduced=position_reduced,
         operator_override=operator_override,
     )
@@ -96,8 +99,9 @@ class FsmDriver:
         ts_ms: int,
         kill_switch_active: bool,
         drawdown_breached: bool,
-        feed_stale: bool,
-        toxicity_level: str,
+        feed_gap_ms: int,
+        spread_bps: float,
+        toxicity_score_bps: float,
         position_reduced: bool,
         operator_override: str | None,
     ) -> TransitionEvent | None:
@@ -110,8 +114,9 @@ class FsmDriver:
             ts_ms=ts_ms,
             kill_switch_active=kill_switch_active,
             drawdown_breached=drawdown_breached,
-            feed_stale=feed_stale,
-            toxicity_level=toxicity_level,
+            feed_gap_ms=feed_gap_ms,
+            spread_bps=spread_bps,
+            toxicity_score_bps=toxicity_score_bps,
             position_reduced=position_reduced,
             operator_override=operator_override,
         )
@@ -138,7 +143,7 @@ class FsmDriver:
             # Emit transition metric
             get_fsm_metrics().record_transition(event)
             # Emit evidence artifact (safe: no-op if env disabled, warns on IO error)
-            maybe_emit_transition_evidence(event, inputs)
+            maybe_emit_transition_evidence(event, inputs, config=self._fsm._config)
             # Update clock
             self._last_state_change_ms = ts_ms
 

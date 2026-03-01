@@ -108,6 +108,30 @@ class ToxicityGate:
             }
         )
 
+    def price_impact_bps(self, ts: int, symbol: str, mid_price: Decimal) -> float:
+        """Price impact in bps: current vs oldest in-window price.
+
+        Semantics: "oldest in-window" = entry with smallest ts >= (ts - lookback_window_ms).
+        This is deterministic because history is insertion-ordered (deque with append).
+        Read-only: does not mutate history (unlike check() which prunes via popleft).
+
+        Returns 0.0 if no in-window history or oldest price is zero.
+        """
+        history = self._get_history(symbol)
+        if not history:
+            return 0.0
+        window_start = ts - self.lookback_window_ms
+        # Scan for oldest in-window entry (smallest ts >= window_start)
+        # History is insertion-ordered, so first match is oldest.
+        oldest_price: Decimal | None = None
+        for entry_ts, entry_price in history:
+            if entry_ts >= window_start:
+                oldest_price = entry_price
+                break  # first in-window = oldest (insertion order)
+        if oldest_price is None or oldest_price <= 0:
+            return 0.0
+        return abs(float((mid_price - oldest_price) / oldest_price) * 10000)
+
     def record_price(self, ts: int, symbol: str, mid_price: Decimal) -> None:
         """Record a price observation for price impact calculation.
 
