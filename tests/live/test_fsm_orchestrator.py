@@ -38,12 +38,18 @@ def _inputs(
     position_reduced: bool = False,
     operator: str | None = None,
 ) -> OrchestratorInputs:
+    # Map surrogate bool/str to numeric fields (PR-A2a).
+    # Values chosen to be clearly above/below default FsmConfig thresholds.
+    feed_gap_ms = 10_000 if feed_stale else 0  # 10000 > 5000 threshold
+    spread_bps = 80.0 if tox == "MID" else 0.0  # 80 > 50 threshold
+    tox_score_bps = 600.0 if tox == "HIGH" else 0.0  # 600 > 500 threshold
     return OrchestratorInputs(
         ts_ms=ts_ms,
         kill_switch_active=kill_switch,
         drawdown_breached=drawdown,
-        feed_stale=feed_stale,
-        toxicity_level=tox,
+        feed_gap_ms=feed_gap_ms,
+        spread_bps=spread_bps,
+        toxicity_score_bps=tox_score_bps,
         position_reduced=position_reduced,
         operator_override=operator,
     )
@@ -579,10 +585,11 @@ class TestSsotContract:
         """Exhaustively try all input combos; the disallowed edge must never appear."""
         tox_levels = ["LOW", "MID", "HIGH"]
         overrides: list[str | None] = [None, "PAUSE", "EMERGENCY"]
+        feed_stale_vals = [False, True]
         for tox in tox_levels:
             for ks in (False, True):
                 for dd in (False, True):
-                    for fs in (False, True):
+                    for fs in feed_stale_vals:
                         for pr in (False, True):
                             for op in overrides:
                                 fsm = _fsm(state=from_state, enter_ts=0, cooldown_ms=0)

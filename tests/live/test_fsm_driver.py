@@ -1,7 +1,7 @@
-"""Tests for FsmDriver (Launch-13 PR2).
+"""Tests for FsmDriver (Launch-13 PR2, updated PR-A2a).
 
 Validates:
-- build_inputs() validation (valid + invalid toxicity/operator values)
+- build_inputs() validation (valid + invalid numeric/operator values)
 - FsmDriver.step() ticks FSM and emits metrics on transition
 - FsmDriver.step() updates state gauge + duration gauge every tick
 - Monotonic time guard (backward ts_ms clamps duration to 0)
@@ -19,7 +19,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 from grinder.core import SystemState
-from grinder.live.fsm_driver import VALID_OVERRIDES, VALID_TOX_LEVELS, FsmDriver, build_inputs
+from grinder.live.fsm_driver import VALID_OVERRIDES, FsmDriver, build_inputs
 from grinder.live.fsm_evidence import ENV_ARTIFACT_DIR, ENV_ENABLE
 from grinder.live.fsm_metrics import get_fsm_metrics, reset_fsm_metrics
 from grinder.live.fsm_orchestrator import FsmConfig, OrchestratorFSM, TransitionReason
@@ -55,27 +55,32 @@ class TestBuildInputsValid:
             ts_ms=_BASE_TS,
             kill_switch_active=False,
             drawdown_breached=False,
-            feed_stale=False,
-            toxicity_level="LOW",
+            feed_gap_ms=0,
+            spread_bps=0.0,
+            toxicity_score_bps=0.0,
             position_reduced=False,
             operator_override=None,
         )
         assert inp.ts_ms == _BASE_TS
-        assert inp.toxicity_level == "LOW"
+        assert inp.feed_gap_ms == 0
+        assert inp.spread_bps == 0.0
+        assert inp.toxicity_score_bps == 0.0
         assert inp.operator_override is None
 
-    def test_all_tox_levels_accepted(self) -> None:
-        for level in VALID_TOX_LEVELS:
-            inp = build_inputs(
-                ts_ms=_BASE_TS,
-                kill_switch_active=False,
-                drawdown_breached=False,
-                feed_stale=False,
-                toxicity_level=level,
-                position_reduced=False,
-                operator_override=None,
-            )
-            assert inp.toxicity_level == level
+    def test_numeric_fields_accept_positive_values(self) -> None:
+        inp = build_inputs(
+            ts_ms=_BASE_TS,
+            kill_switch_active=False,
+            drawdown_breached=False,
+            feed_gap_ms=5000,
+            spread_bps=80.0,
+            toxicity_score_bps=200.0,
+            position_reduced=False,
+            operator_override=None,
+        )
+        assert inp.feed_gap_ms == 5000
+        assert inp.spread_bps == 80.0
+        assert inp.toxicity_score_bps == 200.0
 
     def test_all_overrides_accepted(self) -> None:
         for override in [None, *VALID_OVERRIDES]:
@@ -83,8 +88,9 @@ class TestBuildInputsValid:
                 ts_ms=_BASE_TS,
                 kill_switch_active=False,
                 drawdown_breached=False,
-                feed_stale=False,
-                toxicity_level="LOW",
+                feed_gap_ms=0,
+                spread_bps=0.0,
+                toxicity_score_bps=0.0,
                 position_reduced=False,
                 operator_override=override,
             )
@@ -94,14 +100,41 @@ class TestBuildInputsValid:
 class TestBuildInputsInvalid:
     """build_inputs() raises ValueError on invalid values."""
 
-    def test_invalid_toxicity_level(self) -> None:
-        with pytest.raises(ValueError, match="Invalid toxicity_level"):
+    def test_negative_feed_gap_ms(self) -> None:
+        with pytest.raises(ValueError, match="feed_gap_ms must be >= 0"):
             build_inputs(
                 ts_ms=_BASE_TS,
                 kill_switch_active=False,
                 drawdown_breached=False,
-                feed_stale=False,
-                toxicity_level="EXTREME",
+                feed_gap_ms=-1,
+                spread_bps=0.0,
+                toxicity_score_bps=0.0,
+                position_reduced=False,
+                operator_override=None,
+            )
+
+    def test_negative_spread_bps(self) -> None:
+        with pytest.raises(ValueError, match="spread_bps must be >= 0"):
+            build_inputs(
+                ts_ms=_BASE_TS,
+                kill_switch_active=False,
+                drawdown_breached=False,
+                feed_gap_ms=0,
+                spread_bps=-1.0,
+                toxicity_score_bps=0.0,
+                position_reduced=False,
+                operator_override=None,
+            )
+
+    def test_negative_toxicity_score_bps(self) -> None:
+        with pytest.raises(ValueError, match="toxicity_score_bps must be >= 0"):
+            build_inputs(
+                ts_ms=_BASE_TS,
+                kill_switch_active=False,
+                drawdown_breached=False,
+                feed_gap_ms=0,
+                spread_bps=0.0,
+                toxicity_score_bps=-1.0,
                 position_reduced=False,
                 operator_override=None,
             )
@@ -112,8 +145,9 @@ class TestBuildInputsInvalid:
                 ts_ms=_BASE_TS,
                 kill_switch_active=False,
                 drawdown_breached=False,
-                feed_stale=False,
-                toxicity_level="LOW",
+                feed_gap_ms=0,
+                spread_bps=0.0,
+                toxicity_score_bps=0.0,
                 position_reduced=False,
                 operator_override="SHUTDOWN",
             )
@@ -136,8 +170,9 @@ class TestStepTransition:
             ts_ms=_BASE_TS,
             kill_switch_active=False,
             drawdown_breached=False,
-            feed_stale=False,
-            toxicity_level="LOW",
+            feed_gap_ms=0,
+            spread_bps=0.0,
+            toxicity_score_bps=0.0,
             position_reduced=False,
             operator_override=None,
         )
@@ -152,8 +187,9 @@ class TestStepTransition:
             ts_ms=_BASE_TS,
             kill_switch_active=False,
             drawdown_breached=False,
-            feed_stale=False,
-            toxicity_level="LOW",
+            feed_gap_ms=0,
+            spread_bps=0.0,
+            toxicity_score_bps=0.0,
             position_reduced=False,
             operator_override=None,
         )
@@ -166,8 +202,9 @@ class TestStepTransition:
             ts_ms=_BASE_TS,
             kill_switch_active=False,
             drawdown_breached=False,
-            feed_stale=False,
-            toxicity_level="LOW",
+            feed_gap_ms=0,
+            spread_bps=0.0,
+            toxicity_score_bps=0.0,
             position_reduced=False,
             operator_override=None,
         )
@@ -186,8 +223,9 @@ class TestStepStateGauge:
             ts_ms=_BASE_TS,
             kill_switch_active=False,
             drawdown_breached=False,
-            feed_stale=False,
-            toxicity_level="LOW",
+            feed_gap_ms=0,
+            spread_bps=0.0,
+            toxicity_score_bps=0.0,
             position_reduced=False,
             operator_override=None,
         )
@@ -200,8 +238,9 @@ class TestStepStateGauge:
             ts_ms=_BASE_TS,
             kill_switch_active=False,
             drawdown_breached=False,
-            feed_stale=False,
-            toxicity_level="LOW",
+            feed_gap_ms=0,
+            spread_bps=0.0,
+            toxicity_score_bps=0.0,
             position_reduced=False,
             operator_override=None,
         )
@@ -226,8 +265,9 @@ class TestDurationGauge:
             ts_ms=10_000,
             kill_switch_active=False,
             drawdown_breached=False,
-            feed_stale=False,
-            toxicity_level="LOW",
+            feed_gap_ms=0,
+            spread_bps=0.0,
+            toxicity_score_bps=0.0,
             position_reduced=False,
             operator_override=None,
         )
@@ -241,8 +281,9 @@ class TestDurationGauge:
             ts_ms=5_000,
             kill_switch_active=False,
             drawdown_breached=False,
-            feed_stale=False,
-            toxicity_level="LOW",
+            feed_gap_ms=0,
+            spread_bps=0.0,
+            toxicity_score_bps=0.0,
             position_reduced=False,
             operator_override=None,
         )
@@ -257,8 +298,9 @@ class TestDurationGauge:
             ts_ms=5_000,
             kill_switch_active=False,
             drawdown_breached=False,
-            feed_stale=False,
-            toxicity_level="LOW",
+            feed_gap_ms=0,
+            spread_bps=0.0,
+            toxicity_score_bps=0.0,
             position_reduced=False,
             operator_override=None,
         )
@@ -276,8 +318,9 @@ class TestDurationGauge:
             ts_ms=_BASE_TS,
             kill_switch_active=False,
             drawdown_breached=False,
-            feed_stale=False,
-            toxicity_level="LOW",
+            feed_gap_ms=0,
+            spread_bps=0.0,
+            toxicity_score_bps=0.0,
             position_reduced=False,
             operator_override=None,
         )
@@ -347,8 +390,9 @@ class TestDriverState:
             ts_ms=_BASE_TS,
             kill_switch_active=False,
             drawdown_breached=False,
-            feed_stale=False,
-            toxicity_level="LOW",
+            feed_gap_ms=0,
+            spread_bps=0.0,
+            toxicity_score_bps=0.0,
             position_reduced=False,
             operator_override=None,
         )
@@ -378,8 +422,9 @@ class TestDriverEvidence:
             ts_ms=_BASE_TS,
             kill_switch_active=True,
             drawdown_breached=False,
-            feed_stale=False,
-            toxicity_level="LOW",
+            feed_gap_ms=0,
+            spread_bps=0.0,
+            toxicity_score_bps=0.0,
             position_reduced=False,
             operator_override=None,
         )
@@ -403,8 +448,9 @@ class TestDriverEvidence:
             ts_ms=_BASE_TS,
             kill_switch_active=True,
             drawdown_breached=False,
-            feed_stale=False,
-            toxicity_level="LOW",
+            feed_gap_ms=0,
+            spread_bps=0.0,
+            toxicity_score_bps=0.0,
             position_reduced=False,
             operator_override=None,
         )
@@ -424,8 +470,9 @@ class TestDriverEvidence:
             ts_ms=_BASE_TS,
             kill_switch_active=False,
             drawdown_breached=False,
-            feed_stale=False,
-            toxicity_level="LOW",
+            feed_gap_ms=0,
+            spread_bps=0.0,
+            toxicity_score_bps=0.0,
             position_reduced=False,
             operator_override=None,
         )

@@ -69,22 +69,33 @@ class OrchestratorInputs:
     """Snapshot of inputs the FSM evaluates on each tick.
 
     All fields are value-level snapshots; no mutable references.
+    Numeric fields carry units in names (*_ms, *_bps) — FSM owns thresholds.
     """
 
     ts_ms: int
     kill_switch_active: bool
     drawdown_breached: bool
-    feed_stale: bool
-    toxicity_level: str  # "LOW" | "MID" | "HIGH"
+    feed_gap_ms: int  # ms since last snapshot for this symbol (0 = first tick)
+    spread_bps: float  # current bid-ask spread in basis points
+    toxicity_score_bps: float  # price impact in bps (0.0 = no impact)
     position_reduced: bool  # position below emergency exit threshold
     operator_override: str | None  # "PAUSE" | "EMERGENCY" | None
 
 
 @dataclass(frozen=True)
 class FsmConfig:
-    """Configuration for FSM behavior."""
+    """Configuration for FSM behavior.
+
+    Threshold defaults match prior hardcoded values (meta-test proves this):
+    - feed_stale_threshold_ms: was engine GRINDER_FEED_STALE_MS default (5000)
+    - spread_spike_threshold_bps: was ToxicityGate.max_spread_bps (50.0)
+    - toxicity_high_threshold_bps: was ToxicityGate.max_price_impact_bps (500.0)
+    """
 
     cooldown_ms: int = 30_000  # min time in state before recovery transition
+    feed_stale_threshold_ms: int = 5_000  # feed gap above this → stale
+    spread_spike_threshold_bps: float = 50.0  # spread above this → MID toxicity
+    toxicity_high_threshold_bps: float = 500.0  # price impact above this → HIGH toxicity
 
 
 # ---------------------------------------------------------------------------
@@ -238,37 +249,58 @@ class OrchestratorFSM:
             return (SystemState.EMERGENCY, TransitionReason.DD_BREACH)
         return None
 
+    # ------------------------------------------------------------------
+    # Threshold helpers (numeric inputs → bool decisions)
+    # ------------------------------------------------------------------
+
+    def _is_feed_stale(self, inp: OrchestratorInputs) -> bool:
+        """Feed is stale if gap > 0 (not first tick) and exceeds threshold."""
+        return inp.feed_gap_ms > 0 and inp.feed_gap_ms > self._config.feed_stale_threshold_ms
+
+    def _is_toxic_high(self, inp: OrchestratorInputs) -> bool:
+        return inp.toxicity_score_bps > self._config.toxicity_high_threshold_bps
+
+    def _is_toxic_mid(self, inp: OrchestratorInputs) -> bool:
+        return inp.spread_bps > self._config.spread_spike_threshold_bps
+
+    def _is_toxic_low(self, inp: OrchestratorInputs) -> bool:
+        return not self._is_toxic_mid(inp) and not self._is_toxic_high(inp)
+
+    # ------------------------------------------------------------------
+    # State-specific evaluation (priority-ordered)
+    # ------------------------------------------------------------------
+
     def _eval_init(self, inp: OrchestratorInputs) -> tuple[SystemState, TransitionReason] | None:
         """INIT -> READY when health checks pass (no emergency triggers in INIT)."""
-        if not inp.kill_switch_active and not inp.feed_stale:
+        if not inp.kill_switch_active and not self._is_feed_stale(inp):
             return (SystemState.READY, TransitionReason.HEALTH_OK)
         return None
 
     def _eval_ready(self, inp: OrchestratorInputs) -> tuple[SystemState, TransitionReason] | None:
         """READY -> ACTIVE when feeds ready, or -> DEGRADED on feed stale."""
         # Priority 3: feed stale -> DEGRADED
-        if inp.feed_stale:
+        if self._is_feed_stale(inp):
             return (SystemState.DEGRADED, TransitionReason.FEED_STALE)
         # Recovery: ready -> active when feeds are ok and no operator override
         if inp.operator_override == "PAUSE":
             return (SystemState.PAUSED, TransitionReason.OPERATOR_PAUSE)
-        if inp.toxicity_level not in ("MID", "HIGH"):
+        if self._is_toxic_low(inp):
             return (SystemState.ACTIVE, TransitionReason.FEEDS_READY)
         return None
 
     def _eval_active(self, inp: OrchestratorInputs) -> tuple[SystemState, TransitionReason] | None:
         """ACTIVE -> DEGRADED/PAUSED/THROTTLED based on priority."""
         # Priority 3: feed stale -> DEGRADED
-        if inp.feed_stale:
+        if self._is_feed_stale(inp):
             return (SystemState.DEGRADED, TransitionReason.FEED_STALE)
         # Priority 4: operator pause
         if inp.operator_override == "PAUSE":
             return (SystemState.PAUSED, TransitionReason.OPERATOR_PAUSE)
         # Priority 5: tox high -> PAUSED
-        if inp.toxicity_level == "HIGH":
+        if self._is_toxic_high(inp):
             return (SystemState.PAUSED, TransitionReason.TOX_HIGH)
         # Priority 6: tox mid -> THROTTLED
-        if inp.toxicity_level == "MID":
+        if self._is_toxic_mid(inp):
             return (SystemState.THROTTLED, TransitionReason.TOX_MID)
         return None
 
@@ -276,29 +308,29 @@ class OrchestratorFSM:
         self, inp: OrchestratorInputs
     ) -> tuple[SystemState, TransitionReason] | None:
         """THROTTLED -> DEGRADED/PAUSED (escalation) or -> ACTIVE (recovery with cooldown)."""
-        if inp.feed_stale:
+        if self._is_feed_stale(inp):
             return (SystemState.DEGRADED, TransitionReason.FEED_STALE)
         if inp.operator_override == "PAUSE":
             return (SystemState.PAUSED, TransitionReason.OPERATOR_PAUSE)
-        if inp.toxicity_level == "HIGH":
+        if self._is_toxic_high(inp):
             return (SystemState.PAUSED, TransitionReason.TOX_HIGH)
         # Recovery: only with cooldown and tox LOW
-        if inp.toxicity_level == "LOW" and self._cooldown_elapsed(inp.ts_ms):
+        if self._is_toxic_low(inp) and self._cooldown_elapsed(inp.ts_ms):
             return (SystemState.ACTIVE, TransitionReason.TOX_LOW_COOLDOWN)
         return None
 
     def _eval_paused(self, inp: OrchestratorInputs) -> tuple[SystemState, TransitionReason] | None:
         """PAUSED -> DEGRADED (escalation) or -> THROTTLED/ACTIVE (recovery with cooldown)."""
-        if inp.feed_stale:
+        if self._is_feed_stale(inp):
             return (SystemState.DEGRADED, TransitionReason.FEED_STALE)
         # Recovery only after cooldown, no operator override active
         if inp.operator_override == "PAUSE":
             return None  # stay paused
         if not self._cooldown_elapsed(inp.ts_ms):
             return None
-        if inp.toxicity_level == "LOW":
+        if self._is_toxic_low(inp):
             return (SystemState.ACTIVE, TransitionReason.TOX_LOW_COOLDOWN)
-        if inp.toxicity_level == "MID":
+        if self._is_toxic_mid(inp):
             return (SystemState.THROTTLED, TransitionReason.TOX_MID_COOLDOWN)
         return None
 
@@ -306,7 +338,7 @@ class OrchestratorFSM:
         self, inp: OrchestratorInputs
     ) -> tuple[SystemState, TransitionReason] | None:
         """DEGRADED -> READY (recovery) when feeds recover + cooldown."""
-        if inp.feed_stale:
+        if self._is_feed_stale(inp):
             return None  # stay degraded
         if self._cooldown_elapsed(inp.ts_ms):
             return (SystemState.READY, TransitionReason.FEED_RECOVERED)

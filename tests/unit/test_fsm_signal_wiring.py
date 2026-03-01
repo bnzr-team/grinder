@@ -1,12 +1,14 @@
-"""Tests for FSM signal wiring (PR-A1).
+"""Tests for FSM signal wiring (PR-A1, updated PR-A2a).
 
-Verifies that LiveEngineV0 computes real feed_stale and toxicity_level
-signals from snapshot data and ToxicityGate, replacing the previous
-hardcoded False/"LOW" defaults.
+Verifies that LiveEngineV0 computes real feed_gap_ms and spread_bps /
+toxicity_score_bps signals from snapshot data and ToxicityGate.
+
+PR-A2a changes: engine passes raw numerics to FSM driver instead of
+bool/str surrogates. Thresholds now live in FsmConfig (not engine).
 
 Key invariants:
-- feed_stale tracked per-symbol (dict[str, int], not single int)
-- First tick per symbol always feed_stale=False (prev_ts == 0)
+- feed_gap_ms tracked per-symbol (dict[str, int], not single int)
+- First tick per symbol always feed_gap_ms=0 (prev_ts == 0)
 - All timestamps in milliseconds (Snapshot.ts contract)
 - record_price() called exactly once per snapshot (no double-recording)
 - No FSM driver + no toxicity gate = zero behavior change (backward compat)
@@ -52,9 +54,12 @@ def _make_engine(
     *,
     fsm_driver: FsmDriver | None = None,
     toxicity_gate: ToxicityGate | None = None,
-    feed_stale_threshold_ms: int = 5000,
 ) -> LiveEngineV0:
-    """Helper: create a minimal LiveEngineV0 with FSM + toxicity wiring."""
+    """Helper: create a minimal LiveEngineV0 with FSM + toxicity wiring.
+
+    Feed stale threshold now lives in FsmConfig (passed to OrchestratorFSM at
+    construction). Engine no longer owns the threshold (PR-A2a).
+    """
     paper = MagicMock()
     paper.process_snapshot.return_value = MagicMock(actions=[])
     port = MagicMock()
@@ -67,7 +72,6 @@ def _make_engine(
         fsm_driver=fsm_driver,
         toxicity_gate=toxicity_gate,
     )
-    engine._feed_stale_threshold_ms = feed_stale_threshold_ms
     return engine
 
 
@@ -96,10 +100,11 @@ class TestFeedStaleSignal:
         assert driver.state == SystemState.ACTIVE
 
     def test_feed_stale_false_when_gap_within_threshold(self) -> None:
-        """Gap (1s) < threshold (5s) → feed_stale=False."""
-        fsm = OrchestratorFSM(state=SystemState.ACTIVE, state_enter_ts=1000)
+        """Gap (1s) < threshold (5s) → feed_gap_ms=1000, below FsmConfig threshold."""
+        fsm_config = FsmConfig(feed_stale_threshold_ms=5000)
+        fsm = OrchestratorFSM(state=SystemState.ACTIVE, state_enter_ts=1000, config=fsm_config)
         driver = FsmDriver(fsm)
-        engine = _make_engine(fsm_driver=driver, feed_stale_threshold_ms=5000)
+        engine = _make_engine(fsm_driver=driver)
 
         engine.process_snapshot(_make_snapshot(ts=10_000, symbol="BTCUSDT"))
         engine.process_snapshot(_make_snapshot(ts=11_000, symbol="BTCUSDT"))  # 1s gap
@@ -107,10 +112,11 @@ class TestFeedStaleSignal:
         assert driver.state == SystemState.ACTIVE
 
     def test_feed_stale_true_when_gap_exceeds_threshold(self) -> None:
-        """Gap (10s) > threshold (5s) → feed_stale=True → FSM DEGRADED."""
-        fsm = OrchestratorFSM(state=SystemState.ACTIVE, state_enter_ts=1000)
+        """Gap (10s) > threshold (5s) → feed_gap_ms=10000 > FsmConfig threshold → DEGRADED."""
+        fsm_config = FsmConfig(feed_stale_threshold_ms=5000)
+        fsm = OrchestratorFSM(state=SystemState.ACTIVE, state_enter_ts=1000, config=fsm_config)
         driver = FsmDriver(fsm)
-        engine = _make_engine(fsm_driver=driver, feed_stale_threshold_ms=5000)
+        engine = _make_engine(fsm_driver=driver)
 
         engine.process_snapshot(_make_snapshot(ts=10_000, symbol="BTCUSDT"))
         engine.process_snapshot(_make_snapshot(ts=20_000, symbol="BTCUSDT"))  # 10s gap
@@ -119,9 +125,10 @@ class TestFeedStaleSignal:
 
     def test_feed_stale_per_symbol_isolation(self) -> None:
         """BTCUSDT stale but ETHUSDT fresh → only BTC tick triggers DEGRADED."""
-        fsm = OrchestratorFSM(state=SystemState.ACTIVE, state_enter_ts=1000)
+        fsm_config = FsmConfig(feed_stale_threshold_ms=5000)
+        fsm = OrchestratorFSM(state=SystemState.ACTIVE, state_enter_ts=1000, config=fsm_config)
         driver = FsmDriver(fsm)
-        engine = _make_engine(fsm_driver=driver, feed_stale_threshold_ms=5000)
+        engine = _make_engine(fsm_driver=driver)
 
         # Tick 1: both symbols at t=10s
         engine.process_snapshot(_make_snapshot(ts=10_000, symbol="BTCUSDT"))
@@ -139,12 +146,12 @@ class TestFeedStaleSignal:
         """Full chain: stale feed → DEGRADED, then recover → READY.
 
         FSM cooldown_ms defaults to 30_000ms. Recovery requires:
-        (1) feed_stale=False AND (2) cooldown elapsed (30s in state).
+        (1) feed_gap_ms below threshold AND (2) cooldown elapsed.
         """
-        fsm_config = FsmConfig(cooldown_ms=5000)  # short cooldown for test
+        fsm_config = FsmConfig(cooldown_ms=5000, feed_stale_threshold_ms=5000)
         fsm = OrchestratorFSM(state=SystemState.ACTIVE, state_enter_ts=1000, config=fsm_config)
         driver = FsmDriver(fsm)
-        engine = _make_engine(fsm_driver=driver, feed_stale_threshold_ms=5000)
+        engine = _make_engine(fsm_driver=driver)
 
         # Establish baseline
         engine.process_snapshot(_make_snapshot(ts=10_000))
@@ -209,13 +216,15 @@ class TestToxicitySignal:
         assert driver.state == SystemState.THROTTLED  # type: ignore[comparison-overlap]
 
     def test_toxicity_high_on_price_impact(self) -> None:
-        """Rapid price move → PRICE_IMPACT_HIGH → toxicity "HIGH" → FSM PAUSED."""
-        gate = ToxicityGate(
-            max_spread_bps=50.0,
-            max_price_impact_bps=100.0,  # 1% threshold for test
-            lookback_window_ms=5000,
-        )
-        fsm = OrchestratorFSM(state=SystemState.ACTIVE, state_enter_ts=1000)
+        """Rapid price move → toxicity_score_bps > threshold → FSM PAUSED.
+
+        PR-A2a: engine passes raw price_impact_bps() to FSM. The FSM config
+        threshold (100.0 bps here) determines what counts as HIGH.
+        """
+        gate = ToxicityGate(lookback_window_ms=5000)
+        # FSM config: 100 bps threshold so 2% move (200 bps) triggers HIGH
+        fsm_config = FsmConfig(toxicity_high_threshold_bps=100.0)
+        fsm = OrchestratorFSM(state=SystemState.ACTIVE, state_enter_ts=1000, config=fsm_config)
         driver = FsmDriver(fsm)
         engine = _make_engine(fsm_driver=driver, toxicity_gate=gate)
 
@@ -309,8 +318,8 @@ class TestBackwardCompatibility:
             assert spy.call_count == 1
             assert spy.call_args[0][1] == "ETHUSDT"
 
-    def test_toxicity_gate_check_uses_snapshot_data(self) -> None:
-        """ToxicityGate.check() receives correct snapshot fields."""
+    def test_toxicity_gate_price_impact_bps_uses_snapshot_data(self) -> None:
+        """ToxicityGate.price_impact_bps() receives correct snapshot fields (PR-A2a)."""
         gate = ToxicityGate()
         fsm = OrchestratorFSM(state=SystemState.ACTIVE, state_enter_ts=1000)
         driver = FsmDriver(fsm)
@@ -318,11 +327,10 @@ class TestBackwardCompatibility:
 
         snap = _make_snapshot(ts=10_000, symbol="BTCUSDT", bid="50000", ask="50001")
 
-        with patch.object(gate, "check", wraps=gate.check) as spy:
+        with patch.object(gate, "price_impact_bps", wraps=gate.price_impact_bps) as spy:
             engine.process_snapshot(snap)
             assert spy.call_count == 1
             args = spy.call_args[0]
             assert args[0] == 10_000  # ts_ms
             assert args[1] == "BTCUSDT"  # symbol
-            assert isinstance(args[2], float)  # spread_bps
-            assert isinstance(args[3], Decimal)  # mid_price
+            assert isinstance(args[2], Decimal)  # mid_price

@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 from grinder.env_parse import parse_bool
 
 if TYPE_CHECKING:
-    from grinder.live.fsm_orchestrator import OrchestratorInputs, TransitionEvent
+    from grinder.live.fsm_orchestrator import FsmConfig, OrchestratorInputs, TransitionEvent
 
 logger = logging.getLogger(__name__)
 
@@ -50,17 +50,37 @@ def _fmt_value(v: object) -> str:
     return str(v)
 
 
-def render_evidence_text(event: TransitionEvent, inputs: OrchestratorInputs) -> str:
+def render_evidence_text(
+    event: TransitionEvent,
+    inputs: OrchestratorInputs,
+    config: FsmConfig | None = None,
+) -> str:
     """Render canonical evidence text for a transition event.
 
     Format is deterministic: fixed field order, sorted signal keys,
-    trailing newline. Same event+inputs always produces identical output.
+    trailing newline. Same event+inputs+config always produces identical output.
+
+    Backward compat (PR-A2a): maps numeric fields back to v1 signal names
+    using config thresholds (no hardcoded magic numbers). Default FsmConfig
+    produces identical output to prior bool/str fields with default values.
     """
+    from grinder.live.fsm_orchestrator import FsmConfig as _FsmConfig  # noqa: PLC0415
+
+    if config is None:
+        config = _FsmConfig()  # default thresholds as fallback
     signals: dict[str, object] = {
         "kill_switch_active": inputs.kill_switch_active,
         "drawdown_breached": inputs.drawdown_breached,
-        "feed_stale": inputs.feed_stale,
-        "toxicity_level": inputs.toxicity_level,
+        "feed_stale": (
+            inputs.feed_gap_ms > 0 and inputs.feed_gap_ms > config.feed_stale_threshold_ms
+        ),
+        "toxicity_level": (
+            "HIGH"
+            if inputs.toxicity_score_bps > config.toxicity_high_threshold_bps
+            else "MID"
+            if inputs.spread_bps > config.spread_spike_threshold_bps
+            else "LOW"
+        ),
         "position_reduced": inputs.position_reduced,
         "operator_override": inputs.operator_override,
     }
@@ -102,6 +122,7 @@ def write_fsm_evidence_atomic(
     out_dir: Path,
     event: TransitionEvent,
     inputs: OrchestratorInputs,
+    config: FsmConfig | None = None,
 ) -> tuple[Path, Path]:
     """Write evidence txt + sha256 files atomically.
 
@@ -117,7 +138,7 @@ def write_fsm_evidence_atomic(
     txt_path = out_dir / f"{stem}.txt"
     sha_path = out_dir / f"{stem}.sha256"
 
-    text = render_evidence_text(event, inputs)
+    text = render_evidence_text(event, inputs, config=config)
     digest = compute_sha256_hex(text)
 
     _atomic_write_text(txt_path, text)
@@ -129,6 +150,8 @@ def write_fsm_evidence_atomic(
 def maybe_emit_transition_evidence(
     event: TransitionEvent,
     inputs: OrchestratorInputs,
+    *,
+    config: FsmConfig | None = None,
 ) -> tuple[Path, Path] | None:
     """Emit evidence if enabled, otherwise return None.
 
@@ -142,7 +165,7 @@ def maybe_emit_transition_evidence(
     out_dir = Path(raw_dir) / "fsm"
 
     try:
-        return write_fsm_evidence_atomic(out_dir=out_dir, event=event, inputs=inputs)
+        return write_fsm_evidence_atomic(out_dir=out_dir, event=event, inputs=inputs, config=config)
     except OSError:
         logger.warning(
             "Failed to write FSM evidence artifact",

@@ -65,7 +65,6 @@ from grinder.execution.smart_order_router import (
 )
 from grinder.execution.sor_metrics import get_sor_metrics
 from grinder.execution.types import ActionType, ExecutionAction
-from grinder.gating.types import GateReason
 from grinder.ml.fill_model_loader import extract_online_features
 from grinder.ml.threshold_resolver import (
     resolve_threshold_result,
@@ -265,16 +264,6 @@ class LiveEngineV0:
         self._last_snapshot: Snapshot | None = None
         # Per-symbol feed staleness tracking (ms timestamps, PR-A1)
         self._prev_snapshot_ts: dict[str, int] = {}
-        self._feed_stale_threshold_ms: int = (
-            parse_int(
-                "GRINDER_FEED_STALE_MS",
-                default=5000,
-                min_value=1000,
-                max_value=60000,
-                strict=False,
-            )
-            or 5000
-        )
         # Read GRINDER_SOR_ENABLED once at init (via env_parse SSOT)
         self._sor_env_override = parse_bool("GRINDER_SOR_ENABLED", default=False, strict=False)
         # Read GRINDER_ACCOUNT_SYNC_ENABLED once at init (Launch-15)
@@ -485,8 +474,8 @@ class LiveEngineV0:
 
         Reads kill_switch, drawdown from existing guards.
         operator_override from GRINDER_OPERATOR_OVERRIDE env var.
-        feed_stale from per-symbol snapshot gap detection (PR-A1).
-        toxicity_level from ToxicityGate check (PR-A1).
+        feed_gap_ms from per-symbol snapshot gap (PR-A2a: numeric, FSM owns threshold).
+        spread_bps + toxicity_score_bps from snapshot + ToxicityGate (PR-A2a).
 
         Uses snapshot clock (ts_ms) for deterministic duration tracking.
         All timestamps in milliseconds (Snapshot.ts contract).
@@ -501,31 +490,21 @@ class LiveEngineV0:
             strict=False,
         )
 
-        # Compute feed_stale from per-symbol snapshot gap (PR-A1)
+        # Compute feed_gap_ms from per-symbol snapshot gap (PR-A2a)
         prev_ts = self._prev_snapshot_ts.get(symbol, 0)
-        feed_stale = prev_ts > 0 and (ts_ms - prev_ts) > self._feed_stale_threshold_ms
+        feed_gap_ms = (ts_ms - prev_ts) if prev_ts > 0 else 0
         self._prev_snapshot_ts[symbol] = ts_ms
 
-        # Compute toxicity_level from ToxicityGate (PR-A1)
-        toxicity_level = "LOW"
+        # Compute spread_bps + toxicity_score_bps (PR-A2a: raw numerics, FSM owns thresholds)
+        spread_bps = 0.0
+        toxicity_score_bps = 0.0
+        if self._last_snapshot is not None:
+            spread_bps = self._last_snapshot.spread_bps
         if self._toxicity_gate is not None and self._last_snapshot is not None:
             snap = self._last_snapshot
-            tox_result = self._toxicity_gate.check(
-                ts_ms,
-                snap.symbol,
-                snap.spread_bps,
-                snap.mid_price,
+            toxicity_score_bps = self._toxicity_gate.price_impact_bps(
+                ts_ms, snap.symbol, snap.mid_price
             )
-            if not tox_result.allowed:
-                if tox_result.reason == GateReason.SPREAD_SPIKE:
-                    toxicity_level = "MID"
-                elif tox_result.reason == GateReason.PRICE_IMPACT_HIGH:
-                    toxicity_level = "HIGH"
-                else:
-                    toxicity_level = "MID"
-                    logger.warning(
-                        "Unknown toxicity reason %s, defaulting to MID", tox_result.reason
-                    )
 
         self._fsm_driver.step(
             ts_ms=ts_ms,
@@ -533,8 +512,9 @@ class LiveEngineV0:
             drawdown_breached=(
                 self._drawdown_guard.is_drawdown if self._drawdown_guard is not None else False
             ),
-            feed_stale=feed_stale,
-            toxicity_level=toxicity_level,
+            feed_gap_ms=feed_gap_ms,
+            spread_bps=spread_bps,
+            toxicity_score_bps=toxicity_score_bps,
             position_reduced=self._position_reduced,  # RISK-EE-1
             operator_override=override,
         )
