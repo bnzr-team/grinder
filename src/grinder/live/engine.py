@@ -45,6 +45,7 @@ from grinder.connectors.errors import (
 )
 from grinder.connectors.live_connector import SafeMode
 from grinder.connectors.retries import RetryPolicy, is_retryable
+from grinder.core import SystemState
 from grinder.env_parse import parse_bool, parse_csv, parse_enum, parse_int
 from grinder.execution.fill_prob_evidence import maybe_emit_fill_prob_evidence
 from grinder.execution.fill_prob_gate import (
@@ -71,6 +72,8 @@ from grinder.ml.threshold_resolver import (
 )
 from grinder.risk.drawdown_guard_v1 import DrawdownGuardV1
 from grinder.risk.drawdown_guard_v1 import OrderIntent as RiskIntent
+from grinder.risk.emergency_exit import EmergencyExitExecutor
+from grinder.risk.emergency_exit_metrics import get_emergency_exit_metrics
 
 if TYPE_CHECKING:
     from grinder.account.syncer import AccountSyncer
@@ -295,6 +298,31 @@ class LiveEngineV0:
         # PR-C4: Signal that engine init completed (observable via /metrics)
         sor_metrics.set_engine_initialized()
 
+        # RISK-EE-1: Emergency exit (safe-by-default, opt-in)
+        self._emergency_exit_enabled = parse_bool(
+            "GRINDER_EMERGENCY_EXIT_ENABLED", default=False, strict=False
+        )
+        self._emergency_exit_executor: EmergencyExitExecutor | None = None
+        self._emergency_exit_executed = False
+        self._position_reduced = False
+        if self._emergency_exit_enabled:
+            # Duck-type check: port must have cancel_all_orders + place_market_order + get_positions
+            port = self._exchange_port
+            if (
+                hasattr(port, "cancel_all_orders")
+                and hasattr(port, "place_market_order")
+                and hasattr(port, "get_positions")
+            ):
+                self._emergency_exit_executor = EmergencyExitExecutor(port)  # type: ignore[arg-type]
+                logger.info("RISK-EE-1: EmergencyExitExecutor enabled")
+            else:
+                logger.warning(
+                    "RISK-EE-1: GRINDER_EMERGENCY_EXIT_ENABLED=1 but port lacks "
+                    "cancel_all_orders/place_market_order/get_positions — executor not created"
+                )
+        ee_metrics = get_emergency_exit_metrics()
+        ee_metrics.set_enabled(self._emergency_exit_enabled)
+
     def _resolve_auto_threshold(self) -> None:
         """Resolve threshold from eval report at startup (PR-C9).
 
@@ -395,6 +423,16 @@ class LiveEngineV0:
         if self._fsm_driver is not None:
             self._tick_fsm(snapshot.ts)
 
+        # RISK-EE-1: Emergency exit trigger (after FSM tick, before action processing)
+        if (
+            self._emergency_exit_enabled
+            and self._emergency_exit_executor is not None
+            and not self._emergency_exit_executed
+            and self._fsm_driver is not None
+            and self._fsm_driver.state == SystemState.EMERGENCY
+        ):
+            self._execute_emergency_exit(snapshot.ts)
+
         # Account sync: read-only fetch + mismatch detection (Launch-15)
         if self._is_account_sync_enabled():
             self._tick_account_sync()
@@ -448,8 +486,53 @@ class LiveEngineV0:
             ),
             feed_stale=False,  # TODO: wire from DataConnector staleness
             toxicity_level="LOW",  # TODO: wire from ToxicityGate
-            position_reduced=False,  # TODO: wire from position reducer
+            position_reduced=self._position_reduced,  # RISK-EE-1
             operator_override=override,
+        )
+
+    def _execute_emergency_exit(self, ts_ms: int) -> None:
+        """Execute emergency exit sequence (RISK-EE-1, § 10.6).
+
+        Determines target symbols from config whitelist or open positions.
+        Calls EmergencyExitExecutor.execute() and sets _position_reduced flag.
+        Runs at most once (latch: _emergency_exit_executed).
+        """
+        assert self._emergency_exit_executor is not None  # caller guards
+
+        # Determine target symbols: whitelist > positions-derived
+        symbols = list(self._config.symbol_whitelist)
+        if not symbols:
+            # No whitelist: derive symbols from open positions
+            try:
+                positions = self._exchange_port.fetch_positions()
+                symbols = list({p.symbol for p in positions if hasattr(p, "symbol")})
+            except Exception:
+                logger.exception("Failed to derive symbols from positions for emergency exit")
+
+        if not symbols:
+            logger.critical(
+                "EMERGENCY EXIT: no symbols to process (whitelist empty, no positions found)"
+            )
+            self._emergency_exit_executed = True
+            self._position_reduced = True  # no positions = effectively reduced
+            return
+
+        result = self._emergency_exit_executor.execute(
+            ts_ms=ts_ms,
+            reason="fsm_emergency",
+            symbols=symbols,
+        )
+        self._position_reduced = result.success
+        self._emergency_exit_executed = True
+
+        get_emergency_exit_metrics().record_exit(result)
+
+        logger.critical(
+            "EMERGENCY EXIT %s: cancelled=%d market=%d remaining=%d",
+            "SUCCESS" if result.success else "PARTIAL",
+            result.orders_cancelled,
+            result.market_orders_placed,
+            result.positions_remaining,
         )
 
     def _is_account_sync_enabled(self) -> bool:

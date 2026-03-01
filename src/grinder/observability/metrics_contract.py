@@ -267,6 +267,10 @@ REQUIRED_METRICS_PATTERNS = [
     "# HELP grinder_port_http_requests_total",
     "# TYPE grinder_port_http_requests_total",
     "grinder_port_http_requests_total{port=",
+    # RISK-EE-1: Emergency exit enabled gauge (always emitted)
+    "# HELP grinder_emergency_exit_enabled",
+    "# TYPE grinder_emergency_exit_enabled",
+    "grinder_emergency_exit_enabled",
 ]
 
 # PR6: Concrete series patterns requiring fill ingest to be running.
