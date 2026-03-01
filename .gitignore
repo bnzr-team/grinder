@@ -69,6 +69,9 @@ artifacts/
 # But track test fixture JSONL files
 !tests/fixtures/**/*.jsonl
 
+# ML artifacts (models, datasets, eval reports — large, local-only)
+ml/
+
 # Data files (may be large)
 data/
 # But track the grinder.data Python package
