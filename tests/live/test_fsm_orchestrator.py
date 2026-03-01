@@ -35,11 +35,13 @@ def _inputs(
     drawdown: bool = False,
     feed_stale: bool = False,
     tox: str = "LOW",
-    position_reduced: bool = False,
+    position_notional_usd: float | None = 100.0,
     operator: str | None = None,
 ) -> OrchestratorInputs:
-    # Map surrogate bool/str to numeric fields (PR-A2a, PR-A3).
+    # Map surrogate bool/str to numeric fields (PR-A2a, PR-A3, PR-A4).
     # Values chosen to be clearly above/below default FsmConfig thresholds.
+    # position_notional_usd: 100.0 = above $10 threshold (blocks recovery),
+    #   0.0 = below threshold (allows recovery), None = unknown (blocks recovery).
     feed_gap_ms = 10_000 if feed_stale else 0  # 10000 > 5000 threshold
     spread_bps = 80.0 if tox == "MID" else 0.0  # 80 > 50 threshold
     tox_score_bps = 600.0 if tox == "HIGH" else 0.0  # 600 > 500 threshold
@@ -51,7 +53,7 @@ def _inputs(
         feed_gap_ms=feed_gap_ms,
         spread_bps=spread_bps,
         toxicity_score_bps=tox_score_bps,
-        position_reduced=position_reduced,
+        position_notional_usd=position_notional_usd,
         operator_override=operator,
     )
 
@@ -301,32 +303,32 @@ class TestEmergencyRecovery:
     """Sec 8.10 MUST NOT #4: EMERGENCY -> ACTIVE directly is forbidden."""
 
     def test_emergency_no_auto_recovery(self) -> None:
-        """EMERGENCY stays without position_reduced, even after long time."""
+        """EMERGENCY stays with large position, even after long time."""
         fsm = _fsm(state=SystemState.EMERGENCY, enter_ts=0)
         event = fsm.tick(_inputs(ts_ms=999_999, tox="LOW"))
         assert event is None
 
     def test_emergency_to_paused_on_position_reduced(self) -> None:
         fsm = _fsm(state=SystemState.EMERGENCY, enter_ts=0)
-        event = fsm.tick(_inputs(position_reduced=True))
+        event = fsm.tick(_inputs(position_notional_usd=0.0))
         assert event is not None
         assert event.to_state == SystemState.PAUSED
         assert event.reason == TransitionReason.POSITION_REDUCED
 
     def test_emergency_stays_if_kill_switch_still_active(self) -> None:
         fsm = _fsm(state=SystemState.EMERGENCY, enter_ts=0)
-        event = fsm.tick(_inputs(position_reduced=True, kill_switch=True))
+        event = fsm.tick(_inputs(position_notional_usd=0.0, kill_switch=True))
         assert event is None
 
     def test_emergency_stays_if_drawdown_still_breached(self) -> None:
         fsm = _fsm(state=SystemState.EMERGENCY, enter_ts=0)
-        event = fsm.tick(_inputs(position_reduced=True, drawdown=True))
+        event = fsm.tick(_inputs(position_notional_usd=0.0, drawdown=True))
         assert event is None
 
     def test_emergency_never_goes_directly_to_active(self) -> None:
         """Even with everything clear, EMERGENCY -> PAUSED first."""
         fsm = _fsm(state=SystemState.EMERGENCY, enter_ts=0, cooldown_ms=0)
-        e1 = fsm.tick(_inputs(ts_ms=1, position_reduced=True))
+        e1 = fsm.tick(_inputs(ts_ms=1, position_notional_usd=0.0))
         assert e1 is not None
         assert e1.to_state == SystemState.PAUSED
         # Then PAUSED -> ACTIVE after cooldown
@@ -591,7 +593,7 @@ class TestSsotContract:
             for ks in (False, True):
                 for dd in (False, True):
                     for fs in feed_stale_vals:
-                        for pr in (False, True):
+                        for pn in (100.0, 0.0, None):
                             for op in overrides:
                                 fsm = _fsm(state=from_state, enter_ts=0, cooldown_ms=0)
                                 event = fsm.tick(
@@ -601,7 +603,7 @@ class TestSsotContract:
                                         drawdown=dd,
                                         feed_stale=fs,
                                         tox=tox,
-                                        position_reduced=pr,
+                                        position_notional_usd=pn,
                                         operator=op,
                                     )
                                 )
@@ -609,5 +611,5 @@ class TestSsotContract:
                                     assert event.to_state != to_state, (
                                         f"Disallowed edge {from_state.name} -> {to_state.name} "
                                         f"produced with inputs: tox={tox}, ks={ks}, dd={dd}, "
-                                        f"fs={fs}, pr={pr}, op={op}"
+                                        f"fs={fs}, pn={pn}, op={op}"
                                     )

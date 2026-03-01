@@ -58,7 +58,7 @@ class TestBuildInputsValid:
             feed_gap_ms=0,
             spread_bps=0.0,
             toxicity_score_bps=0.0,
-            position_reduced=False,
+            position_notional_usd=0.0,
             operator_override=None,
         )
         assert inp.ts_ms == _BASE_TS
@@ -75,7 +75,7 @@ class TestBuildInputsValid:
             feed_gap_ms=5000,
             spread_bps=80.0,
             toxicity_score_bps=200.0,
-            position_reduced=False,
+            position_notional_usd=0.0,
             operator_override=None,
         )
         assert inp.feed_gap_ms == 5000
@@ -91,7 +91,7 @@ class TestBuildInputsValid:
                 feed_gap_ms=0,
                 spread_bps=0.0,
                 toxicity_score_bps=0.0,
-                position_reduced=False,
+                position_notional_usd=0.0,
                 operator_override=override,
             )
             assert inp.operator_override == override
@@ -109,7 +109,7 @@ class TestBuildInputsInvalid:
                 feed_gap_ms=-1,
                 spread_bps=0.0,
                 toxicity_score_bps=0.0,
-                position_reduced=False,
+                position_notional_usd=0.0,
                 operator_override=None,
             )
 
@@ -122,7 +122,7 @@ class TestBuildInputsInvalid:
                 feed_gap_ms=0,
                 spread_bps=-1.0,
                 toxicity_score_bps=0.0,
-                position_reduced=False,
+                position_notional_usd=0.0,
                 operator_override=None,
             )
 
@@ -135,7 +135,7 @@ class TestBuildInputsInvalid:
                 feed_gap_ms=0,
                 spread_bps=0.0,
                 toxicity_score_bps=-1.0,
-                position_reduced=False,
+                position_notional_usd=0.0,
                 operator_override=None,
             )
 
@@ -148,7 +148,7 @@ class TestBuildInputsInvalid:
                 feed_gap_ms=0,
                 spread_bps=0.0,
                 toxicity_score_bps=0.0,
-                position_reduced=False,
+                position_notional_usd=0.0,
                 operator_override="SHUTDOWN",
             )
 
@@ -173,7 +173,7 @@ class TestStepTransition:
             feed_gap_ms=0,
             spread_bps=0.0,
             toxicity_score_bps=0.0,
-            position_reduced=False,
+            position_notional_usd=0.0,
             operator_override=None,
         )
         assert event is not None
@@ -190,7 +190,7 @@ class TestStepTransition:
             feed_gap_ms=0,
             spread_bps=0.0,
             toxicity_score_bps=0.0,
-            position_reduced=False,
+            position_notional_usd=0.0,
             operator_override=None,
         )
         metrics = get_fsm_metrics()
@@ -205,7 +205,7 @@ class TestStepTransition:
             feed_gap_ms=0,
             spread_bps=0.0,
             toxicity_score_bps=0.0,
-            position_reduced=False,
+            position_notional_usd=0.0,
             operator_override=None,
         )
         assert event is None
@@ -226,7 +226,7 @@ class TestStepStateGauge:
             feed_gap_ms=0,
             spread_bps=0.0,
             toxicity_score_bps=0.0,
-            position_reduced=False,
+            position_notional_usd=0.0,
             operator_override=None,
         )
         metrics = get_fsm_metrics()
@@ -241,7 +241,7 @@ class TestStepStateGauge:
             feed_gap_ms=0,
             spread_bps=0.0,
             toxicity_score_bps=0.0,
-            position_reduced=False,
+            position_notional_usd=0.0,
             operator_override=None,
         )
         metrics = get_fsm_metrics()
@@ -268,7 +268,7 @@ class TestDurationGauge:
             feed_gap_ms=0,
             spread_bps=0.0,
             toxicity_score_bps=0.0,
-            position_reduced=False,
+            position_notional_usd=0.0,
             operator_override=None,
         )
         # Duration = (10_000 - 0) / 1000 = 10.0s
@@ -284,7 +284,7 @@ class TestDurationGauge:
             feed_gap_ms=0,
             spread_bps=0.0,
             toxicity_score_bps=0.0,
-            position_reduced=False,
+            position_notional_usd=0.0,
             operator_override=None,
         )
         # Duration = 0 (just transitioned at ts=5000)
@@ -301,7 +301,7 @@ class TestDurationGauge:
             feed_gap_ms=0,
             spread_bps=0.0,
             toxicity_score_bps=0.0,
-            position_reduced=False,
+            position_notional_usd=0.0,
             operator_override=None,
         )
         assert get_fsm_metrics().state_duration_s == pytest.approx(0.0)
@@ -321,7 +321,7 @@ class TestDurationGauge:
             feed_gap_ms=0,
             spread_bps=0.0,
             toxicity_score_bps=0.0,
-            position_reduced=False,
+            position_notional_usd=0.0,
             operator_override=None,
         )
         # Duration should be 0 (just initialized)
@@ -393,7 +393,7 @@ class TestDriverState:
             feed_gap_ms=0,
             spread_bps=0.0,
             toxicity_score_bps=0.0,
-            position_reduced=False,
+            position_notional_usd=0.0,
             operator_override=None,
         )
         assert driver.state == SystemState.READY
@@ -425,7 +425,7 @@ class TestDriverEvidence:
             feed_gap_ms=0,
             spread_bps=0.0,
             toxicity_score_bps=0.0,
-            position_reduced=False,
+            position_notional_usd=0.0,
             operator_override=None,
         )
 
@@ -451,7 +451,7 @@ class TestDriverEvidence:
             feed_gap_ms=0,
             spread_bps=0.0,
             toxicity_score_bps=0.0,
-            position_reduced=False,
+            position_notional_usd=0.0,
             operator_override=None,
         )
 
@@ -473,7 +473,7 @@ class TestDriverEvidence:
             feed_gap_ms=0,
             spread_bps=0.0,
             toxicity_score_bps=0.0,
-            position_reduced=False,
+            position_notional_usd=0.0,
             operator_override=None,
         )
 

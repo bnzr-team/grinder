@@ -28,9 +28,10 @@ from grinder.live.fsm_evidence import (
 from grinder.live.fsm_orchestrator import OrchestratorInputs, TransitionEvent, TransitionReason
 
 # Canonical golden text for regression testing.
-# v2 (PR-A2b, PR-A3): native numeric fields replace v1 bool/str surrogates.
+# v2 (PR-A2b, PR-A3, PR-A4): native numeric fields replace v1 bool/str surrogates.
 # Breaking changes: feed_stale/toxicity_level removed (PR-A2b),
-# drawdown_breached replaced by drawdown_pct (PR-A3).
+# drawdown_breached replaced by drawdown_pct (PR-A3),
+# position_reduced replaced by position_notional_usd (PR-A4).
 CANON_TEXT = (
     "artifact_version=fsm_evidence_v2\n"
     "ts_ms=2000\n"
@@ -42,12 +43,12 @@ CANON_TEXT = (
     "  feed_gap_ms=0\n"
     "  kill_switch_active=True\n"
     "  operator_override=None\n"
-    "  position_reduced=False\n"
+    "  position_notional_usd=0.0\n"
     "  spread_bps=0.0\n"
     "  toxicity_score_bps=0.0\n"
 )
 
-CANON_SHA256 = "e26fdcbc30e340a4a7af23ec27c32c2fc16a8ea76099d64e8a55a8f9ad9546e5"
+CANON_SHA256 = "eff226604bc1f453855adc075d7cf5e480027e277f077be3214fe413e1d240fd"
 
 
 def _mk_event(
@@ -76,7 +77,7 @@ def _mk_inputs(
         feed_gap_ms=0,
         spread_bps=0.0,
         toxicity_score_bps=0.0,
-        position_reduced=False,
+        position_notional_usd=0.0,
         operator_override=operator_override,
     )
 

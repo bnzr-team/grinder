@@ -1,7 +1,7 @@
 """Integration test: engine emergency exit wiring (RISK-EE-1).
 
 Proves the full chain:
-  drawdown_breached → FSM EMERGENCY → executor fires → position_reduced=True → FSM PAUSED
+  drawdown → FSM EMERGENCY → executor fires → AccountSyncer measures 0.0 notional → FSM PAUSED
 
 Uses NoOpExchangePort (has cancel_all_orders/place_market_order/get_positions stubs).
 """
@@ -13,6 +13,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from grinder.account.syncer import AccountSyncer
 from grinder.connectors.live_connector import SafeMode
 from grinder.contracts import Snapshot
 from grinder.core import SystemState
@@ -64,6 +65,8 @@ def _make_engine(
     fsm_driver: FsmDriver,
     *,
     symbol_whitelist: list[str] | None = None,
+    account_syncer: AccountSyncer | None = None,
+    account_sync_enabled: bool = False,
 ) -> LiveEngineV0:
     """Build LiveEngineV0 with FSM + DD guard + emergency exit."""
     paper_engine = MagicMock()
@@ -75,13 +78,20 @@ def _make_engine(
         symbol_whitelist=symbol_whitelist or ["BTCUSDT"],
     )
 
-    return LiveEngineV0(
+    engine = LiveEngineV0(
         paper_engine=paper_engine,
         exchange_port=port,
         config=config,
         drawdown_guard=drawdown_guard,
         fsm_driver=fsm_driver,
+        account_syncer=account_syncer,
     )
+
+    # Override the env-parsed flag for test control
+    if account_sync_enabled:
+        engine._account_sync_env_override = True
+
+    return engine
 
 
 def _advance_fsm_to_active(engine: LiveEngineV0, start_ts: int) -> int:
@@ -125,12 +135,12 @@ class TestEngineEmergencyExit:
 
     @pytest.mark.usefixtures("_enable_emergency_exit")
     def test_full_chain_dd_to_paused(self) -> None:
-        """drawdown → EMERGENCY → executor runs → position_reduced → PAUSED.
+        """drawdown → EMERGENCY → executor fires → sync measures 0.0 → PAUSED.
 
-        NoOp port has no real positions, so executor sees 0 positions
-        and returns success=True immediately. This proves the wiring chain:
-        FSM enters EMERGENCY on drawdown, engine fires executor, executor
-        sets position_reduced=True, next tick FSM transitions to PAUSED.
+        NoOp port has no real positions, so:
+        1. Executor sees 0 positions and returns success=True.
+        2. AccountSyncer.sync() fetches empty snapshot → compute_position_notional = 0.0.
+        3. Next tick FSM sees position_notional_usd=0.0 < 10.0 threshold → PAUSED.
         """
         port = NoOpExchangePort()
         dd_config = DrawdownGuardV1Config(portfolio_dd_limit=Decimal("0.05"))
@@ -138,7 +148,15 @@ class TestEngineEmergencyExit:
         fsm = OrchestratorFSM(config=FsmConfig(drawdown_threshold_pct=0.05))
         fsm_driver = FsmDriver(fsm)
 
-        engine = _make_engine(port, dd_guard, fsm_driver, symbol_whitelist=["BTCUSDT"])
+        syncer = AccountSyncer(port)
+        engine = _make_engine(
+            port,
+            dd_guard,
+            fsm_driver,
+            symbol_whitelist=["BTCUSDT"],
+            account_syncer=syncer,
+            account_sync_enabled=True,
+        )
 
         # Advance FSM to ACTIVE
         ts = _advance_fsm_to_active(engine, 1_000_000)
@@ -148,17 +166,17 @@ class TestEngineEmergencyExit:
         dd_guard.update(equity_current=Decimal("90"), equity_start=Decimal("100"))
         assert dd_guard.is_drawdown  # 10% > 5% limit
 
-        # Tick: ACTIVE → EMERGENCY, executor fires
+        # Tick: ACTIVE → EMERGENCY, executor fires, sync runs
         engine.process_snapshot(_make_snapshot(ts))
         assert engine._emergency_exit_executed
-        assert engine._position_reduced  # NoOp port → 0 positions → success
+        # AccountSyncer measured empty positions → 0.0
+        assert engine._position_notional_usd == pytest.approx(0.0)
 
         # State should still be EMERGENCY after this tick (two-tick transition)
-        # because position_reduced is consumed on the NEXT FSM tick
+        # because notional is consumed on the NEXT FSM tick
         assert fsm_driver.state == SystemState.EMERGENCY  # type: ignore[comparison-overlap]
 
-        # Next tick: FSM sees position_reduced=True → PAUSED
-        # _eval_emergency requires: position_reduced AND NOT drawdown_breached AND NOT kill_switch
+        # Next tick: FSM sees position_notional_usd=0.0 < 10.0 → PAUSED
         # DrawdownGuardV1 is latched (stays DRAWDOWN until reset), so reset it.
         dd_guard.reset()
         assert not dd_guard.is_drawdown
@@ -176,7 +194,15 @@ class TestEngineEmergencyExit:
         fsm = OrchestratorFSM(config=FsmConfig(drawdown_threshold_pct=0.05))
         fsm_driver = FsmDriver(fsm)
 
-        engine = _make_engine(port, dd_guard, fsm_driver, symbol_whitelist=["BTCUSDT"])
+        syncer = AccountSyncer(port)
+        engine = _make_engine(
+            port,
+            dd_guard,
+            fsm_driver,
+            symbol_whitelist=["BTCUSDT"],
+            account_syncer=syncer,
+            account_sync_enabled=True,
+        )
 
         # Advance to ACTIVE, trigger drawdown
         ts = _advance_fsm_to_active(engine, 1_000_000)
@@ -185,11 +211,11 @@ class TestEngineEmergencyExit:
         # First EMERGENCY tick: executor fires
         engine.process_snapshot(_make_snapshot(ts))
         assert engine._emergency_exit_executed
-        first_position_reduced = engine._position_reduced
+        first_notional = engine._position_notional_usd
 
         # Second EMERGENCY tick: latch prevents re-execution
         ts += 1000
         engine.process_snapshot(_make_snapshot(ts))
         # Still the same state — no re-execution
         assert engine._emergency_exit_executed
-        assert engine._position_reduced == first_position_reduced
+        assert engine._position_notional_usd == first_notional
