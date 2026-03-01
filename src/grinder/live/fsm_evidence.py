@@ -62,7 +62,8 @@ def render_evidence_text(
 
     v2 (PR-A2b): native numeric fields replace v1 bool/str surrogates.
     Breaking changes: feed_stale/toxicity_level removed (PR-A2b),
-    drawdown_breached replaced by drawdown_pct (PR-A3).
+    drawdown_breached replaced by drawdown_pct (PR-A3),
+    position_reduced replaced by position_notional_usd (PR-A4).
 
     The config parameter is accepted for caller API compat but unused in v2
     (signals are emitted as-is, no threshold interpretation needed).
@@ -73,7 +74,7 @@ def render_evidence_text(
         "feed_gap_ms": inputs.feed_gap_ms,
         "spread_bps": inputs.spread_bps,
         "toxicity_score_bps": inputs.toxicity_score_bps,
-        "position_reduced": inputs.position_reduced,
+        "position_notional_usd": inputs.position_notional_usd,
         "operator_override": inputs.operator_override,
     }
 

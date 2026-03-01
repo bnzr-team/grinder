@@ -108,7 +108,7 @@ If Gate 6 blocks an intent due to FSM state:
 
 - The FSM follows its normal transition rules after the override is removed.
 - Recovery from PAUSED requires cooldown elapsed + no active pause triggers.
-- Recovery from EMERGENCY requires `position_reduced=True` + no active emergency triggers.
+- Recovery from EMERGENCY requires `position_notional_usd < threshold` (default $10 USDT) + no active emergency triggers.
 - See `docs/08_STATE_MACHINE.md` Sec 8.10 for the full state diagram.
 
 ## Evidence artifacts
@@ -156,18 +156,19 @@ Unknown values default to disabled (safe).
 Each `.txt` file contains a canonical text block:
 
 ```
-artifact_version=fsm_evidence_v1
+artifact_version=fsm_evidence_v2
 ts_ms=1706000000
 from_state=ACTIVE
 to_state=EMERGENCY
 reason=KILL_SWITCH
 signals:
-  drawdown_breached=False
-  feed_stale=False
+  drawdown_pct=0.0
+  feed_gap_ms=0
   kill_switch_active=True
   operator_override=None
-  position_reduced=False
-  toxicity_level=LOW
+  position_notional_usd=0.0
+  spread_bps=0.0
+  toxicity_score_bps=0.0
 ```
 
 Signals are sorted by key name. Format is deterministic: same event always produces identical output.

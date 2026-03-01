@@ -442,3 +442,55 @@ class TestNoOpPortIntegration:
         assert result.snapshot.source == "stub"
         assert len(result.snapshot.positions) == 0
         assert len(result.snapshot.open_orders) == 0
+
+
+# -- Tests: compute_position_notional --
+
+
+class TestComputePositionNotional:
+    """Tests for AccountSyncer.compute_position_notional() static method."""
+
+    def test_two_positions_notional(self) -> None:
+        """BTCUSDT 0.002 @ 65000 + ETHUSDT 0.01 @ 3500 = 130 + 35 = 165.0."""
+        snap = _snapshot(
+            positions=(
+                PositionSnap(
+                    symbol="BTCUSDT",
+                    side="LONG",
+                    qty=Decimal("0.002"),
+                    entry_price=Decimal("64000"),
+                    mark_price=Decimal("65000"),
+                    unrealized_pnl=Decimal("2.0"),
+                    leverage=10,
+                    ts=1000,
+                ),
+                PositionSnap(
+                    symbol="ETHUSDT",
+                    side="LONG",
+                    qty=Decimal("0.01"),
+                    entry_price=Decimal("3400"),
+                    mark_price=Decimal("3500"),
+                    unrealized_pnl=Decimal("1.0"),
+                    leverage=5,
+                    ts=1000,
+                ),
+            ),
+            ts=1000,
+        )
+        result = AccountSyncer.compute_position_notional(snap)
+        assert result == pytest.approx(165.0)
+
+    def test_empty_positions_returns_zero(self) -> None:
+        """No positions → 0.0 notional."""
+        snap = _snapshot(ts=1000)
+        result = AccountSyncer.compute_position_notional(snap)
+        assert result == pytest.approx(0.0)
+
+    def test_noop_port_empty_snapshot_notional(self) -> None:
+        """NoOpExchangePort → empty positions → 0.0 notional (deterministic)."""
+        port = NoOpExchangePort()
+        syncer = AccountSyncer(port)
+        sync_result = syncer.sync()
+        assert sync_result.snapshot is not None
+        notional = AccountSyncer.compute_position_notional(sync_result.snapshot)
+        assert notional == pytest.approx(0.0)

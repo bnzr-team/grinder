@@ -42,7 +42,7 @@ def build_inputs(
     feed_gap_ms: int,
     spread_bps: float,
     toxicity_score_bps: float,
-    position_reduced: bool,
+    position_notional_usd: float | None,
     operator_override: str | None,
 ) -> OrchestratorInputs:
     """Build frozen OrchestratorInputs snapshot with validation.
@@ -52,6 +52,8 @@ def build_inputs(
     """
     if drawdown_pct < 0.0 or drawdown_pct > 1.0:
         raise ValueError(f"drawdown_pct must be in [0.0, 1.0], got {drawdown_pct}")
+    if position_notional_usd is not None and position_notional_usd < 0.0:
+        raise ValueError(f"position_notional_usd must be >= 0 or None, got {position_notional_usd}")
     if feed_gap_ms < 0:
         raise ValueError(f"feed_gap_ms must be >= 0, got {feed_gap_ms}")
     if spread_bps < 0.0:
@@ -70,7 +72,7 @@ def build_inputs(
         feed_gap_ms=feed_gap_ms,
         spread_bps=spread_bps,
         toxicity_score_bps=toxicity_score_bps,
-        position_reduced=position_reduced,
+        position_notional_usd=position_notional_usd,
         operator_override=operator_override,
     )
 
@@ -104,7 +106,7 @@ class FsmDriver:
         feed_gap_ms: int,
         spread_bps: float,
         toxicity_score_bps: float,
-        position_reduced: bool,
+        position_notional_usd: float | None,
         operator_override: str | None,
     ) -> TransitionEvent | None:
         """Single tick: build inputs -> tick FSM -> emit side effects.
@@ -119,7 +121,7 @@ class FsmDriver:
             feed_gap_ms=feed_gap_ms,
             spread_bps=spread_bps,
             toxicity_score_bps=toxicity_score_bps,
-            position_reduced=position_reduced,
+            position_notional_usd=position_notional_usd,
             operator_override=operator_override,
         )
 

@@ -230,6 +230,18 @@ class AccountSyncer:
                 total += o.price * remaining
         return float(total)
 
+    @staticmethod
+    def compute_position_notional(snapshot: AccountSnapshot) -> float:
+        """Total position notional: sum(|qty| * mark_price) in USDT.
+
+        Defensive abs() even though PositionSnap.qty contract says >= 0.
+        Returns 0.0 for empty positions tuple.
+        """
+        total = Decimal(0)
+        for p in snapshot.positions:
+            total += abs(p.qty) * p.mark_price
+        return float(total)
+
     def reset(self) -> None:
         """Reset syncer state (for testing)."""
         self._last_ts = 0

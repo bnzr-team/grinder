@@ -78,7 +78,7 @@ class OrchestratorInputs:
     feed_gap_ms: int  # ms since last snapshot for this symbol (0 = first tick)
     spread_bps: float  # current bid-ask spread in basis points
     toxicity_score_bps: float  # price impact in bps (0.0 = no impact)
-    position_reduced: bool  # position below emergency exit threshold
+    position_notional_usd: float | None  # Σ(|qty| * mark_price) USDT; None = unknown
     operator_override: str | None  # "PAUSE" | "EMERGENCY" | None
 
 
@@ -98,6 +98,9 @@ class FsmConfig:
     toxicity_high_threshold_bps: float = 500.0  # price impact above this → HIGH toxicity
     drawdown_threshold_pct: float = (
         0.20  # DD fraction above this → EMERGENCY (was DrawdownGuardV1Config default)
+    )
+    position_notional_threshold_usd: float = (
+        10.0  # recovery threshold: below this USDT = "effectively flat" (not exchange min_notional)
     )
 
 
@@ -273,6 +276,16 @@ class OrchestratorFSM:
         """Drawdown breached if pct >= threshold (was bool drawdown_breached)."""
         return inp.drawdown_pct >= self._config.drawdown_threshold_pct
 
+    def _is_position_large(self, inp: OrchestratorInputs) -> bool:
+        """Position large (or unknown) blocks EMERGENCY recovery.
+
+        None = unknown (no AccountSyncer data yet) → conservatively block.
+        >= threshold = position still significant → block recovery.
+        """
+        if inp.position_notional_usd is None:
+            return True
+        return inp.position_notional_usd >= self._config.position_notional_threshold_usd
+
     # ------------------------------------------------------------------
     # State-specific evaluation (priority-ordered)
     # ------------------------------------------------------------------
@@ -354,7 +367,15 @@ class OrchestratorFSM:
     def _eval_emergency(
         self, inp: OrchestratorInputs
     ) -> tuple[SystemState, TransitionReason] | None:
-        """EMERGENCY -> PAUSED only when position reduced. No auto-recovery."""
-        if inp.position_reduced and not inp.kill_switch_active and not self._is_dd_breached(inp):
+        """EMERGENCY -> PAUSED only when position notional below threshold.
+
+        Requires confirmed measurement (not None) AND below threshold AND
+        no active emergency triggers (kill_switch, drawdown).
+        """
+        if (
+            not self._is_position_large(inp)
+            and not inp.kill_switch_active
+            and not self._is_dd_breached(inp)
+        ):
             return (SystemState.PAUSED, TransitionReason.POSITION_REDUCED)
         return None

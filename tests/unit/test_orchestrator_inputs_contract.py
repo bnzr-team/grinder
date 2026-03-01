@@ -37,6 +37,7 @@ class TestFsmConfigDefaults:
         assert config.spread_spike_threshold_bps == 50.0  # was ToxicityGate.max_spread_bps
         assert config.toxicity_high_threshold_bps == 500.0  # was ToxicityGate.max_price_impact_bps
         assert config.drawdown_threshold_pct == 0.20  # was DrawdownGuardV1Config default
+        assert config.position_notional_threshold_usd == 10.0  # recovery threshold
         assert config.cooldown_ms == 30_000  # unchanged
 
 
@@ -56,7 +57,7 @@ class TestOrchestratorInputsGolden:
             feed_gap_ms=0,
             spread_bps=0.0,
             toxicity_score_bps=0.0,
-            position_reduced=False,
+            position_notional_usd=0.0,
             operator_override=None,
         )
         assert inp.feed_gap_ms == 0
@@ -71,7 +72,7 @@ class TestOrchestratorInputsGolden:
             feed_gap_ms=10_000,
             spread_bps=80.0,
             toxicity_score_bps=600.0,
-            position_reduced=False,
+            position_notional_usd=0.0,
             operator_override=None,
         )
         assert inp.feed_gap_ms == 10_000
@@ -96,7 +97,7 @@ class TestBuildInputsValidation:
                 feed_gap_ms=0,
                 spread_bps=0.0,
                 toxicity_score_bps=0.0,
-                position_reduced=False,
+                position_notional_usd=0.0,
                 operator_override=None,
             )
 
@@ -109,7 +110,7 @@ class TestBuildInputsValidation:
                 feed_gap_ms=0,
                 spread_bps=0.0,
                 toxicity_score_bps=0.0,
-                position_reduced=False,
+                position_notional_usd=0.0,
                 operator_override=None,
             )
 
@@ -122,7 +123,7 @@ class TestBuildInputsValidation:
                 feed_gap_ms=-1,
                 spread_bps=0.0,
                 toxicity_score_bps=0.0,
-                position_reduced=False,
+                position_notional_usd=0.0,
                 operator_override=None,
             )
 
@@ -135,7 +136,7 @@ class TestBuildInputsValidation:
                 feed_gap_ms=0,
                 spread_bps=-1.0,
                 toxicity_score_bps=0.0,
-                position_reduced=False,
+                position_notional_usd=0.0,
                 operator_override=None,
             )
 
@@ -148,7 +149,7 @@ class TestBuildInputsValidation:
                 feed_gap_ms=0,
                 spread_bps=0.0,
                 toxicity_score_bps=-1.0,
-                position_reduced=False,
+                position_notional_usd=0.0,
                 operator_override=None,
             )
 
@@ -161,7 +162,7 @@ class TestBuildInputsValidation:
                 feed_gap_ms=0,
                 spread_bps=0.0,
                 toxicity_score_bps=0.0,
-                position_reduced=False,
+                position_notional_usd=0.0,
                 operator_override="INVALID",
             )
 
@@ -185,7 +186,7 @@ def _safe_inputs(
         feed_gap_ms=feed_gap_ms,
         spread_bps=spread_bps,
         toxicity_score_bps=toxicity_score_bps,
-        position_reduced=False,
+        position_notional_usd=0.0,
         operator_override=None,
     )
 
@@ -249,7 +250,7 @@ class TestFsmBoundaryFromConfig:
             feed_gap_ms=0,
             spread_bps=0.0,
             toxicity_score_bps=0.0,
-            position_reduced=False,
+            position_notional_usd=0.0,
             operator_override=None,
         )
         assert fsm.tick(inp_below) is None
@@ -262,7 +263,7 @@ class TestFsmBoundaryFromConfig:
             feed_gap_ms=0,
             spread_bps=0.0,
             toxicity_score_bps=0.0,
-            position_reduced=False,
+            position_notional_usd=0.0,
             operator_override=None,
         )
         event = fsm.tick(inp_at)
@@ -276,6 +277,99 @@ class TestFsmBoundaryFromConfig:
         fsm = OrchestratorFSM(state=SystemState.ACTIVE, state_enter_ts=1000, config=config)
         inp = _safe_inputs(ts_ms=2000, feed_gap_ms=0)
         assert fsm.tick(inp) is None  # still ACTIVE
+
+    def test_position_notional_boundary_from_config(self) -> None:
+        """Position notional threshold: below → recovery, at → blocked, None → blocked."""
+        config = FsmConfig()
+        threshold = config.position_notional_threshold_usd  # 10.0
+
+        # Below threshold ($9.99) → PAUSED (recovery allowed)
+        fsm1 = OrchestratorFSM(state=SystemState.EMERGENCY, state_enter_ts=0, config=config)
+        inp_below = OrchestratorInputs(
+            ts_ms=2000,
+            kill_switch_active=False,
+            drawdown_pct=0.0,
+            feed_gap_ms=0,
+            spread_bps=0.0,
+            toxicity_score_bps=0.0,
+            position_notional_usd=threshold - 0.01,
+            operator_override=None,
+        )
+        event1 = fsm1.tick(inp_below)
+        assert event1 is not None
+        assert event1.to_state == SystemState.PAUSED
+        assert event1.reason == TransitionReason.POSITION_REDUCED
+
+        # At threshold ($10.0) → stays EMERGENCY (>= blocks)
+        fsm2 = OrchestratorFSM(state=SystemState.EMERGENCY, state_enter_ts=0, config=config)
+        inp_at = OrchestratorInputs(
+            ts_ms=2000,
+            kill_switch_active=False,
+            drawdown_pct=0.0,
+            feed_gap_ms=0,
+            spread_bps=0.0,
+            toxicity_score_bps=0.0,
+            position_notional_usd=threshold,
+            operator_override=None,
+        )
+        assert fsm2.tick(inp_at) is None
+
+        # None (unknown) → stays EMERGENCY (conservatively blocks)
+        fsm3 = OrchestratorFSM(state=SystemState.EMERGENCY, state_enter_ts=0, config=config)
+        inp_none = OrchestratorInputs(
+            ts_ms=2000,
+            kill_switch_active=False,
+            drawdown_pct=0.0,
+            feed_gap_ms=0,
+            spread_bps=0.0,
+            toxicity_score_bps=0.0,
+            position_notional_usd=None,
+            operator_override=None,
+        )
+        assert fsm3.tick(inp_none) is None
+
+
+class TestPositionNotionalValidation:
+    """build_inputs() validation for position_notional_usd."""
+
+    def test_negative_position_notional_usd_raises(self) -> None:
+        with pytest.raises(ValueError, match="position_notional_usd must be >= 0 or None"):
+            build_inputs(
+                ts_ms=1000,
+                kill_switch_active=False,
+                drawdown_pct=0.0,
+                feed_gap_ms=0,
+                spread_bps=0.0,
+                toxicity_score_bps=0.0,
+                position_notional_usd=-1.0,
+                operator_override=None,
+            )
+
+    def test_none_position_notional_usd_accepted(self) -> None:
+        inp = build_inputs(
+            ts_ms=1000,
+            kill_switch_active=False,
+            drawdown_pct=0.0,
+            feed_gap_ms=0,
+            spread_bps=0.0,
+            toxicity_score_bps=0.0,
+            position_notional_usd=None,
+            operator_override=None,
+        )
+        assert inp.position_notional_usd is None
+
+    def test_zero_position_notional_usd_accepted(self) -> None:
+        inp = build_inputs(
+            ts_ms=1000,
+            kill_switch_active=False,
+            drawdown_pct=0.0,
+            feed_gap_ms=0,
+            spread_bps=0.0,
+            toxicity_score_bps=0.0,
+            position_notional_usd=0.0,
+            operator_override=None,
+        )
+        assert inp.position_notional_usd == 0.0
 
 
 # ===========================================================================

@@ -1332,7 +1332,8 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - ARTIFACT_VERSION bumped: fsm_evidence_v1 → fsm_evidence_v2
     - Removed v1 signal fields: feed_stale (bool), toxicity_level (str "LOW"/"MID"/"HIGH")
     - Added v2 signal fields: feed_gap_ms (int), spread_bps (float), toxicity_score_bps (float)
-    - Unchanged fields (at PR-A2b): kill_switch_active, drawdown_breached, position_reduced, operator_override
+    - Unchanged fields (at PR-A2b): kill_switch_active, drawdown_breached, operator_override
+    - Note: drawdown_breached replaced by drawdown_pct (PR-A3), position_reduced replaced by position_notional_usd (PR-A4)
     - Migration: any parser matching feed_stale= or toxicity_level= must switch to feed_gap_ms=/spread_bps=/toxicity_score_bps=
     - CANON_TEXT + CANON_SHA256 updated in test_fsm_evidence.py
     - Deferred: drawdown_pct (PR-A3), position_notional (PR-A4), regime (PR-A5)
@@ -1343,7 +1344,14 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - DrawdownGuardV1: added current_drawdown_pct property (float accessor)
     - Engine: passes guard.current_drawdown_pct instead of guard.is_drawdown
     - Evidence v2 signal: drawdown_breached → drawdown_pct (CANON_TEXT + SHA256 updated)
-    - Deferred: position_notional (PR-A4), regime (PR-A5)
+    - Deferred: regime (PR-A5)
+  - PR-A4: position_reduced → position_notional_usd (live position notional):
+    - OrchestratorInputs: position_reduced: bool → position_notional_usd: float | None (Σ|qty|×mark_price USDT; None = unknown)
+    - FsmConfig: added position_notional_threshold_usd: float = 10.0 (recovery threshold, not exchange MIN_NOTIONAL)
+    - FSM helper _is_position_large(inp): None or >= threshold → True (blocks EMERGENCY recovery)
+    - Source: AccountSyncer only (pure live measurement, no override/latch)
+    - None = unknown → conservatively blocks recovery (safe default)
+    - Evidence v2 signal: position_reduced → position_notional_usd (CANON_TEXT + SHA256 updated)
 - [DONE] Launch-14 (P1): SmartOrderRouter (existing=None scope) — COMPLETE (main @ `e5b177c`).
   - PR0 (#219) — Spec/decision matrix + invariants (merged @ `8ff7339`)
   - PR1 (#220) — Router core + table-driven tests (merged @ `d98008d`)

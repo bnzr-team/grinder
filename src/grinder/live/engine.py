@@ -37,6 +37,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Any
 
 from grinder.account.evidence import write_evidence_bundle
+from grinder.account.syncer import AccountSyncer
 from grinder.connectors.errors import (
     CircuitOpenError,
     ConnectorError,
@@ -76,7 +77,6 @@ from grinder.risk.emergency_exit import EmergencyExitExecutor
 from grinder.risk.emergency_exit_metrics import get_emergency_exit_metrics
 
 if TYPE_CHECKING:
-    from grinder.account.syncer import AccountSyncer
     from grinder.contracts import Snapshot
     from grinder.execution.port import ExchangePort
     from grinder.gating.toxicity_gate import ToxicityGate
@@ -310,7 +310,7 @@ class LiveEngineV0:
         )
         self._emergency_exit_executor: EmergencyExitExecutor | None = None
         self._emergency_exit_executed = False
-        self._position_reduced = False
+        self._position_notional_usd: float | None = None  # measured by AccountSyncer
         if self._emergency_exit_enabled:
             # Duck-type check: port must have cancel_all_orders + place_market_order + get_positions
             port = self._exchange_port
@@ -517,7 +517,7 @@ class LiveEngineV0:
             feed_gap_ms=feed_gap_ms,
             spread_bps=spread_bps,
             toxicity_score_bps=toxicity_score_bps,
-            position_reduced=self._position_reduced,  # RISK-EE-1
+            position_notional_usd=self._position_notional_usd,  # PR-A4: measured by AccountSyncer
             operator_override=override,
         )
 
@@ -525,8 +525,11 @@ class LiveEngineV0:
         """Execute emergency exit sequence (RISK-EE-1, § 10.6).
 
         Determines target symbols from config whitelist or open positions.
-        Calls EmergencyExitExecutor.execute() and sets _position_reduced flag.
+        Calls EmergencyExitExecutor.execute().
         Runs at most once (latch: _emergency_exit_executed).
+
+        Does NOT override _position_notional_usd — that is measured by
+        AccountSyncer (PR-A4). Recovery waits for confirmed measurement.
         """
         assert self._emergency_exit_executor is not None  # caller guards
 
@@ -545,7 +548,6 @@ class LiveEngineV0:
                 "EMERGENCY EXIT: no symbols to process (whitelist empty, no positions found)"
             )
             self._emergency_exit_executed = True
-            self._position_reduced = True  # no positions = effectively reduced
             return
 
         result = self._emergency_exit_executor.execute(
@@ -553,7 +555,6 @@ class LiveEngineV0:
             reason="fsm_emergency",
             symbols=symbols,
         )
-        self._position_reduced = result.success
         self._emergency_exit_executed = True
 
         get_emergency_exit_metrics().record_exit(result)
@@ -583,6 +584,7 @@ class LiveEngineV0:
         """Run one account sync cycle (read-only).
 
         Fetches snapshot, detects mismatches, records metrics.
+        Updates _position_notional_usd from snapshot positions (PR-A4).
         Evidence writing is delegated to evidence.py (env-gated).
         """
         assert self._account_syncer is not None  # caller guards
@@ -600,6 +602,10 @@ class LiveEngineV0:
             )
             for m in result.mismatches:
                 logger.warning("  [%s] %s", m.rule, m.detail)
+
+        # PR-A4: update position notional from confirmed snapshot
+        if result.snapshot is not None:
+            self._position_notional_usd = AccountSyncer.compute_position_notional(result.snapshot)
 
         # Evidence writing (env-gated, safe-by-default)
         if result.snapshot is not None:
