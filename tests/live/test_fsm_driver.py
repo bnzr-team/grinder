@@ -54,7 +54,7 @@ class TestBuildInputsValid:
         inp = build_inputs(
             ts_ms=_BASE_TS,
             kill_switch_active=False,
-            drawdown_breached=False,
+            drawdown_pct=0.0,
             feed_gap_ms=0,
             spread_bps=0.0,
             toxicity_score_bps=0.0,
@@ -71,7 +71,7 @@ class TestBuildInputsValid:
         inp = build_inputs(
             ts_ms=_BASE_TS,
             kill_switch_active=False,
-            drawdown_breached=False,
+            drawdown_pct=0.0,
             feed_gap_ms=5000,
             spread_bps=80.0,
             toxicity_score_bps=200.0,
@@ -87,7 +87,7 @@ class TestBuildInputsValid:
             inp = build_inputs(
                 ts_ms=_BASE_TS,
                 kill_switch_active=False,
-                drawdown_breached=False,
+                drawdown_pct=0.0,
                 feed_gap_ms=0,
                 spread_bps=0.0,
                 toxicity_score_bps=0.0,
@@ -105,7 +105,7 @@ class TestBuildInputsInvalid:
             build_inputs(
                 ts_ms=_BASE_TS,
                 kill_switch_active=False,
-                drawdown_breached=False,
+                drawdown_pct=0.0,
                 feed_gap_ms=-1,
                 spread_bps=0.0,
                 toxicity_score_bps=0.0,
@@ -118,7 +118,7 @@ class TestBuildInputsInvalid:
             build_inputs(
                 ts_ms=_BASE_TS,
                 kill_switch_active=False,
-                drawdown_breached=False,
+                drawdown_pct=0.0,
                 feed_gap_ms=0,
                 spread_bps=-1.0,
                 toxicity_score_bps=0.0,
@@ -131,7 +131,7 @@ class TestBuildInputsInvalid:
             build_inputs(
                 ts_ms=_BASE_TS,
                 kill_switch_active=False,
-                drawdown_breached=False,
+                drawdown_pct=0.0,
                 feed_gap_ms=0,
                 spread_bps=0.0,
                 toxicity_score_bps=-1.0,
@@ -144,7 +144,7 @@ class TestBuildInputsInvalid:
             build_inputs(
                 ts_ms=_BASE_TS,
                 kill_switch_active=False,
-                drawdown_breached=False,
+                drawdown_pct=0.0,
                 feed_gap_ms=0,
                 spread_bps=0.0,
                 toxicity_score_bps=0.0,
@@ -169,7 +169,7 @@ class TestStepTransition:
         event = driver.step(
             ts_ms=_BASE_TS,
             kill_switch_active=False,
-            drawdown_breached=False,
+            drawdown_pct=0.0,
             feed_gap_ms=0,
             spread_bps=0.0,
             toxicity_score_bps=0.0,
@@ -186,7 +186,7 @@ class TestStepTransition:
         driver.step(
             ts_ms=_BASE_TS,
             kill_switch_active=False,
-            drawdown_breached=False,
+            drawdown_pct=0.0,
             feed_gap_ms=0,
             spread_bps=0.0,
             toxicity_score_bps=0.0,
@@ -201,7 +201,7 @@ class TestStepTransition:
         event = driver.step(
             ts_ms=_BASE_TS,
             kill_switch_active=False,
-            drawdown_breached=False,
+            drawdown_pct=0.0,
             feed_gap_ms=0,
             spread_bps=0.0,
             toxicity_score_bps=0.0,
@@ -222,7 +222,7 @@ class TestStepStateGauge:
         driver.step(
             ts_ms=_BASE_TS,
             kill_switch_active=False,
-            drawdown_breached=False,
+            drawdown_pct=0.0,
             feed_gap_ms=0,
             spread_bps=0.0,
             toxicity_score_bps=0.0,
@@ -237,7 +237,7 @@ class TestStepStateGauge:
         driver.step(
             ts_ms=_BASE_TS,
             kill_switch_active=False,
-            drawdown_breached=False,
+            drawdown_pct=0.0,
             feed_gap_ms=0,
             spread_bps=0.0,
             toxicity_score_bps=0.0,
@@ -264,7 +264,7 @@ class TestDurationGauge:
         driver.step(
             ts_ms=10_000,
             kill_switch_active=False,
-            drawdown_breached=False,
+            drawdown_pct=0.0,
             feed_gap_ms=0,
             spread_bps=0.0,
             toxicity_score_bps=0.0,
@@ -280,7 +280,7 @@ class TestDurationGauge:
         driver.step(
             ts_ms=5_000,
             kill_switch_active=False,
-            drawdown_breached=False,
+            drawdown_pct=0.0,
             feed_gap_ms=0,
             spread_bps=0.0,
             toxicity_score_bps=0.0,
@@ -297,7 +297,7 @@ class TestDurationGauge:
         driver.step(
             ts_ms=5_000,
             kill_switch_active=False,
-            drawdown_breached=False,
+            drawdown_pct=0.0,
             feed_gap_ms=0,
             spread_bps=0.0,
             toxicity_score_bps=0.0,
@@ -317,7 +317,7 @@ class TestDurationGauge:
         driver.step(
             ts_ms=_BASE_TS,
             kill_switch_active=False,
-            drawdown_breached=False,
+            drawdown_pct=0.0,
             feed_gap_ms=0,
             spread_bps=0.0,
             toxicity_score_bps=0.0,
@@ -389,7 +389,7 @@ class TestDriverState:
         driver.step(
             ts_ms=_BASE_TS,
             kill_switch_active=False,
-            drawdown_breached=False,
+            drawdown_pct=0.0,
             feed_gap_ms=0,
             spread_bps=0.0,
             toxicity_score_bps=0.0,
@@ -421,7 +421,7 @@ class TestDriverEvidence:
         driver.step(
             ts_ms=_BASE_TS,
             kill_switch_active=True,
-            drawdown_breached=False,
+            drawdown_pct=0.0,
             feed_gap_ms=0,
             spread_bps=0.0,
             toxicity_score_bps=0.0,
@@ -447,7 +447,7 @@ class TestDriverEvidence:
         driver.step(
             ts_ms=_BASE_TS,
             kill_switch_active=True,
-            drawdown_breached=False,
+            drawdown_pct=0.0,
             feed_gap_ms=0,
             spread_bps=0.0,
             toxicity_score_bps=0.0,
@@ -469,7 +469,7 @@ class TestDriverEvidence:
         driver.step(
             ts_ms=_BASE_TS,
             kill_switch_active=False,
-            drawdown_breached=False,
+            drawdown_pct=0.0,
             feed_gap_ms=0,
             spread_bps=0.0,
             toxicity_score_bps=0.0,

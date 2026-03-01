@@ -1332,10 +1332,18 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - ARTIFACT_VERSION bumped: fsm_evidence_v1 → fsm_evidence_v2
     - Removed v1 signal fields: feed_stale (bool), toxicity_level (str "LOW"/"MID"/"HIGH")
     - Added v2 signal fields: feed_gap_ms (int), spread_bps (float), toxicity_score_bps (float)
-    - Unchanged fields: kill_switch_active, drawdown_breached, position_reduced, operator_override
+    - Unchanged fields (at PR-A2b): kill_switch_active, drawdown_breached, position_reduced, operator_override
     - Migration: any parser matching feed_stale= or toxicity_level= must switch to feed_gap_ms=/spread_bps=/toxicity_score_bps=
     - CANON_TEXT + CANON_SHA256 updated in test_fsm_evidence.py
     - Deferred: drawdown_pct (PR-A3), position_notional (PR-A4), regime (PR-A5)
+  - PR-A3: drawdown_breached → drawdown_pct (numeric DD fraction):
+    - OrchestratorInputs: drawdown_breached: bool → drawdown_pct: float (0.20 = 20%)
+    - FsmConfig: added drawdown_threshold_pct: float = 0.20 (was DrawdownGuardV1Config default)
+    - FSM helper _is_dd_breached(inp) owns threshold decision (>= comparison)
+    - DrawdownGuardV1: added current_drawdown_pct property (float accessor)
+    - Engine: passes guard.current_drawdown_pct instead of guard.is_drawdown
+    - Evidence v2 signal: drawdown_breached → drawdown_pct (CANON_TEXT + SHA256 updated)
+    - Deferred: position_notional (PR-A4), regime (PR-A5)
 - [DONE] Launch-14 (P1): SmartOrderRouter (existing=None scope) — COMPLETE (main @ `e5b177c`).
   - PR0 (#219) — Spec/decision matrix + invariants (merged @ `8ff7339`)
   - PR1 (#220) — Router core + table-driven tests (merged @ `d98008d`)

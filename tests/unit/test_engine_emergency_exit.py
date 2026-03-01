@@ -106,7 +106,7 @@ class TestEngineEmergencyExit:
         port = NoOpExchangePort()
         dd_config = DrawdownGuardV1Config(portfolio_dd_limit=Decimal("0.05"))
         dd_guard = DrawdownGuardV1(dd_config)
-        fsm = OrchestratorFSM(config=FsmConfig())
+        fsm = OrchestratorFSM(config=FsmConfig(drawdown_threshold_pct=0.05))
         fsm_driver = FsmDriver(fsm)
 
         engine = _make_engine(port, dd_guard, fsm_driver)
@@ -117,7 +117,7 @@ class TestEngineEmergencyExit:
         port = NoOpExchangePort()
         dd_config = DrawdownGuardV1Config(portfolio_dd_limit=Decimal("0.05"))
         dd_guard = DrawdownGuardV1(dd_config)
-        fsm = OrchestratorFSM(config=FsmConfig())
+        fsm = OrchestratorFSM(config=FsmConfig(drawdown_threshold_pct=0.05))
         fsm_driver = FsmDriver(fsm)
 
         engine = _make_engine(port, dd_guard, fsm_driver)
@@ -135,7 +135,7 @@ class TestEngineEmergencyExit:
         port = NoOpExchangePort()
         dd_config = DrawdownGuardV1Config(portfolio_dd_limit=Decimal("0.05"))
         dd_guard = DrawdownGuardV1(dd_config)
-        fsm = OrchestratorFSM(config=FsmConfig())
+        fsm = OrchestratorFSM(config=FsmConfig(drawdown_threshold_pct=0.05))
         fsm_driver = FsmDriver(fsm)
 
         engine = _make_engine(port, dd_guard, fsm_driver, symbol_whitelist=["BTCUSDT"])
@@ -173,7 +173,7 @@ class TestEngineEmergencyExit:
         port = NoOpExchangePort()
         dd_config = DrawdownGuardV1Config(portfolio_dd_limit=Decimal("0.05"))
         dd_guard = DrawdownGuardV1(dd_config)
-        fsm = OrchestratorFSM(config=FsmConfig())
+        fsm = OrchestratorFSM(config=FsmConfig(drawdown_threshold_pct=0.05))
         fsm_driver = FsmDriver(fsm)
 
         engine = _make_engine(port, dd_guard, fsm_driver, symbol_whitelist=["BTCUSDT"])

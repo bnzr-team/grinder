@@ -74,7 +74,7 @@ class OrchestratorInputs:
 
     ts_ms: int
     kill_switch_active: bool
-    drawdown_breached: bool
+    drawdown_pct: float  # portfolio drawdown as fraction (0.20 = 20%)
     feed_gap_ms: int  # ms since last snapshot for this symbol (0 = first tick)
     spread_bps: float  # current bid-ask spread in basis points
     toxicity_score_bps: float  # price impact in bps (0.0 = no impact)
@@ -96,6 +96,9 @@ class FsmConfig:
     feed_stale_threshold_ms: int = 5_000  # feed gap above this → stale
     spread_spike_threshold_bps: float = 50.0  # spread above this → MID toxicity
     toxicity_high_threshold_bps: float = 500.0  # price impact above this → HIGH toxicity
+    drawdown_threshold_pct: float = (
+        0.20  # DD fraction above this → EMERGENCY (was DrawdownGuardV1Config default)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -245,7 +248,7 @@ class OrchestratorFSM:
             return (SystemState.EMERGENCY, TransitionReason.KILL_SWITCH)
         if inp.operator_override == "EMERGENCY":
             return (SystemState.EMERGENCY, TransitionReason.OPERATOR_EMERGENCY)
-        if inp.drawdown_breached:
+        if self._is_dd_breached(inp):
             return (SystemState.EMERGENCY, TransitionReason.DD_BREACH)
         return None
 
@@ -265,6 +268,10 @@ class OrchestratorFSM:
 
     def _is_toxic_low(self, inp: OrchestratorInputs) -> bool:
         return not self._is_toxic_mid(inp) and not self._is_toxic_high(inp)
+
+    def _is_dd_breached(self, inp: OrchestratorInputs) -> bool:
+        """Drawdown breached if pct >= threshold (was bool drawdown_breached)."""
+        return inp.drawdown_pct >= self._config.drawdown_threshold_pct
 
     # ------------------------------------------------------------------
     # State-specific evaluation (priority-ordered)
@@ -348,6 +355,6 @@ class OrchestratorFSM:
         self, inp: OrchestratorInputs
     ) -> tuple[SystemState, TransitionReason] | None:
         """EMERGENCY -> PAUSED only when position reduced. No auto-recovery."""
-        if inp.position_reduced and not inp.kill_switch_active and not inp.drawdown_breached:
+        if inp.position_reduced and not inp.kill_switch_active and not self._is_dd_breached(inp):
             return (SystemState.PAUSED, TransitionReason.POSITION_REDUCED)
         return None

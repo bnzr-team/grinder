@@ -216,6 +216,14 @@ class DrawdownGuardV1:
         """Check if guard is in DRAWDOWN state."""
         return self._state == GuardState.DRAWDOWN
 
+    @property
+    def current_drawdown_pct(self) -> float:
+        """Current portfolio drawdown as fraction (0.20 = 20%).
+
+        Returns 0.0 if no update has been called yet.
+        """
+        return float(self._portfolio_dd_pct)
+
     def update(
         self,
         *,

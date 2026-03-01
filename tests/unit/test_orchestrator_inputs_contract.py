@@ -16,7 +16,12 @@ import pytest
 from grinder.core import SystemState
 from grinder.gating.toxicity_gate import ToxicityGate
 from grinder.live.fsm_driver import build_inputs
-from grinder.live.fsm_orchestrator import FsmConfig, OrchestratorFSM, OrchestratorInputs
+from grinder.live.fsm_orchestrator import (
+    FsmConfig,
+    OrchestratorFSM,
+    OrchestratorInputs,
+    TransitionReason,
+)
 
 # ===========================================================================
 # 1. Meta-test: FsmConfig defaults match prior hardcodes
@@ -31,6 +36,7 @@ class TestFsmConfigDefaults:
         assert config.feed_stale_threshold_ms == 5_000  # was engine GRINDER_FEED_STALE_MS default
         assert config.spread_spike_threshold_bps == 50.0  # was ToxicityGate.max_spread_bps
         assert config.toxicity_high_threshold_bps == 500.0  # was ToxicityGate.max_price_impact_bps
+        assert config.drawdown_threshold_pct == 0.20  # was DrawdownGuardV1Config default
         assert config.cooldown_ms == 30_000  # unchanged
 
 
@@ -46,7 +52,7 @@ class TestOrchestratorInputsGolden:
         inp = OrchestratorInputs(
             ts_ms=1000,
             kill_switch_active=False,
-            drawdown_breached=False,
+            drawdown_pct=0.0,
             feed_gap_ms=0,
             spread_bps=0.0,
             toxicity_score_bps=0.0,
@@ -61,7 +67,7 @@ class TestOrchestratorInputsGolden:
         inp = OrchestratorInputs(
             ts_ms=2000,
             kill_switch_active=False,
-            drawdown_breached=False,
+            drawdown_pct=0.0,
             feed_gap_ms=10_000,
             spread_bps=80.0,
             toxicity_score_bps=600.0,
@@ -81,12 +87,38 @@ class TestOrchestratorInputsGolden:
 class TestBuildInputsValidation:
     """build_inputs() rejects negative numeric fields."""
 
+    def test_negative_drawdown_pct_raises(self) -> None:
+        with pytest.raises(ValueError, match=r"drawdown_pct must be in \[0\.0, 1\.0\]"):
+            build_inputs(
+                ts_ms=1000,
+                kill_switch_active=False,
+                drawdown_pct=-0.01,
+                feed_gap_ms=0,
+                spread_bps=0.0,
+                toxicity_score_bps=0.0,
+                position_reduced=False,
+                operator_override=None,
+            )
+
+    def test_drawdown_pct_above_one_raises(self) -> None:
+        with pytest.raises(ValueError, match=r"drawdown_pct must be in \[0\.0, 1\.0\]"):
+            build_inputs(
+                ts_ms=1000,
+                kill_switch_active=False,
+                drawdown_pct=1.01,
+                feed_gap_ms=0,
+                spread_bps=0.0,
+                toxicity_score_bps=0.0,
+                position_reduced=False,
+                operator_override=None,
+            )
+
     def test_negative_feed_gap_ms_raises(self) -> None:
         with pytest.raises(ValueError, match="feed_gap_ms must be >= 0"):
             build_inputs(
                 ts_ms=1000,
                 kill_switch_active=False,
-                drawdown_breached=False,
+                drawdown_pct=0.0,
                 feed_gap_ms=-1,
                 spread_bps=0.0,
                 toxicity_score_bps=0.0,
@@ -99,7 +131,7 @@ class TestBuildInputsValidation:
             build_inputs(
                 ts_ms=1000,
                 kill_switch_active=False,
-                drawdown_breached=False,
+                drawdown_pct=0.0,
                 feed_gap_ms=0,
                 spread_bps=-1.0,
                 toxicity_score_bps=0.0,
@@ -112,7 +144,7 @@ class TestBuildInputsValidation:
             build_inputs(
                 ts_ms=1000,
                 kill_switch_active=False,
-                drawdown_breached=False,
+                drawdown_pct=0.0,
                 feed_gap_ms=0,
                 spread_bps=0.0,
                 toxicity_score_bps=-1.0,
@@ -125,7 +157,7 @@ class TestBuildInputsValidation:
             build_inputs(
                 ts_ms=1000,
                 kill_switch_active=False,
-                drawdown_breached=False,
+                drawdown_pct=0.0,
                 feed_gap_ms=0,
                 spread_bps=0.0,
                 toxicity_score_bps=0.0,
@@ -149,7 +181,7 @@ def _safe_inputs(
     return OrchestratorInputs(
         ts_ms=ts_ms,
         kill_switch_active=False,
-        drawdown_breached=False,
+        drawdown_pct=0.0,
         feed_gap_ms=feed_gap_ms,
         spread_bps=spread_bps,
         toxicity_score_bps=toxicity_score_bps,
@@ -204,6 +236,39 @@ class TestFsmBoundaryFromConfig:
         event = fsm.tick(inp_above)
         assert event is not None
         assert event.to_state == SystemState.PAUSED
+
+    def test_drawdown_boundary_from_config(self) -> None:
+        config = FsmConfig()
+        fsm = OrchestratorFSM(state=SystemState.ACTIVE, state_enter_ts=1000, config=config)
+
+        # Just below threshold → ACTIVE (>= required)
+        inp_below = OrchestratorInputs(
+            ts_ms=2000,
+            kill_switch_active=False,
+            drawdown_pct=config.drawdown_threshold_pct - 0.01,
+            feed_gap_ms=0,
+            spread_bps=0.0,
+            toxicity_score_bps=0.0,
+            position_reduced=False,
+            operator_override=None,
+        )
+        assert fsm.tick(inp_below) is None
+
+        # At threshold → EMERGENCY (>= triggers)
+        inp_at = OrchestratorInputs(
+            ts_ms=3000,
+            kill_switch_active=False,
+            drawdown_pct=config.drawdown_threshold_pct,
+            feed_gap_ms=0,
+            spread_bps=0.0,
+            toxicity_score_bps=0.0,
+            position_reduced=False,
+            operator_override=None,
+        )
+        event = fsm.tick(inp_at)
+        assert event is not None
+        assert event.to_state == SystemState.EMERGENCY
+        assert event.reason == TransitionReason.DD_BREACH
 
     def test_feed_gap_zero_is_not_stale(self) -> None:
         """feed_gap_ms=0 (first tick) is never stale, regardless of threshold."""
