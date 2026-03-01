@@ -32,6 +32,7 @@ from grinder.ml.metrics import ml_metrics_to_prometheus_lines
 from grinder.observability.fill_metrics import get_fill_metrics
 from grinder.observability.latency_metrics import get_http_metrics
 from grinder.reconcile.metrics import get_reconcile_metrics
+from grinder.risk.emergency_exit_metrics import get_emergency_exit_metrics
 
 
 @dataclass
@@ -169,6 +170,9 @@ class MetricsBuilder:
 
         # Fill model shadow metrics (PR-C4a)
         lines.extend(self._build_fill_model_metrics())
+
+        # Emergency exit metrics (RISK-EE-1)
+        lines.extend(self._build_emergency_exit_metrics())
 
         return "\n".join(lines)
 
@@ -352,6 +356,11 @@ class MetricsBuilder:
     def _build_fill_model_metrics(self) -> list[str]:
         """Build fill model shadow metrics (PR-C4a)."""
         return fill_model_metrics_to_prometheus_lines()
+
+    def _build_emergency_exit_metrics(self) -> list[str]:
+        """Build emergency exit metrics (RISK-EE-1)."""
+        ee_metrics = get_emergency_exit_metrics()
+        return ee_metrics.to_prometheus_lines()
 
 
 class _BuilderHolder:

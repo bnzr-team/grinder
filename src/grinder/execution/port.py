@@ -227,6 +227,35 @@ class NoOpExchangePort:
         """Fetch account snapshot (stub - returns empty snapshot)."""
         return AccountSnapshot(positions=(), open_orders=(), ts=0, source="stub")
 
+    def cancel_all_orders(self, symbol: str) -> int:
+        """Cancel all open orders for symbol (stub).
+
+        Satisfies EmergencyExitPort protocol for testing.
+        """
+        open_orders = self.fetch_open_orders(symbol)
+        for order in open_orders:
+            self.cancel_order(order.order_id)
+        return len(open_orders)
+
+    def place_market_order(
+        self,
+        symbol: str,
+        side: OrderSide,
+        quantity: Decimal,  # noqa: ARG002
+        reduce_only: bool = False,  # noqa: ARG002
+    ) -> str:
+        """Place market order (stub).
+
+        Satisfies EmergencyExitPort protocol for testing.
+        Returns synthetic order ID without modifying positions (positions are always []).
+        """
+        self._order_counter += 1
+        return f"{symbol}:market:{side.value}:{self._order_counter}"
+
+    def get_positions(self, symbol: str) -> list[PositionSnap]:  # noqa: ARG002
+        """Get positions for symbol (stub - always empty)."""
+        return []
+
     def reset(self) -> None:
         """Reset all state (for testing)."""
         self._orders.clear()
