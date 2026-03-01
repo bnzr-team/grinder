@@ -1317,6 +1317,11 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - PR3 (#215) — Real loop wiring + runtime signals (merged @ `232d07b`)
   - PR4 (#216) — Operator override normalization + runbook (merged @ `6c37baf`)
   - PR5 (#217) — Deterministic evidence artifacts (merged @ `7793045`)
+  - PR-A1: Wire real FSM inputs (feed_stale + toxicity_level):
+    - feed_stale: per-symbol snapshot gap detection (GRINDER_FEED_STALE_MS, default 5000ms)
+    - toxicity_level: ToxicityGate mapping (SPREAD_SPIKE→MID, PRICE_IMPACT_HIGH→HIGH)
+    - run_trading.py: FSM+DrawdownGuard+ToxicityGate (GRINDER_FSM_ENABLED, default false)
+    - Deferred: OrchestratorInputs type alignment (bool/enum → float/int) → PR-A2
 - [DONE] Launch-14 (P1): SmartOrderRouter (existing=None scope) — COMPLETE (main @ `e5b177c`).
   - PR0 (#219) — Spec/decision matrix + invariants (merged @ `8ff7339`)
   - PR1 (#220) — Router core + table-driven tests (merged @ `d98008d`)
