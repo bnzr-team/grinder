@@ -2,8 +2,8 @@
 
 > **SSOT** for "when is this product launched?" and "what remains?"
 >
-> Last updated: 2026-02-28
-> Main: `2aeda58` (after LAUNCH-SSOT-1, PR #306)
+> Last updated: 2026-03-02
+> Main: `d7b778f` (after PR #331 -- AccountSync mainnet pipeline complete)
 
 ---
 
@@ -192,32 +192,27 @@ bash scripts/smoke_futures_no_orders.sh
 |---|------|---------|--------|
 | C1 | Runbook 32 read_only rehearsal (NoOp) | 32_MAINNET_ROLLOUT Phase 0–2 | DONE |
 | C2 | Runbook 32 live_trade+armed rehearsal (NoOp) | 32_MAINNET_ROLLOUT Phase 3–5 | DONE |
-| C3 | Runbook 32 canary (1 symbol, real BinanceFuturesPort) | 32_MAINNET_ROLLOUT "Canary by Symbol" | TODO |
-| C4 | Runbook 32 full rollout (all symbols, ACTIVE) | 32_MAINNET_ROLLOUT "Full Rollout" | TODO |
+| C3 | Runbook 32 canary (1 symbol, real BinanceFuturesPort) | 32_MAINNET_ROLLOUT "Canary by Symbol" | DONE (2026-02-28) |
+| C4 | Runbook 32 full rollout (BTCUSDT+ETHUSDT, ACTIVE) | 32_MAINNET_ROLLOUT "Full Rollout" | IN PROGRESS |
 
-**C3 is the next action.** Everything before it is code-complete.
+**C3 PASSED** (2026-02-28): BTCUSDT futures order placed and cancelled on mainnet. C4 in progress (accumulative 24h observation).
 
 ### Post-launch (not blocking GO — tracked in POST_LAUNCH_ROADMAP.md)
 
 All post-launch work lives in `docs/POST_LAUNCH_ROADMAP.md` § 3 (P2 Backlog, 12 gaps).
 It is explicitly **out of scope** for Launch v1.
 
-### P0 Blocker: RISK-EE-1 (Emergency Exit)
+### P0 Blocker: RISK-EE-1 (Emergency Exit) -- RESOLVED
 
-**C4 is PAUSED until RISK-EE-1 is implemented and merged.**
+> **Historical note:** C4 was paused on 2026-02-28 because the system could not auto-close
+> underwater positions. Resolved by PR #316 (`EmergencyExitExecutor`, merged @ `87c37db`).
+> C4 resumed with `GRINDER_EMERGENCY_EXIT_ENABLED=true`.
 
-During C4 Segment 1 (2026-02-28), the grid held a short position for 5h+ without any
-position cycling (no fills, no closes). The system cannot auto-close underwater positions
-because `10_RISK_SPEC.md` § 10.6 (Emergency Exit Sequence) is not implemented.
-This makes 24h observation invalid as a stability validator.
-
-| Gap | Spec ref | What exists | What's missing | Priority |
-|-----|----------|-------------|----------------|----------|
-| Emergency Exit (auto-close positions) | `10_RISK_SPEC.md` § 10.6 | Prevention gates (DrawdownGuard, KillSwitch, CLG, CB) block new orders | `emergency_exit()` sequence: cancel all + MARKET IOC reduce_only + verify closed + FSM PAUSED | **P0 blocker** |
-| FSM position_reduced wiring | `08_STATE_MACHINE.md` | `position_reduced` field in OrchestratorInputs; EMERGENCY→PAUSED transition | Hardcoded `False` in `engine.py:451`; position reducer not written | **P0 blocker** |
-| Per-RT loss limit | `15_CONSTANTS.md` § 4.3 | `LOSS_RT_MAX_BPS = -50` constant defined | `RiskMonitor.record_round_trip()` not implemented; constant unused in code | P2 (deferred) |
-
-**Sequence:** RISK-EE-1 PR → merge → restart C4 with `GRINDER_EMERGENCY_EXIT_ENABLED=true` → accumulate 24h.
+| Gap | Spec ref | Resolution | PR |
+|-----|----------|------------|----|
+| Emergency Exit (auto-close positions) | `10_RISK_SPEC.md` § 10.6 | `EmergencyExitExecutor`: cancel all + MARKET IOC reduce_only + bounded verify + FSM PAUSED | #316 @ `87c37db` |
+| FSM position_reduced wiring | `08_STATE_MACHINE.md` | Replaced by `position_notional_usd` (float, from AccountSyncer). A-series PRs #317-#320. | #321 @ `86a7c1c` (A1), #327 (A4) |
+| Per-RT loss limit | `15_CONSTANTS.md` § 4.3 | Deferred to P2. `LOSS_RT_MAX_BPS = -50` constant defined but unused. | — |
 
 ---
 
@@ -274,8 +269,8 @@ All ceremony evidence is recorded in [`docs/LAUNCH_LOG.md`](LAUNCH_LOG.md) with 
 
 | Ceremony | Owner | Preconditions | Runbook ref | Status |
 |----------|-------|---------------|-------------|--------|
-| C3 Canary | Operator | D1–D15 DONE, C1–C2 DONE, API creds, mainnet access | RB32 Phase 2–3 | NOT STARTED |
-| C4 Full rollout | Operator | C3 DONE (with evidence in LAUNCH_LOG) | RB32 Phase 4–5 | NOT STARTED |
+| C3 Canary | Operator | D1–D15 DONE, C1–C2 DONE, API creds, mainnet access | RB32 Phase 2–3 | DONE (2026-02-28). Evidence: PR #310, #311. |
+| C4 Full rollout | Operator | C3 DONE, RISK-EE-1 DONE | RB32 Phase 4–5 | IN PROGRESS (BTCUSDT+ETHUSDT, accumulative 24h) |
 
 ### C3 — Canary (1 symbol, real BinanceFuturesPort)
 
@@ -359,8 +354,7 @@ See `docs/runbooks/32_MAINNET_ROLLOUT_FILL_PROB.md` Phase 4–5 for full config.
 
 **DONE when:** 24h stable with full enforcement, all evidence in LAUNCH_LOG.md, operator sign-off. **This is Launch v1.**
 
-**Launch v1 DoD now REQUIRES auto-close of positions (RISK-EE-1).** C4 is paused until
-`EmergencyExitExecutor` is implemented, merged, and enabled. See P0 Blocker table above.
+**RISK-EE-1 resolved** (PR #316). C4 resumed with `GRINDER_EMERGENCY_EXIT_ENABLED=true`.
 
 ---
 
@@ -370,7 +364,7 @@ See `docs/runbooks/32_MAINNET_ROLLOUT_FILL_PROB.md` Phase 4–5 for full config.
 > `docs/POST_LAUNCH_ROADMAP.md` Section 3 (P2 Backlog).
 >
 > Exception 1: CI/tooling fixes that do not touch `src/` (e.g., acceptance packet unicode fix).
-> Exception 2: **RISK-EE-1 (P0 blocker)** — required before C4 can resume.
+> Exception 2: **RISK-EE-1 (P0 blocker)** — resolved by PR #316.
 
 ---
 
@@ -378,6 +372,7 @@ See `docs/runbooks/32_MAINNET_ROLLOUT_FILL_PROB.md` Phase 4–5 for full config.
 
 | Date | Change |
 |------|--------|
+| 2026-03-02 | SSOT refresh (main @ `d7b778f`). C3 DONE, C4 IN PROGRESS. RISK-EE-1 RESOLVED (PR #316). AccountSync mainnet pipeline (PRs #329-331). |
 | 2026-02-28 | Add ceremony tracker (C3/C4), evidence requirements, scope rule. |
 | 2026-02-28 | RISK-EE-1 escalated P1→P0 blocker. C4 paused until emergency exit implemented. |
 | 2026-02-28 | Initial version. All D1–D15 met. C1–C2 ceremonies done. |

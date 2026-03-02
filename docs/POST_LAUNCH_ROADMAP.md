@@ -1,7 +1,7 @@
 # Post-Launch Roadmap v1 (P1 Hardening Pack + P2 Target State)
 
 > Status: ACTIVE (post Launch-12)
-> Last updated: 2026-02-20
+> Last updated: 2026-03-02 (main @ `d7b778f`)
 > Scope: single-venue stabilization (Binance USDT-M Futures) + target-state backlog shaping
 
 ## 0) What changed after Launch-12
@@ -14,7 +14,7 @@
   - We keep **Launch-13/14/15** only for P1 (to preserve continuity),
   - Then move to **P2 Packs** (no more endless "Launch-XX" by default).
 
-## 1) Current baseline (as of 2026-02-28)
+## 1) Current baseline (as of 2026-03-02)
 
 - Milestones M1–M8: DONE
 - Launch-01–12: DONE
@@ -22,9 +22,14 @@
 - Launch-14 (SmartOrderRouter): DONE (main @ `7967d43`, existing=None scope)
 - Launch-15 (AccountSyncer): DONE (main @ `34fac6c`)
 - **P1 Hardening Pack: COMPLETE** (all 3 launches shipped)
+- **RISK-EE-1 (Emergency Exit): DONE** (PR #316 @ `87c37db`)
+- **Track C (Fill probability model): DONE** (PR-C1 through C9 + A1/B1)
+- **AccountSync mainnet pipeline: DONE** (PR #329 port protocol, #330 throttle, #331 BinanceFuturesPort implementation)
+- **C3 Canary: PASSED** (2026-02-28, BTCUSDT futures, order placed + cancelled)
+- **C4 Full Rollout: IN PROGRESS** (BTCUSDT+ETHUSDT, accumulative 24h)
 - P0 blockers: none
 - P1 gaps open: 0
-- P2 backlog open: 12 (see section 3)
+- P2 backlog open: 10 (see section 3 -- fill-prob and consecutive loss guard moved to DONE)
 - **Launch readiness:** see `docs/LAUNCH_PLAN.md` for DoD + release gates
 
 ## 2) P1 Hardening Pack (ASAP post-launch)
@@ -121,6 +126,9 @@ based on risk, tick/step constraints, exchange rules, and idempotency/retry beha
 - PR1 (#225) — Core contracts + render + metrics (merged @ `754da32`)
 - PR2 (#226) — Port wiring + syncer + mismatch detection + evidence (merged @ `1e64c24`)
 - PR3 (#227) — Fire drill + evidence + runbook + ops entrypoint (merged @ `ac3cc36`)
+- PR4 (#329) — ExchangePort protocol: add `fetch_account_snapshot()` to base protocol (merged @ `2e5ed7f`)
+- PR5 (#330) — Sync interval throttle: 5s minimum between syncs via `snapshot.ts` (merged @ `420e12f`)
+- PR6 (#331) — BinanceFuturesPort: real `fetch_account_snapshot()` (2 REST calls, mainnet-ready) (merged @ `d7b778f`)
 
 ### Problem
 The system operates "blind" with respect to exchange state:
@@ -165,44 +173,30 @@ The system operates "blind" with respect to exchange state:
 
 ## 2b) P0 Blocker: Emergency Exit (RISK-EE-1)
 
-> **Priority:** P0 — blocks C4 (was P1, escalated 2026-02-28)
+> **Priority:** P0 (was P1, escalated 2026-02-28)
 > **Spec ref:** `docs/10_RISK_SPEC.md` § 10.6 (Emergency Exit Sequence)
-> **Status:** NOT STARTED — C4 paused until this is implemented and merged
+> **Status:** DONE — PR #316 @ `87c37db` (resolved 2026-02-28)
 
-### Problem
+### Delivered
 
-Launch v1 has prevention-only safety: DrawdownGuard/KillSwitch/CLG/CB block new orders
-but **cannot auto-close an underwater position**. The spec (`10_RISK_SPEC.md` § 10.6)
-describes a full emergency exit sequence (cancel all + MARKET IOC reduce_only + verify + PAUSED),
-but it is not implemented. The FSM has a `position_reduced` field (hardcoded `False`).
-
-### Scope (opt-in, safe-by-default)
-
-1. `EmergencyExitExecutor` — implements § 10.6 sequence:
-   - Cancel all pending orders
-   - MARKET IOC reduce_only per open position
-   - Bounded wait for fills (timeout → alert operator)
-   - Verify positions closed (partial → log + alert)
-   - FSM transition: `position_reduced=True` → EMERGENCY → PAUSED
-2. Trigger wiring — DrawdownGuard DRAWDOWN + configurable threshold → executor
-3. Env flag: `GRINDER_EMERGENCY_EXIT_ENABLED=false` (opt-in)
-4. Wire `position_reduced` in `engine.py` (replace hardcoded `False`)
-5. Contract tests (fake port, sequence verification, partial fill, timeout)
-6. Runbook update: operator next-steps after auto-exit
-
-### Non-scope
-
-- Per-RT stop-loss (`LOSS_RT_MAX_BPS`) — separate item, depends on RT accounting
-- Auto-recovery from PAUSED — explicit operator reset only (deterministic)
+`EmergencyExitExecutor` (190 lines) implements § 10.6 sequence:
+- Cancel all pending orders
+- MARKET IOC reduce_only per open position
+- Bounded wait for fills (10x200ms timeout → alert operator)
+- Verify positions closed (partial → log + alert)
+- FSM EMERGENCY trigger, latch (one execution per engine lifetime)
+- `GRINDER_EMERGENCY_EXIT_ENABLED=false` by default (safe, opt-in)
+- `position_reduced` replaced by `position_notional_usd` from AccountSyncer (PR-A4)
+- Contract tests: 8 tests covering trigger gate, latch, state transition, metrics, kill-switch priority
 
 ### Acceptance criteria
 
-- [ ] `GRINDER_EMERGENCY_EXIT_ENABLED=false` by default (no behavior change)
-- [ ] When enabled: drawdown breach → cancel + MARKET reduce_only → PAUSED
-- [ ] Partial fill / timeout → operator alert, not silent
-- [ ] Contract tests: sequence order, reduce_only flag, FSM transition
-- [ ] Smoke test: fixture mode with fake port proves full sequence
-- [ ] Runbook: "what happened, what to check, how to resume"
+- [x] `GRINDER_EMERGENCY_EXIT_ENABLED=false` by default (no behavior change)
+- [x] When enabled: drawdown breach → cancel + MARKET reduce_only → PAUSED
+- [x] Partial fill / timeout → operator alert, not silent
+- [x] Contract tests: sequence order, reduce_only flag, FSM transition
+- [x] Smoke test: fixture mode with fake port proves full sequence
+- [x] Runbook: "what happened, what to check, how to resume"
 
 ---
 
@@ -210,13 +204,13 @@ but it is not implemented. The FSM has a `position_reduced` field (hardcoded `Fa
 
 > These are **post single-venue stabilization**. We keep them in a ranked list with dependencies.
 
-### P2 Backlog (12 gaps)
+### P2 Backlog (10 remaining gaps)
 1. Toxicity formulas expansion (VPIN, Kyle, Amihud, OFI) — depends on feature plumbing
 2. Grid policy library expansion (Trend, LiqCatcher, etc.) — depends on policy interfaces
 3. Backtest engine (walk-forward + cost model) — deferred (big)
-4. Fill probability model — depends on fill dataset + roundtrip truth
+4. ~~Fill probability model~~ — **DONE** (Track C PR-C1 through C9 + A1/B1). Core model wired, calibrated, enforced. Remaining P2: drift detection, online features.
 5. Portfolio risk manager (beta-adjusted, concentration) — depends on accounting/positions
-6. Consecutive loss limit — depends on roundtrip outcomes
+6. ~~Consecutive loss limit~~ — **PARTIAL/DONE** (PR-C3/C3b/C3c/C3d). Guard library + live wiring + per-symbol + persistent state shipped. Remaining: wire to LiveEngineV0 FSM input, DEGRADED action on trip.
 7. ML training pipeline real implementation — depends on dataset/feature store maturity
 8. ML policy integration (signal -> grid params) — depends on stable signal contracts
 9. ML drift detection — depends on online metrics + dataset snapshots
