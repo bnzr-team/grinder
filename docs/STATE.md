@@ -11,8 +11,8 @@ Post-launch roadmap (P1 hardening + P2 backlog): `docs/POST_LAUNCH_ROADMAP.md`.
 All 15 launch criteria (D1–D15) are **DONE**. See `docs/LAUNCH_PLAN.md` for details.
 
 Next actions are **operational** (not code):
-- C3: Canary (1 symbol, real BinanceFuturesPort) — TODO
-- C4: Full rollout (all symbols, ACTIVE) — TODO
+- C3: Canary (1 symbol, real BinanceFuturesPort) — DONE (2026-02-28, BTCUSDT futures, PR #310 evidence)
+- C4: Full rollout (BTCUSDT+ETHUSDT, ACTIVE) — IN PROGRESS (accumulative 24h)
 
 **Note on H-labels:** Throughout this document, labels like `(H1)`, `(H2)`, etc. are informal shorthand for connector hardening ADRs:
 - H1 = ADR-024 (Timeouts + Clean Shutdown)
@@ -1378,6 +1378,9 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - PR1 (#225) — Core contracts + render + metrics (merged @ `754da32`)
   - PR2 (#226) — Port wiring + syncer + mismatch detection + evidence (merged @ `1e64c24`)
   - PR3 (#227) — Fire drill + evidence + runbook + ops entrypoint (merged @ `ac3cc36`)
+  - PR4 (#329) — ExchangePort protocol: add `fetch_account_snapshot()` (merged @ `2e5ed7f`)
+  - PR5 (#330) — Sync interval throttle: 5s minimum via `snapshot.ts` (merged @ `420e12f`)
+  - PR6 (#331) — BinanceFuturesPort: real `fetch_account_snapshot()`, 2 REST calls (merged @ `d7b778f`)
 - [DONE] P2 triage PR1: alert coverage for Launch-13/14/15 metrics + runbook wiring. 7 alert rules (FsmBadStateTooLong, FsmActionBlockedSpike, SorBlockedSpike, SorNoopSpike, AccountSyncStale, AccountSyncErrors, AccountSyncMismatchSpike) + triage wiring in RB02. Zero src/ changes.
 - [DONE] P2 triage PR3: env parsing unified. New `src/grinder/env_parse.py` SSOT with parse_bool/parse_int/parse_csv/parse_enum. Migrated 5 triage-flow call sites (fsm_evidence, account evidence, live engine SOR/sync/override, reconcile_loop). strict=True raises ConfigError, strict=False warns+default.
 - [DONE] P2 triage PR2: observability quick panels + triage discoverability (Launch-13/14/15). Added FSM/SOR/AccountSync panel definitions to OBSERVABILITY_STACK.md + consolidated "Observability Quick Check" in RB02. Zero src/ changes.

@@ -1,7 +1,7 @@
 # 15 -- AccountSyncer Spec (Positions + Open Orders)
 
-> **Status:** DRAFT (Launch-15 PR0)
-> **Last updated:** 2026-02-21
+> **Status:** DONE (Launch-15 shipped, mainnet-ready as of PR #331 @ `d7b778f`)
+> **Last updated:** 2026-03-02
 > **SSOT:** This document. Referenced from `docs/POST_LAUNCH_ROADMAP.md` (Launch-15 section).
 > **Prerequisite:** `docs/14_SMART_ORDER_ROUTER_SPEC.md` (SOR needs execution reality to route).
 > **Variant:** 2 (positions + open orders). Variant 1 (positions-only) was rejected as insufficient for operational use.
@@ -308,25 +308,48 @@ replay/paper mode.
 - **MOD:** `docs/runbooks/00_EVIDENCE_INDEX.md` -- add fire drill row
 - **MOD:** `scripts/gen_evidence_index.py` -- add fire drill entry
 
+### PR4 (#329): Port protocol -- add `fetch_account_snapshot()` to ExchangePort
+
+- **MOD:** `src/grinder/execution/port.py` -- add `fetch_account_snapshot()` method to `ExchangePort` protocol
+- **MOD:** `src/grinder/execution/noop_port.py` -- stub returning empty snapshot
+- **MOD:** `tests/unit/test_exchange_port.py` -- protocol conformance test
+
+### PR5 (#330): Sync interval throttle
+
+- **MOD:** `src/grinder/live/engine.py` -- 5s minimum between sync calls via `snapshot.ts`
+- **NEW:** `tests/unit/test_engine_account_sync_throttle.py` -- 6 tests (first-tick, interval, error, zero-ts, backwards-ts)
+- Design: negative init (`-5000`) guarantees first tick always syncs. Uses `snapshot.ts` (deterministic, not wall-clock).
+
+### PR6 (#331): BinanceFuturesPort.fetch_account_snapshot()
+
+- **MOD:** `src/grinder/execution/binance_futures_port.py` -- real implementation: 2 REST calls (`/fapi/v2/positionRisk` + `/fapi/v1/openOrders`), parse to `PositionSnap`/`OpenOrderSnap`, `build_account_snapshot()`
+- **MOD:** `src/grinder/execution/binance_port.py` -- `NoopHttpClient.positions_response` + routing
+- **MOD:** `tests/unit/test_binance_futures_port.py` -- 6 tests (dry-run, parsing, empty, call count, ts, reduceOnly string)
+- Safe `reduceOnly` parsing: Binance may send `"false"` as string -- `_parse_reduce_only()` handles both bool and string.
+- `dry_run=True` returns empty snapshot with 0 HTTP calls.
+
 ---
 
-## 15.10 Open Questions
+## 15.10 Resolved Questions
 
-1. **Sync frequency:** How often should AccountSyncer poll? Every tick? Every N seconds?
-   Likely every N seconds (configurable, default 30s) to avoid rate-limit pressure.
+1. **Sync frequency:** 5-second interval throttle (PR #330). Uses `snapshot.ts` for deterministic timing. Configurable via `_account_sync_interval_ms` (default 5000).
 
-2. **Partial fill race:** If an order is partially filled between our fetch and our internal
-   state check, is that a mismatch? Likely: yes, flag it but with severity=INFO (not
-   ERROR).
+2. **Partial fill race:** Flagged as mismatch with severity=INFO (not ERROR). Detected by the orphan-order mismatch rule.
 
-3. **Hedge mode:** Binance USDT-M supports hedge mode (separate LONG/SHORT positions).
-   The spec uses `side: str` to accommodate both one-way and hedge mode. PR1 should
-   handle both.
+3. **Hedge mode:** Handled via `positionSide` field from Binance ("BOTH"/"LONG"/"SHORT"). Maps directly to `PositionSnap.side`.
 
-4. **Batch vs per-symbol fetch:** `fetch_account_snapshot()` fetches everything at once.
-   Per-symbol `fetch_positions(symbol)` is also available for targeted checks.
-   PR2 should prefer batch for consistency.
+4. **Batch vs per-symbol fetch:** Batch (`fetch_account_snapshot()` with no symbol filter) is the canonical path. Fetches all positions and all orders in 2 REST calls.
 
-5. **RoundTrip accounting scope:** Full open->close PnL attribution is deferred to P2.
-   Launch-15 only tracks "does our position match the exchange" -- not "what was the
-   PnL of each trade cycle."
+5. **RoundTrip accounting scope:** Deferred to P2 as planned. Launch-15 only tracks position/order truth vs exchange.
+
+## 15.11 Operational Notes
+
+### Edge case: `last_ts=0` on empty account
+
+When the account has no positions and no open orders, `build_account_snapshot()` computes `ts = max([])` which defaults to `0`. This means `grinder_account_sync_age_seconds` will show `0.00` (cosmetic, not functional). Sync liveness can be verified via HTTP request counters:
+
+```bash
+# Verify sync is ticking (expect +2 every 5 seconds: positionRisk + openOrders)
+curl -s localhost:9092/metrics | grep 'grinder_http_requests_total.*op="get_positions"'
+curl -s localhost:9092/metrics | grep 'grinder_http_requests_total.*op="get_open_orders"'
+```
