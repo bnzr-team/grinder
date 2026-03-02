@@ -311,6 +311,9 @@ class LiveEngineV0:
         self._emergency_exit_executor: EmergencyExitExecutor | None = None
         self._emergency_exit_executed = False
         self._position_notional_usd: float | None = None  # measured by AccountSyncer
+        # Account sync throttle: at most once per interval to avoid REST rate-limits
+        self._account_sync_interval_ms: int = 5_000  # 5s default
+        self._account_sync_last_attempt_ms: int = -(5_000)  # ensures first tick always syncs
         if self._emergency_exit_enabled:
             # Duck-type check: port must have cancel_all_orders + place_market_order + get_positions
             port = self._exchange_port
@@ -444,8 +447,12 @@ class LiveEngineV0:
             self._execute_emergency_exit(snapshot.ts)
 
         # Account sync: read-only fetch + mismatch detection (Launch-15)
-        if self._is_account_sync_enabled():
-            self._tick_account_sync()
+        # Throttled: at most once per _account_sync_interval_ms to avoid REST rate-limits
+        if self._is_account_sync_enabled() and snapshot.ts > 0:
+            elapsed = snapshot.ts - self._account_sync_last_attempt_ms
+            if elapsed >= self._account_sync_interval_ms:
+                self._account_sync_last_attempt_ms = snapshot.ts
+                self._tick_account_sync()
 
         # Step 2: Process actions
         live_actions: list[LiveAction] = []
