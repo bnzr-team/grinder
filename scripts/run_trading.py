@@ -70,6 +70,7 @@ from grinder.connectors.live_connector import (
     LiveConnectorV0,
     SafeMode,
 )
+from grinder.env_parse import parse_bool
 from grinder.execution.binance_futures_port import (
     BINANCE_FUTURES_MAINNET_URL,
     BinanceFuturesPort,
@@ -525,6 +526,14 @@ def build_engine(
         toxicity_gate = ToxicityGate()
         print("  FSM enabled (feed_stale + toxicity wired)")
 
+    # Account syncer (opt-in via GRINDER_ACCOUNT_SYNC_ENABLED, Launch-15)
+    account_syncer = None
+    if parse_bool("GRINDER_ACCOUNT_SYNC_ENABLED", default=False):
+        from grinder.account.syncer import AccountSyncer  # noqa: PLC0415
+
+        account_syncer = AccountSyncer(port)
+        print("  AccountSyncer enabled")
+
     return LiveEngineV0(
         paper_engine=paper_engine,
         exchange_port=port,
@@ -533,6 +542,7 @@ def build_engine(
         fsm_driver=fsm_driver,
         drawdown_guard=drawdown_guard,
         toxicity_gate=toxicity_gate,
+        account_syncer=account_syncer,
     )
 
 
