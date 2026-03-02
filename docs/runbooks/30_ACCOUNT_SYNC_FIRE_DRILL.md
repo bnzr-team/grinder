@@ -131,6 +131,56 @@ cat <evidence_dir>/sha256sums.txt
 
 ---
 
+## AccountSyncMismatchSpike
+
+**Severity:** Warning | **Category:** correctness | **`for`:** 3m
+
+**Meaning:** One or more account sync mismatches detected in the last 5 minutes.
+The `rule` label indicates the mismatch type: `duplicate_key`, `ts_regression`,
+`negative_qty`, or `orphan_order`.
+
+**Impact:** Internal state and exchange state have diverged. Depending on the rule:
+
+| Rule | Risk |
+|------|------|
+| `orphan_order` | Order on exchange not tracked — may fill without risk checks |
+| `duplicate_key` | Data corruption in fetch/parse layer |
+| `negative_qty` | Invalid exchange response or parse bug |
+| `ts_regression` | Clock skew or stale API cache |
+
+**PromQL:**
+```promql
+sum(increase(grinder_account_sync_mismatches_total{rule!="none"}[5m])) > 0
+```
+
+**Triage Steps:**
+
+1. Identify mismatch rules:
+   ```bash
+   curl -s localhost:9090/metrics | grep grinder_account_sync_mismatches_total
+   ```
+
+2. Run the fire drill to verify detection pipeline:
+   ```bash
+   bash scripts/ops_fill_triage.sh account-sync-drill
+   ```
+
+3. Check evidence artifacts for details:
+   ```bash
+   ls -lt .artifacts/account_sync/ | head -5
+   cat .artifacts/account_sync/<latest>/mismatches.json
+   ```
+
+4. If `orphan_order`: check if manual order was placed outside the system
+5. If `ts_regression`: investigate exchange API latency or clock drift
+
+**Resolution:**
+- `orphan_order`: cancel the orphan order on exchange, or add to tracked set
+- `duplicate_key` / `negative_qty`: file a bug — invariant violation
+- `ts_regression`: usually transient; if persistent, check NTP sync
+
+---
+
 ## See also
 
 - [Account Sync runbook](29_ACCOUNT_SYNC.md) -- enablement, metrics, evidence artifacts

@@ -165,7 +165,7 @@ Metrics from `src/grinder/account/metrics.py`.
 | Panel | PromQL | Type | Notes |
 |-------|--------|------|-------|
 | Sync age | `grinder_account_sync_age_seconds` | Gauge | >120s fires `AccountSyncStale` (if `last_ts > 0`) |
-| Last sync timestamp | `grinder_account_sync_last_ts` | Gauge | 0 = never synced (feature disabled or just started) |
+| Last sync timestamp | `grinder_account_sync_last_ts` | Gauge | 0 = never synced; >0 after first successful sync (wall-clock fallback for empty accounts) |
 | Errors by reason | `sum by (reason) (increase(grinder_account_sync_errors_total[5m]))` | Counter | >0 fires `AccountSyncErrors`; check `reason` label |
 | Mismatches by rule | `sum by (rule) (increase(grinder_account_sync_mismatches_total[5m]))` | Counter | >0 fires `AccountSyncMismatchSpike` |
 | Position count | `grinder_account_sync_positions_count` | Gauge | Sanity: expected number of open positions |
