@@ -168,8 +168,8 @@ stable contract defined in `src/grinder/observability/metrics_contract.py`.
 | `grinder_emergency_exit_total{result}` | counter | Exit executions by result | `result="error"` = investigate |
 | `grinder_emergency_exit_orders_cancelled_total` | counter | Orders cancelled by exit | Unexpected increment |
 | `grinder_emergency_exit_positions_closed_total` | counter | Positions closed by exit | Unexpected increment |
-| `grinder_account_sync_last_ts` | gauge | Last successful sync timestamp | Stale (>60s old) |
-| `grinder_account_sync_age_seconds` | gauge | Seconds since last sync | >60 = sync stalled |
+| `grinder_account_sync_last_ts` | gauge | Last successful sync timestamp | Stale (>120s old) |
+| `grinder_account_sync_age_seconds` | gauge | Seconds since last sync | >120 = sync stalled (fires `AccountSyncStale`) |
 | `grinder_account_sync_errors_total{reason}` | counter | Sync errors | Sustained increment |
 | `grinder_account_sync_mismatches_total{rule}` | counter | Position/order mismatches | Any increment = check exchange |
 | `grinder_account_sync_positions_count` | gauge | Open positions count | Unexpected increase |
