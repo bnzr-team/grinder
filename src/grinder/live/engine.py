@@ -181,6 +181,26 @@ class LiveEngineOutput:
         }
 
 
+# PR-338: FSM states where paper engine evaluation is deferred.
+# In INIT/READY, paper engine would mutate internal state via NoOp port,
+# creating ghost orders that freeze reconciliation after ACTIVE transition.
+# Post-ACTIVE states (PAUSED/THROTTLED/etc) are handled by Gate 6.
+_FSM_DEFER_STATES = frozenset({SystemState.INIT, SystemState.READY})
+
+
+@dataclass
+class _DeferredPaperOutput:
+    """Minimal paper output for FSM-deferred ticks (no state mutation)."""
+
+    ts: int
+    symbol: str
+    actions: list[Any] = field(default_factory=list)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize for LiveEngineOutput compatibility."""
+        return {"ts": self.ts, "symbol": self.symbol, "actions": [], "deferred_by_fsm": True}
+
+
 def classify_intent(action: ExecutionAction) -> RiskIntent:
     """Classify execution action into risk intent.
 
@@ -428,6 +448,20 @@ class LiveEngineV0:
         # Record price for toxicity gate (needs history before check, PR-A1)
         if self._toxicity_gate is not None:
             self._toxicity_gate.record_price(snapshot.ts, snapshot.symbol, snapshot.mid_price)
+
+        # PR-338: Defer paper engine during FSM startup states (INIT/READY).
+        # Paper engine mutates internal state via NoOp port; if run before ACTIVE,
+        # ghost orders freeze reconciliation after ACTIVE transition.
+        # Tick FSM first so it can advance toward ACTIVE.
+        if self._fsm_driver is not None and self._fsm_driver.state in _FSM_DEFER_STATES:
+            self._tick_fsm(snapshot.ts, snapshot.symbol)
+            return LiveEngineOutput(
+                paper_output=_DeferredPaperOutput(ts=snapshot.ts, symbol=snapshot.symbol),
+                live_actions=[],
+                armed=self._config.armed,
+                mode=self._config.mode,
+                kill_switch_active=self._config.kill_switch_active,
+            )
 
         # Step 1: Get paper engine decisions
         paper_output = self._paper_engine.process_snapshot(snapshot)

@@ -1034,3 +1034,194 @@ class TestFsmLoopWiring:
         assert driver.state == SystemState.ACTIVE
         assert output.live_actions[0].status == LiveActionStatus.EXECUTED
         assert len(tracking_port.calls) == 1
+
+
+# --- G) FSM Ghost Orders Prevention (PR-338) ---
+
+
+class TestFsmDeferPaperEngine:
+    """Tests for PR-338: defer PaperEngine during FSM INIT/READY.
+
+    Bug: paper engine mutates internal state (via NoOp port) before FSM
+    reaches ACTIVE. Ghost orders freeze reconciliation after ACTIVE transition.
+    Fix: skip paper engine evaluation when FSM state is INIT or READY.
+    """
+
+    def setup_method(self) -> None:
+        reset_fsm_metrics()
+
+    @pytest.fixture(autouse=True)
+    def _clean_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("GRINDER_OPERATOR_OVERRIDE", raising=False)
+
+    def test_init_state_skips_paper_engine(
+        self,
+        mock_paper_engine: MagicMock,
+        tracking_port: MagicMock,
+        sample_snapshot: Snapshot,
+    ) -> None:
+        """FSM INIT → paper engine NOT called, 0 actions, 0 port calls."""
+        mock_paper_engine.process_snapshot.return_value = MagicMock(actions=[])
+
+        fsm = OrchestratorFSM(state=SystemState.INIT, state_enter_ts=0)
+        driver = FsmDriver(fsm)
+
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        engine = LiveEngineV0(mock_paper_engine, tracking_port, config, fsm_driver=driver)
+
+        output = engine.process_snapshot(sample_snapshot)
+
+        # Paper engine must NOT be called
+        mock_paper_engine.process_snapshot.assert_not_called()
+        # 0 live actions
+        assert output.live_actions == []
+        # 0 port calls
+        assert len(tracking_port.calls) == 0
+        # FSM still ticked (advances toward READY)
+        assert driver.state == SystemState.READY
+
+    def test_ready_state_skips_paper_engine(
+        self,
+        mock_paper_engine: MagicMock,
+        tracking_port: MagicMock,
+    ) -> None:
+        """FSM READY → paper engine NOT called, 0 actions."""
+        mock_paper_engine.process_snapshot.return_value = MagicMock(actions=[])
+
+        fsm = OrchestratorFSM(state=SystemState.READY, state_enter_ts=0)
+        driver = FsmDriver(fsm)
+
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        engine = LiveEngineV0(mock_paper_engine, tracking_port, config, fsm_driver=driver)
+
+        snapshot = Snapshot(
+            ts=100_000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50001"),
+            bid_qty=Decimal("1"),
+            ask_qty=Decimal("1"),
+            last_price=Decimal("50000.5"),
+            last_qty=Decimal("0.5"),
+        )
+        output = engine.process_snapshot(snapshot)
+
+        mock_paper_engine.process_snapshot.assert_not_called()
+        assert output.live_actions == []
+        assert len(tracking_port.calls) == 0
+
+    def test_active_state_runs_paper_engine(
+        self,
+        mock_paper_engine: MagicMock,
+        tracking_port: MagicMock,
+        sample_snapshot: Snapshot,
+        place_action: ExecutionAction,
+    ) -> None:
+        """FSM ACTIVE → paper engine called, actions processed normally."""
+        mock_paper_engine.process_snapshot.return_value = MagicMock(actions=[place_action])
+
+        fsm = OrchestratorFSM(state=SystemState.ACTIVE, state_enter_ts=1000)
+        driver = FsmDriver(fsm)
+
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        engine = LiveEngineV0(mock_paper_engine, tracking_port, config, fsm_driver=driver)
+
+        output = engine.process_snapshot(sample_snapshot)
+
+        mock_paper_engine.process_snapshot.assert_called_once()
+        assert len(output.live_actions) == 1
+        assert output.live_actions[0].status == LiveActionStatus.EXECUTED
+        assert len(tracking_port.calls) == 1
+
+    def test_init_to_active_lifecycle(
+        self,
+        mock_paper_engine: MagicMock,
+        tracking_port: MagicMock,
+        place_action: ExecutionAction,
+    ) -> None:
+        """Full INIT→READY→ACTIVE lifecycle: paper engine runs only after ACTIVE.
+
+        AC1 repro: ghost orders cannot form because paper engine is deferred
+        during INIT and READY states.
+        """
+        mock_paper_engine.process_snapshot.return_value = MagicMock(actions=[place_action])
+
+        fsm = OrchestratorFSM(state=SystemState.INIT, state_enter_ts=0)
+        driver = FsmDriver(fsm)
+
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        engine = LiveEngineV0(mock_paper_engine, tracking_port, config, fsm_driver=driver)
+
+        def make_snapshot(ts: int) -> Snapshot:
+            return Snapshot(
+                ts=ts,
+                symbol="BTCUSDT",
+                bid_price=Decimal("50000"),
+                ask_price=Decimal("50001"),
+                bid_qty=Decimal("1"),
+                ask_qty=Decimal("1"),
+                last_price=Decimal("50000.5"),
+                last_qty=Decimal("0.5"),
+            )
+
+        # Tick 1: INIT → paper deferred, FSM advances to READY
+        out1 = engine.process_snapshot(make_snapshot(1000))
+        state_after_1: SystemState = driver.state
+        assert state_after_1 == SystemState.READY
+        mock_paper_engine.process_snapshot.assert_not_called()
+        assert out1.live_actions == []
+
+        # Tick 2: READY → paper deferred, FSM advances to ACTIVE
+        out2 = engine.process_snapshot(make_snapshot(2000))
+        state_after_2: SystemState = driver.state
+        assert state_after_2 == SystemState.ACTIVE
+        mock_paper_engine.process_snapshot.assert_not_called()
+        assert out2.live_actions == []
+
+        # Tick 3: ACTIVE → paper engine runs, actions reach port
+        out3 = engine.process_snapshot(make_snapshot(3000))
+        state_after_3: SystemState = driver.state
+        assert state_after_3 == SystemState.ACTIVE
+        mock_paper_engine.process_snapshot.assert_called_once()
+        assert len(out3.live_actions) == 1
+        assert out3.live_actions[0].status == LiveActionStatus.EXECUTED
+        assert len(tracking_port.calls) == 1
+
+    def test_no_fsm_driver_runs_paper_engine(
+        self,
+        mock_paper_engine: MagicMock,
+        tracking_port: MagicMock,
+        sample_snapshot: Snapshot,
+        place_action: ExecutionAction,
+    ) -> None:
+        """AC2: FSM disabled (fsm_driver=None) → paper engine runs immediately."""
+        mock_paper_engine.process_snapshot.return_value = MagicMock(actions=[place_action])
+
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        engine = LiveEngineV0(mock_paper_engine, tracking_port, config, fsm_driver=None)
+
+        output = engine.process_snapshot(sample_snapshot)
+
+        mock_paper_engine.process_snapshot.assert_called_once()
+        assert len(output.live_actions) == 1
+        assert output.live_actions[0].status == LiveActionStatus.EXECUTED
+
+    def test_deferred_output_has_to_dict(
+        self,
+        mock_paper_engine: MagicMock,
+        tracking_port: MagicMock,
+        sample_snapshot: Snapshot,
+    ) -> None:
+        """Deferred paper output supports to_dict() for LiveEngineOutput serialization."""
+        fsm = OrchestratorFSM(state=SystemState.INIT, state_enter_ts=0)
+        driver = FsmDriver(fsm)
+
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        engine = LiveEngineV0(mock_paper_engine, tracking_port, config, fsm_driver=driver)
+
+        output = engine.process_snapshot(sample_snapshot)
+
+        # Must not raise
+        output_dict = output.to_dict()
+        assert output_dict["paper_output"]["deferred_by_fsm"] is True
+        assert output_dict["paper_output"]["actions"] == []

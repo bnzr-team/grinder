@@ -538,6 +538,9 @@ Action permissions are defined in terms of **risk intents** from `src/grinder/ri
 - `REDUCE_RISK` is ALLOWED in every state except INIT and READY (no position to reduce).
 - EMERGENCY forces safe behavior: `INCREASE_RISK` is BLOCKED, consistent with `DrawdownGuardV1.evaluate()`.
 - The FSM provides `is_action_allowed(state, intent) -> bool` as a pure query.
+- **PR-338:** PaperEngine evaluation is deferred during INIT and READY. This prevents ghost
+  orders in paper state (via NoOp port) that would freeze reconciliation after ACTIVE
+  transition. Actions start flowing only after FSM reaches ACTIVE.
 
 ---
 
