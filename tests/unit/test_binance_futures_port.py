@@ -770,3 +770,186 @@ class TestCancelOrderIdentityParsing:
             port.cancel_order("grinder_d_XYZUSDT_0_1770470846_1")
 
         assert "whitelist" in str(exc_info.value).lower()
+
+
+# --- Account Snapshot Tests (PR-Y) ---
+
+
+class TestFetchAccountSnapshot:
+    """Tests for BinanceFuturesPort.fetch_account_snapshot()."""
+
+    def test_dry_run_returns_empty_snapshot_and_no_http_calls(
+        self, noop_client: NoopHttpClient, dry_run_config: BinanceFuturesPortConfig
+    ) -> None:
+        """dry_run=True -> empty AccountSnapshot, 0 HTTP calls, ts=0."""
+        port = BinanceFuturesPort(http_client=noop_client, config=dry_run_config)
+
+        snap = port.fetch_account_snapshot()
+
+        assert len(noop_client.calls) == 0
+        assert snap.positions == ()
+        assert snap.open_orders == ()
+        assert snap.ts == 0
+        assert snap.source == "dry_run"
+
+    def test_parses_positions_and_orders_filters_zero_qty(
+        self, live_trade_config: BinanceFuturesPortConfig
+    ) -> None:
+        """Parses positions + orders from Binance response; filters zero-qty positions."""
+        client = NoopHttpClient(
+            positions_response=[
+                {
+                    "symbol": "BTCUSDT",
+                    "positionAmt": "0.002",
+                    "positionSide": "BOTH",
+                    "entryPrice": "65000.0",
+                    "markPrice": "65100.0",
+                    "unRealizedProfit": "0.20",
+                    "leverage": "5",
+                    "updateTime": 5000,
+                },
+                {
+                    "symbol": "ETHUSDT",
+                    "positionAmt": "0.000",
+                    "positionSide": "BOTH",
+                    "entryPrice": "0",
+                    "markPrice": "3200.0",
+                    "unRealizedProfit": "0",
+                    "leverage": "1",
+                    "updateTime": 4000,
+                },
+            ],
+            open_orders_response=[
+                {
+                    "clientOrderId": "grinder_d_BTCUSDT_0_123_1",
+                    "orderId": 99999,
+                    "symbol": "BTCUSDT",
+                    "side": "BUY",
+                    "type": "LIMIT",
+                    "price": "64000.0",
+                    "origQty": "0.001",
+                    "executedQty": "0",
+                    "reduceOnly": False,
+                    "status": "NEW",
+                    "updateTime": 6000,
+                },
+            ],
+        )
+        port = BinanceFuturesPort(http_client=client, config=live_trade_config)
+
+        snap = port.fetch_account_snapshot()
+
+        # Zero-qty ETHUSDT filtered out
+        assert len(snap.positions) == 1
+        pos = snap.positions[0]
+        assert pos.symbol == "BTCUSDT"
+        assert pos.qty == Decimal("0.002")
+        assert pos.entry_price == Decimal("65000.0")
+        assert pos.mark_price == Decimal("65100.0")
+        assert pos.unrealized_pnl == Decimal("0.20")
+        assert pos.leverage == 5
+        assert pos.side == "BOTH"
+        assert pos.ts == 5000
+
+        assert len(snap.open_orders) == 1
+        order = snap.open_orders[0]
+        assert order.order_id == "grinder_d_BTCUSDT_0_123_1"
+        assert order.symbol == "BTCUSDT"
+        assert order.side == "BUY"
+        assert order.order_type == "LIMIT"
+        assert order.price == Decimal("64000.0")
+        assert order.qty == Decimal("0.001")
+        assert order.filled_qty == Decimal("0")
+        assert order.reduce_only is False
+        assert order.status == "NEW"
+
+        assert snap.source == "exchange"
+
+    def test_empty_account_returns_empty_snapshot_and_two_calls(
+        self, noop_client: NoopHttpClient, live_trade_config: BinanceFuturesPortConfig
+    ) -> None:
+        """Empty account -> empty tuples, ts=0, exactly 2 HTTP calls."""
+        port = BinanceFuturesPort(http_client=noop_client, config=live_trade_config)
+
+        snap = port.fetch_account_snapshot()
+
+        assert snap.positions == ()
+        assert snap.open_orders == ()
+        assert snap.ts == 0
+        assert snap.source == "exchange"
+        assert len(noop_client.calls) == 2
+
+    def test_makes_exactly_two_endpoint_calls(
+        self, noop_client: NoopHttpClient, live_trade_config: BinanceFuturesPortConfig
+    ) -> None:
+        """Verifies exactly 2 calls: positionRisk then openOrders."""
+        port = BinanceFuturesPort(http_client=noop_client, config=live_trade_config)
+
+        port.fetch_account_snapshot()
+
+        assert len(noop_client.calls) == 2
+        assert "positionRisk" in noop_client.calls[0]["url"]
+        assert "openOrders" in noop_client.calls[1]["url"]
+
+    def test_ts_is_max_update_time(self, live_trade_config: BinanceFuturesPortConfig) -> None:
+        """snapshot.ts == max(updateTime) across positions and orders."""
+        client = NoopHttpClient(
+            positions_response=[
+                {
+                    "symbol": "BTCUSDT",
+                    "positionAmt": "0.001",
+                    "positionSide": "BOTH",
+                    "entryPrice": "50000",
+                    "markPrice": "50000",
+                    "unRealizedProfit": "0",
+                    "leverage": "1",
+                    "updateTime": 5000,
+                },
+            ],
+            open_orders_response=[
+                {
+                    "clientOrderId": "test_1",
+                    "orderId": 1,
+                    "symbol": "BTCUSDT",
+                    "side": "BUY",
+                    "type": "LIMIT",
+                    "price": "49000",
+                    "origQty": "0.001",
+                    "executedQty": "0",
+                    "reduceOnly": False,
+                    "status": "NEW",
+                    "updateTime": 7000,
+                },
+            ],
+        )
+        port = BinanceFuturesPort(http_client=client, config=live_trade_config)
+
+        snap = port.fetch_account_snapshot()
+
+        assert snap.ts == 7000
+
+    def test_reduce_only_string_false(self, live_trade_config: BinanceFuturesPortConfig) -> None:
+        """Binance may send reduceOnly as string 'false' -- must parse correctly."""
+        client = NoopHttpClient(
+            open_orders_response=[
+                {
+                    "clientOrderId": "test_ro",
+                    "orderId": 1,
+                    "symbol": "BTCUSDT",
+                    "side": "SELL",
+                    "type": "LIMIT",
+                    "price": "70000",
+                    "origQty": "0.001",
+                    "executedQty": "0",
+                    "reduceOnly": "false",
+                    "status": "NEW",
+                    "updateTime": 1000,
+                },
+            ],
+        )
+        port = BinanceFuturesPort(http_client=client, config=live_trade_config)
+
+        snap = port.fetch_account_snapshot()
+
+        assert len(snap.open_orders) == 1
+        assert snap.open_orders[0].reduce_only is False

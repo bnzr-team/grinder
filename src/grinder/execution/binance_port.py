@@ -152,6 +152,7 @@ class NoopHttpClient:
         }
     )
     open_orders_response: list[dict[str, Any]] = field(default_factory=list)
+    positions_response: list[dict[str, Any]] = field(default_factory=list)
     listen_key_response: dict[str, Any] = field(
         default_factory=lambda: {"listenKey": "test_listen_key_12345"}
     )
@@ -198,6 +199,8 @@ class NoopHttpClient:
             return HttpResponse(status_code=status, json_data=self.place_response)
         if "order" in url and method == "DELETE":
             return HttpResponse(status_code=status, json_data=self.cancel_response)
+        if "positionRisk" in url:
+            return HttpResponse(status_code=status, json_data=self.positions_response)
         if "openOrders" in url:
             return HttpResponse(status_code=status, json_data=self.open_orders_response)
 
