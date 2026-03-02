@@ -1223,5 +1223,5 @@ class TestFsmDeferPaperEngine:
 
         # Must not raise
         output_dict = output.to_dict()
-        assert output_dict["paper_output"]["deferred_by_fsm"] is True
         assert output_dict["paper_output"]["actions"] == []
+        assert "deferred_by_fsm" not in output_dict["paper_output"]

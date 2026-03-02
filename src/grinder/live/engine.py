@@ -198,7 +198,7 @@ class _DeferredPaperOutput:
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize for LiveEngineOutput compatibility."""
-        return {"ts": self.ts, "symbol": self.symbol, "actions": [], "deferred_by_fsm": True}
+        return {"ts": self.ts, "symbol": self.symbol, "actions": []}
 
 
 def classify_intent(action: ExecutionAction) -> RiskIntent:
