@@ -41,6 +41,20 @@ class TestAccountSyncMetrics:
         assert "grinder_account_sync_open_orders_count 5" in text
         assert "grinder_account_sync_pending_notional 12500.50" in text
 
+    def test_empty_snapshot_still_updates_last_ts(self) -> None:
+        """Empty account (ts=0) must not leave last_sync_ts at 0.
+
+        Regression: build_account_snapshot() returns ts=0 for empty accounts.
+        Metrics must still record a non-zero timestamp so age_seconds and
+        alerting work correctly.
+        """
+        m = AccountSyncMetrics()
+        m.record_sync(ts=0, positions=0, open_orders=0, pending_notional=0.0)
+        assert m.last_sync_ts > 0, "last_sync_ts must be non-zero after successful sync"
+        lines = m.to_prometheus_lines()
+        text = "\n".join(lines)
+        assert "grinder_account_sync_last_ts 0" not in text
+
     def test_record_error(self) -> None:
         m = AccountSyncMetrics()
         m.record_error("timeout")

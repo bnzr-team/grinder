@@ -49,8 +49,13 @@ class AccountSyncMetrics:
     def record_sync(
         self, ts: int, positions: int, open_orders: int, pending_notional: float
     ) -> None:
-        """Record a successful sync."""
-        self.last_sync_ts = ts
+        """Record a successful sync.
+
+        When ts=0 (empty account — no positions/orders to derive a timestamp
+        from), falls back to wall-clock ms so that last_sync_ts always reflects
+        "a sync happened" rather than "never synced".
+        """
+        self.last_sync_ts = ts if ts > 0 else int(time.time() * 1000)
         self.positions_count = positions
         self.open_orders_count = open_orders
         self.pending_notional = pending_notional

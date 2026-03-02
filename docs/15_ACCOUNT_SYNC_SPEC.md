@@ -344,9 +344,13 @@ replay/paper mode.
 
 ## 15.11 Operational Notes
 
-### Edge case: `last_ts=0` on empty account
+### Edge case: empty account (`snapshot.ts=0`)
 
-When the account has no positions and no open orders, `build_account_snapshot()` computes `ts = max([])` which defaults to `0`. This means `grinder_account_sync_age_seconds` will show `0.00` (cosmetic, not functional). Sync liveness can be verified via HTTP request counters:
+When the account has no positions and no open orders, `build_account_snapshot()` computes `ts = max([])` which defaults to `0`. However, `AccountSyncMetrics.record_sync()` falls back to wall-clock ms when `ts=0`, so `grinder_account_sync_last_ts` always reflects "last successful sync" and `grinder_account_sync_age_seconds` computes correctly.
+
+**Semantic contract:** `grinder_account_sync_last_ts` = timestamp of last successful sync attempt (wall-clock fallback for empty accounts). It is never 0 after at least one successful sync.
+
+Sync liveness can also be verified via HTTP request counters:
 
 ```bash
 # Verify sync is ticking (expect +2 every 5 seconds: positionRisk + openOrders)
