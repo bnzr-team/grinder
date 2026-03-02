@@ -116,7 +116,96 @@ cat summary.txt
 
 ---
 
-## 6. Troubleshooting
+## 6. Alert Triage
+
+### AccountSyncStale
+
+**Severity:** Warning | **Category:** correctness | **`for`:** 2m
+
+**Meaning:** Account sync data has not refreshed for >120 seconds, despite sync having
+been active at some point (`last_ts > 0`).
+
+**Impact:** Position and open-order views are stale. Mismatch detection is blind.
+If an orphan order appears during this window, no alert will fire until sync resumes.
+
+**PromQL:**
+```promql
+grinder_account_sync_last_ts > 0
+and
+grinder_account_sync_age_seconds > 120
+```
+
+**Triage Steps:**
+
+1. Check sync age and recent errors:
+   ```bash
+   curl -s localhost:9090/metrics | grep grinder_account_sync
+   ```
+   - `age_seconds` climbing → sync loop not running or fetch failing
+   - `errors_total` incrementing → fetch failures (check `reason` label)
+   - `last_ts` = 0 → sync was never active (alert should not fire; check `last_ts > 0` guard)
+
+2. Check if sync is enabled:
+   ```bash
+   echo $GRINDER_ACCOUNT_SYNC_ENABLED   # must be 1/true/yes/on
+   ```
+
+3. Check logs for fetch errors:
+   ```bash
+   grep -i "account sync" /var/log/grinder/app.log | tail -20
+   ```
+
+4. Check exchange API connectivity:
+   ```bash
+   curl -s localhost:9090/metrics | grep grinder_http_request
+   ```
+
+**Resolution:**
+- Sync disabled: enable `GRINDER_ACCOUNT_SYNC_ENABLED=1` or silence alert
+- Fetch errors: check API keys, rate limits, network connectivity
+- Process stuck: restart gracefully (`kill -TERM <pid>`)
+
+---
+
+### AccountSyncErrors
+
+**Severity:** Warning | **Category:** availability | **`for`:** 5m
+
+**Meaning:** One or more account sync fetch attempts failed in the last 5 minutes.
+The `reason` label indicates the error type (e.g. `TimeoutError`, `HTTPError`, `ValueError`).
+
+**Impact:** While errors persist, the account snapshot is stale. If errors continue for >120s,
+`AccountSyncStale` will also fire.
+
+**PromQL:**
+```promql
+sum(increase(grinder_account_sync_errors_total{reason!="none"}[5m])) > 0
+```
+
+**Triage Steps:**
+
+1. Identify the error reason:
+   ```bash
+   curl -s localhost:9090/metrics | grep grinder_account_sync_errors_total
+   ```
+
+2. Check logs for the specific error:
+   ```bash
+   grep -i "account sync fetch failed" /var/log/grinder/app.log | tail -10
+   ```
+
+3. If `reason=TimeoutError`: exchange API latency spike — check `grinder_http_request_duration_seconds`
+4. If `reason=HTTPError`: API returned non-200 — check response codes
+5. If `reason=ValueError`: response parsing failed — check if Binance API changed format
+
+**Resolution:**
+- Transient network issue: wait for self-recovery (errors counter will stop incrementing)
+- Persistent errors: check API keys, IP whitelist, rate limits
+- Parse errors: file a bug — exchange response format may have changed
+
+---
+
+## 7. Troubleshooting
 
 | Symptom | Likely cause | Fix |
 |---------|-------------|-----|
@@ -130,7 +219,7 @@ cat summary.txt
 
 ---
 
-## 7. Architecture
+## 8. Architecture
 
 ```
 LiveEngineV0.process_snapshot()
