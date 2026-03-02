@@ -161,6 +161,11 @@ stable contract defined in `src/grinder/observability/metrics_contract.py`.
 | `grinder_fsm_transitions_total{from_state,to_state,reason}` | counter | State transitions | Rapid flapping (many transitions/min) |
 | `grinder_fsm_state_duration_seconds` | gauge | Time in current state | `EMERGENCY` > 10 min = investigate |
 | `grinder_fsm_action_blocked_total{state,intent}` | counter | Actions blocked by FSM | Unexpected blocks in `ACTIVE` |
+
+> **Note (PR-338):** PaperEngine evaluation is deferred during INIT and READY states.
+> No order actions are generated until FSM reaches ACTIVE. This prevents ghost orders
+> in paper state that would freeze reconciliation after ACTIVE transition. The first
+> ACTIVE tick generates the full grid in one batch. This is expected behavior.
 | `grinder_kill_switch_triggered` | gauge | Kill-switch latch | `1` = **immediate rollback** |
 | `grinder_kill_switch_trips_total{reason}` | counter | Kill-switch trip reasons | Any increment = investigate |
 | `grinder_drawdown_pct` | gauge | Current drawdown fraction | Approaching `0.20` (default threshold) |
