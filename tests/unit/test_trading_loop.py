@@ -183,6 +183,24 @@ class TestBuildEngine:
         engine = build_engine(SafeMode.READ_ONLY, exchange_port=port)
         assert engine._exchange_port is port
 
+    def test_account_syncer_wired_when_enabled(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """build_engine wires AccountSyncer when GRINDER_ACCOUNT_SYNC_ENABLED=1.
+
+        Wiring regression test: verifies build_engine passes syncer to LiveEngineV0.
+        """
+        monkeypatch.setenv("GRINDER_ACCOUNT_SYNC_ENABLED", "1")
+        engine = build_engine(SafeMode.READ_ONLY)
+        assert engine._account_syncer is not None  # wiring test (private field OK here)
+
+    def test_account_syncer_none_by_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """build_engine without GRINDER_ACCOUNT_SYNC_ENABLED has account_syncer=None.
+
+        Wiring regression test: default = no syncer (safe-by-default).
+        """
+        monkeypatch.delenv("GRINDER_ACCOUNT_SYNC_ENABLED", raising=False)
+        engine = build_engine(SafeMode.READ_ONLY)
+        assert engine._account_syncer is None  # wiring test (private field OK here)
+
 
 class TestTradingLoop:
     """Test full trading loop integration with fixture data."""
