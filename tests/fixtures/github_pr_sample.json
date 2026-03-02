@@ -1,0 +1,16 @@
+{
+  "number": 332,
+  "title": "docs: SSOT refresh for main d7b778f",
+  "state": "closed",
+  "merged": true,
+  "merged_at": "2026-03-02T10:30:00Z",
+  "merge_commit_sha": "0fd88f6628a581e234c800b7a6ac75289a8eb519",
+  "base": {
+    "ref": "main"
+  },
+  "head": {
+    "ref": "docs/refresh-ssot-d7b778f",
+    "sha": "abc123def456"
+  },
+  "html_url": "https://github.com/bnzr-team/grinder/pull/332"
+}
