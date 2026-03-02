@@ -3,7 +3,7 @@
 > **SSOT** for "when is this product launched?" and "what remains?"
 >
 > Last updated: 2026-03-02
-> Main: `d7b778f` (after PR #331 -- AccountSync mainnet pipeline complete)
+> Main: `9737395` (after PR #336 -- C4 operational readiness complete)
 
 ---
 
@@ -193,9 +193,9 @@ bash scripts/smoke_futures_no_orders.sh
 | C1 | Runbook 32 read_only rehearsal (NoOp) | 32_MAINNET_ROLLOUT Phase 0–2 | DONE |
 | C2 | Runbook 32 live_trade+armed rehearsal (NoOp) | 32_MAINNET_ROLLOUT Phase 3–5 | DONE |
 | C3 | Runbook 32 canary (1 symbol, real BinanceFuturesPort) | 32_MAINNET_ROLLOUT "Canary by Symbol" | DONE (2026-02-28) |
-| C4 | Runbook 32 full rollout (BTCUSDT+ETHUSDT, ACTIVE) | 32_MAINNET_ROLLOUT "Full Rollout" | IN PROGRESS |
+| C4 | Runbook 32 full rollout (BTCUSDT+ETHUSDT, ACTIVE) | 32_MAINNET_ROLLOUT "Full Rollout" | IN PROGRESS (ops readiness complete) |
 
-**C3 PASSED** (2026-02-28): BTCUSDT futures order placed and cancelled on mainnet. C4 in progress (accumulative 24h observation).
+**C3 PASSED** (2026-02-28): BTCUSDT futures order placed and cancelled on mainnet. C4 in progress (accumulative 24h observation). C4 operational readiness complete: AccountSync liveness metrics, alert triage runbooks, threshold alignment (PRs #334–#336).
 
 ### Post-launch (not blocking GO — tracked in POST_LAUNCH_ROADMAP.md)
 
@@ -242,6 +242,7 @@ It is explicitly **out of scope** for Launch v1.
 | `docs/runbooks/ALERT_INDEX.md` | Alert → runbook routing |
 | `docs/runbooks/32_MAINNET_ROLLOUT_FILL_PROB.md` | Mainnet rollout ceremony |
 | `docs/runbooks/33_FSM_ACTIVATION_AND_ROLLBACK.md` | Trading loop activation, monitoring, rollback |
+| `docs/runbooks/29_ACCOUNT_SYNC.md` | AccountSync enablement, metrics, alert triage |
 | `docs/20_SAFETY_ENVELOPE.md` | TRD-1: gate ordering contract |
 | `docs/22_POLICY_CONTRACT.md` | TRD-2: GridPolicy/GridPlan lockdown |
 | `docs/23_NATR_CONTRACT.md` | TRD-3a: natr_bps encoding SSOT |
@@ -270,7 +271,7 @@ All ceremony evidence is recorded in [`docs/LAUNCH_LOG.md`](LAUNCH_LOG.md) with 
 | Ceremony | Owner | Preconditions | Runbook ref | Status |
 |----------|-------|---------------|-------------|--------|
 | C3 Canary | Operator | D1–D15 DONE, C1–C2 DONE, API creds, mainnet access | RB32 Phase 2–3 | DONE (2026-02-28). Evidence: PR #310, #311. |
-| C4 Full rollout | Operator | C3 DONE, RISK-EE-1 DONE | RB32 Phase 4–5 | IN PROGRESS (BTCUSDT+ETHUSDT, accumulative 24h) |
+| C4 Full rollout | Operator | C3 DONE, RISK-EE-1 DONE, ops readiness (PRs #334–#336) | RB32 Phase 4–5 | IN PROGRESS (BTCUSDT+ETHUSDT, accumulative 24h) |
 
 ### C3 — Canary (1 symbol, real BinanceFuturesPort)
 
@@ -329,6 +330,22 @@ See `docs/runbooks/32_MAINNET_ROLLOUT_FILL_PROB.md` Phase 2 for full config and 
 2. No unresolved issues from C3 observation
 3. Kill-switch tested and recovery verified (Section 6, rule 4)
 
+**C4 operational readiness (PRs #334–#336):**
+
+AccountSync observability is fully wired for C4 monitoring:
+
+| Capability | SSOT | Evidence |
+|------------|------|----------|
+| `last_ts` semantics: 0 = never synced, >0 after any successful sync (wall-clock fallback for empty accounts) | `src/grinder/account/metrics.py` | PR [#334](https://github.com/bnzr-team/grinder/pull/334) @ `5343463` |
+| Alert triage anchors: `AccountSyncStale`, `AccountSyncErrors`, `AccountSyncMismatchSpike` | `docs/runbooks/29_ACCOUNT_SYNC.md`, `30_ACCOUNT_SYNC_FIRE_DRILL.md` | PR [#335](https://github.com/bnzr-team/grinder/pull/335) @ `69af818` |
+| Threshold alignment: 120s everywhere (alert YAML, runbooks, SLO, OBSERVABILITY_STACK) | `monitoring/alert_rules.yml:860` | PR [#336](https://github.com/bnzr-team/grinder/pull/336) @ `9737395` |
+
+Quick liveness check during C4:
+```bash
+curl -s localhost:9090/metrics | grep grinder_account_sync
+# Expected: last_ts > 0, age_seconds < 30, errors_total{reason="none"} 0
+```
+
 **Launch command (reference):**
 
 ```bash
@@ -344,9 +361,10 @@ See `docs/runbooks/32_MAINNET_ROLLOUT_FILL_PROB.md` Phase 4–5 for full config.
 **Evidence required (record in LAUNCH_LOG.md):**
 
 1. Post-restart metrics: `enforce_enabled=1`, `allowlist_enabled=0`, `cb_trips=0`
-2. 24h observation: `cb_trips=0`, block rate reasonable (not 100%), no unexpected alerts
-3. Budget metrics: drawdown within limits across all symbols
-4. (Optional) Phase 5: auto-threshold enabled, `mode=auto_apply` confirmed
+2. AccountSync liveness: `last_ts > 0`, `age_seconds < 120`, `errors_total = 0`
+3. 24h observation: `cb_trips=0`, block rate reasonable (not 100%), no unexpected alerts
+4. Budget metrics: drawdown within limits across all symbols
+5. (Optional) Phase 5: auto-threshold enabled, `mode=auto_apply` confirmed
 
 **Observation window:** 24h minimum.
 
@@ -372,6 +390,7 @@ See `docs/runbooks/32_MAINNET_ROLLOUT_FILL_PROB.md` Phase 4–5 for full config.
 
 | Date | Change |
 |------|--------|
+| 2026-03-02 | C4 operational readiness (main @ `9737395`). AccountSync liveness: last_ts semantics (#334), alert triage anchors (#335), threshold alignment (#336). C4 evidence checklist updated. |
 | 2026-03-02 | SSOT refresh (main @ `d7b778f`). C3 DONE, C4 IN PROGRESS. RISK-EE-1 RESOLVED (PR #316). AccountSync mainnet pipeline (PRs #329-331). |
 | 2026-02-28 | Add ceremony tracker (C3/C4), evidence requirements, scope rule. |
 | 2026-02-28 | RISK-EE-1 escalated P1→P0 blocker. C4 paused until emergency exit implemented. |
