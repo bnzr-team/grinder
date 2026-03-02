@@ -79,7 +79,19 @@ fail_check() {
 }
 
 echo "== ACCEPTANCE PACKET: IDENTITY =="
-PR_JSON="$(gh pr view "${PR_NUMBER}" --json url,state,mergedAt,mergeCommit,baseRefName,headRefName,title,number)"
+# Use gh api (REST) instead of gh pr view (GraphQL) to avoid
+# "Projects (classic) is being deprecated" failures.
+REPO_NWO_ID="$(gh repo view --json nameWithOwner -q '.nameWithOwner')"
+PR_JSON="$(gh api "repos/${REPO_NWO_ID}/pulls/${PR_NUMBER}" --jq '{
+  url: .html_url,
+  state: .state,
+  mergedAt: .merged_at,
+  mergeCommit: .merge_commit_sha,
+  baseRefName: .base.ref,
+  headRefName: .head.ref,
+  title: .title,
+  number: .number
+}')"
 echo "${PR_JSON}" | python3 -c 'import json,sys; print(json.dumps(json.load(sys.stdin), indent=2))'
 echo
 

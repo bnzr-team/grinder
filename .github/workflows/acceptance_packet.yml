@@ -78,7 +78,10 @@ jobs:
             echo "sha=${{ github.event.pull_request.head.sha }}" >> "$GITHUB_OUTPUT"
           else
             # For workflow_dispatch, get HEAD SHA from PR
-            SHA=$(gh pr view "$PR_NUMBER" --json headRefOid -q '.headRefOid')
+            # Use gh api (REST) instead of gh pr view (GraphQL) to avoid
+            # "Projects (classic) is being deprecated" failures.
+            REPO_NWO="${{ github.repository }}"
+            SHA=$(gh api "repos/${REPO_NWO}/pulls/${PR_NUMBER}" --jq '.head.sha')
             echo "sha=$SHA" >> "$GITHUB_OUTPUT"
           fi
 
