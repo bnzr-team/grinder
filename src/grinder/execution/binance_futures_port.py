@@ -50,6 +50,12 @@ from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
 
+from grinder.account.contracts import (
+    AccountSnapshot,
+    OpenOrderSnap,
+    PositionSnap,
+    build_account_snapshot,
+)
 from grinder.connectors.errors import ConnectorNonRetryableError
 from grinder.connectors.live_connector import SafeMode
 from grinder.core import OrderSide, OrderState
@@ -76,6 +82,15 @@ from grinder.reconcile.identity import (
 
 BINANCE_FUTURES_TESTNET_URL = "https://testnet.binancefuture.com"
 BINANCE_FUTURES_MAINNET_URL = "https://fapi.binance.com"
+
+
+def _parse_reduce_only(val: Any) -> bool:
+    """Parse reduceOnly from Binance (may be bool or string ``"false"``)."""
+    if isinstance(val, bool):
+        return val
+    if isinstance(val, str):
+        return val.lower() in ("true", "1")
+    return bool(val)
 
 
 @dataclass
@@ -436,6 +451,93 @@ class BinanceFuturesPort:
         if isinstance(response.json_data, list):
             return response.json_data
         return []
+
+    def fetch_account_snapshot(self) -> AccountSnapshot:
+        """Fetch full account snapshot (positions + open orders).
+
+        Makes exactly 2 REST calls:
+          GET /fapi/v2/positionRisk (no symbol filter -> all positions)
+          GET /fapi/v1/openOrders   (no symbol filter -> all open orders)
+
+        Returns AccountSnapshot with canonical ordering.
+        dry_run=True -> empty snapshot, 0 HTTP calls.
+        """
+        if self.config.dry_run:
+            return build_account_snapshot([], [], source="dry_run")
+
+        # --- Positions (all symbols) ---
+        pos_params = self._sign_request({})
+        pos_url = f"{self.config.base_url}/fapi/v2/positionRisk"
+        pos_resp = self.http_client.request(
+            method="GET",
+            url=pos_url,
+            params=pos_params,
+            headers=self._get_headers(),
+            timeout_ms=self.config.timeout_ms,
+            op=OP_GET_POSITIONS,
+        )
+        if pos_resp.status_code != 200:
+            map_binance_error(pos_resp.status_code, pos_resp.json_data)
+        raw_positions: list[dict[str, Any]] = (
+            pos_resp.json_data if isinstance(pos_resp.json_data, list) else []
+        )
+
+        # --- Open orders (all symbols) ---
+        ord_params = self._sign_request({})
+        ord_url = f"{self.config.base_url}/fapi/v1/openOrders"
+        ord_resp = self.http_client.request(
+            method="GET",
+            url=ord_url,
+            params=ord_params,
+            headers=self._get_headers(),
+            timeout_ms=self.config.timeout_ms,
+            op=OP_GET_OPEN_ORDERS,
+        )
+        if ord_resp.status_code != 200:
+            map_binance_error(ord_resp.status_code, ord_resp.json_data)
+        raw_orders: list[dict[str, Any]] = (
+            ord_resp.json_data if isinstance(ord_resp.json_data, list) else []
+        )
+
+        # --- Parse positions -> PositionSnap ---
+        positions: list[PositionSnap] = []
+        for p in raw_positions:
+            qty = abs(Decimal(str(p.get("positionAmt", "0"))))
+            if qty == 0:
+                continue
+            positions.append(
+                PositionSnap(
+                    symbol=p.get("symbol", ""),
+                    side=p.get("positionSide", "BOTH"),
+                    qty=qty,
+                    entry_price=Decimal(str(p.get("entryPrice", "0"))),
+                    mark_price=Decimal(str(p.get("markPrice", "0"))),
+                    unrealized_pnl=Decimal(str(p.get("unRealizedProfit", "0"))),
+                    leverage=int(p.get("leverage", 1)),
+                    ts=int(p.get("updateTime", 0)),
+                )
+            )
+
+        # --- Parse orders -> OpenOrderSnap ---
+        open_orders: list[OpenOrderSnap] = []
+        for o in raw_orders:
+            order_id = o.get("clientOrderId") or str(o.get("orderId", ""))
+            open_orders.append(
+                OpenOrderSnap(
+                    order_id=order_id,
+                    symbol=o.get("symbol", ""),
+                    side=o.get("side", ""),
+                    order_type=o.get("type", ""),
+                    price=Decimal(str(o.get("price", "0"))),
+                    qty=Decimal(str(o.get("origQty", "0"))),
+                    filled_qty=Decimal(str(o.get("executedQty", "0"))),
+                    reduce_only=_parse_reduce_only(o.get("reduceOnly", False)),
+                    status=o.get("status", ""),
+                    ts=int(o.get("updateTime", 0)),
+                )
+            )
+
+        return build_account_snapshot(positions, open_orders, source="exchange")
 
     def get_account_info(self) -> FuturesAccountInfo:
         """Get futures account information."""
