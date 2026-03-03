@@ -2,6 +2,15 @@
 
 SSOT: docs/15_ACCOUNT_SYNC_SPEC.md (Sec 15.7)
 
+Metric semantics (PR-339):
+  last_ts      = max(exchange updateTime) from snapshot  — DATA FRESHNESS
+  last_wall_ts = wall-clock ms when sync completed       — LIVENESS
+  age_seconds  = seconds since last_wall_ts              — LIVENESS AGE
+  data_age_seconds = seconds since last_ts               — DATA FRESHNESS AGE
+
+"Successfully completed" = fetch_account_snapshot() returned without
+exception and record_sync() was called.
+
 Design:
 - Pure dataclass singleton (same pattern as execution/sor_metrics.py)
 - Thread-safe via dict operations (GIL-protected)
@@ -15,7 +24,9 @@ from dataclasses import dataclass, field
 
 # Metric names (stable contract)
 METRIC_SYNC_LAST_TS = "grinder_account_sync_last_ts"
+METRIC_SYNC_LAST_WALL_TS = "grinder_account_sync_last_wall_ts"
 METRIC_SYNC_AGE_SECONDS = "grinder_account_sync_age_seconds"
+METRIC_SYNC_DATA_AGE_SECONDS = "grinder_account_sync_data_age_seconds"
 METRIC_SYNC_ERRORS = "grinder_account_sync_errors_total"
 METRIC_SYNC_MISMATCHES = "grinder_account_sync_mismatches_total"
 METRIC_SYNC_POSITIONS_COUNT = "grinder_account_sync_positions_count"
@@ -31,7 +42,8 @@ class AccountSyncMetrics:
     Production-ready for Prometheus export.
 
     Attributes:
-        last_sync_ts: Unix ms of last successful sync.
+        last_sync_ts: Data timestamp — max(exchange updateTime) from snapshot (freshness).
+        last_wall_ts: Wall-clock ms when sync last completed without error (liveness).
         sync_errors: {reason: count} counter.
         mismatches: {rule: count} counter.
         positions_count: Number of positions in last snapshot.
@@ -40,6 +52,7 @@ class AccountSyncMetrics:
     """
 
     last_sync_ts: int = 0
+    last_wall_ts: int = 0
     sync_errors: dict[str, int] = field(default_factory=dict)
     mismatches: dict[str, int] = field(default_factory=dict)
     positions_count: int = 0
@@ -51,11 +64,13 @@ class AccountSyncMetrics:
     ) -> None:
         """Record a successful sync.
 
-        When ts=0 (empty account — no positions/orders to derive a timestamp
-        from), falls back to wall-clock ms so that last_sync_ts always reflects
-        "a sync happened" rather than "never synced".
+        Always sets last_wall_ts to wall-clock (liveness).
+        Sets last_sync_ts to snapshot data timestamp; falls back to
+        wall-clock when ts=0 (empty account).
         """
-        self.last_sync_ts = ts if ts > 0 else int(time.time() * 1000)
+        now_ms = int(time.time() * 1000)
+        self.last_wall_ts = now_ms
+        self.last_sync_ts = ts if ts > 0 else now_ms
         self.positions_count = positions
         self.open_orders_count = open_orders
         self.pending_notional = pending_notional
@@ -70,24 +85,44 @@ class AccountSyncMetrics:
 
     def to_prometheus_lines(self) -> list[str]:
         """Generate Prometheus text format lines."""
+        now = time.time()
         lines: list[str] = []
 
-        # Last sync timestamp
+        # Data timestamp (freshness: max exchange updateTime)
         lines.extend(
             [
-                f"# HELP {METRIC_SYNC_LAST_TS} Unix ms of last successful account sync",
+                f"# HELP {METRIC_SYNC_LAST_TS} Data timestamp from exchange snapshot (freshness)",
                 f"# TYPE {METRIC_SYNC_LAST_TS} gauge",
                 f"{METRIC_SYNC_LAST_TS} {self.last_sync_ts}",
             ]
         )
 
-        # Age since last sync
-        age = time.time() - self.last_sync_ts / 1000.0 if self.last_sync_ts > 0 else 0.0
+        # Wall-clock liveness timestamp
         lines.extend(
             [
-                f"# HELP {METRIC_SYNC_AGE_SECONDS} Seconds since last successful account sync",
+                f"# HELP {METRIC_SYNC_LAST_WALL_TS} Wall-clock ms when sync last completed (liveness)",
+                f"# TYPE {METRIC_SYNC_LAST_WALL_TS} gauge",
+                f"{METRIC_SYNC_LAST_WALL_TS} {self.last_wall_ts}",
+            ]
+        )
+
+        # Liveness age (seconds since last_wall_ts)
+        age = now - self.last_wall_ts / 1000.0 if self.last_wall_ts > 0 else 0.0
+        lines.extend(
+            [
+                f"# HELP {METRIC_SYNC_AGE_SECONDS} Seconds since last successful sync (liveness)",
                 f"# TYPE {METRIC_SYNC_AGE_SECONDS} gauge",
                 f"{METRIC_SYNC_AGE_SECONDS} {age:.2f}",
+            ]
+        )
+
+        # Data freshness age (seconds since last_ts)
+        data_age = now - self.last_sync_ts / 1000.0 if self.last_sync_ts > 0 else 0.0
+        lines.extend(
+            [
+                f"# HELP {METRIC_SYNC_DATA_AGE_SECONDS} Seconds since last exchange data update (freshness)",
+                f"# TYPE {METRIC_SYNC_DATA_AGE_SECONDS} gauge",
+                f"{METRIC_SYNC_DATA_AGE_SECONDS} {data_age:.2f}",
             ]
         )
 

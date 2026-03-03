@@ -224,8 +224,10 @@ All metrics follow existing patterns from `MetricsBuilder` / `REQUIRED_METRICS_P
 
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
-| `grinder_account_sync_last_ts` | gauge | — | Unix ms of last successful sync |
-| `grinder_account_sync_age_seconds` | gauge | — | Seconds since last successful sync |
+| `grinder_account_sync_last_ts` | gauge | — | Unix ms of last exchange data update (max `updateTime` across positions/orders) — DATA FRESHNESS |
+| `grinder_account_sync_last_wall_ts` | gauge | — | Unix ms wall-clock when last sync completed without error — LIVENESS |
+| `grinder_account_sync_age_seconds` | gauge | — | Seconds since last successful sync completion (wall-clock liveness) |
+| `grinder_account_sync_data_age_seconds` | gauge | — | Seconds since last exchange data update (data freshness) |
 | `grinder_account_sync_errors_total` | counter | `reason` | Sync errors by reason (timeout, auth, parse) |
 | `grinder_account_sync_mismatches_total` | counter | `rule` | Mismatches detected by rule (duplicate_key, ts_regression, negative_qty, orphan_order) |
 | `grinder_account_sync_positions_count` | gauge | — | Number of positions in last snapshot |
@@ -344,11 +346,26 @@ replay/paper mode.
 
 ## 15.11 Operational Notes
 
+### Liveness vs freshness (PR-339)
+
+Two distinct concerns, two distinct metric families:
+
+| Concern | Metric | Source | Alert |
+|---------|--------|--------|-------|
+| **Liveness** — is sync running? | `last_wall_ts` / `age_seconds` | Wall-clock set on every successful `record_sync()` call | `AccountSyncStale` (>120s) |
+| **Data freshness** — is exchange data changing? | `last_ts` / `data_age_seconds` | Max `updateTime` from exchange positions/orders | `AccountSyncDataStale` (>300s) |
+
+**Why the split:** When a single unchanged open order sits on Binance, `snapshot.ts` (max of order `updateTime` values) is frozen at order creation time. The old `age_seconds` (derived from `last_ts`) grew unbounded — triggering false `AccountSyncStale` alerts even though sync was running successfully every 5 seconds. Separating liveness (wall-clock) from freshness (data timestamp) eliminates this false-positive class.
+
 ### Edge case: empty account (`snapshot.ts=0`)
 
-When the account has no positions and no open orders, `build_account_snapshot()` computes `ts = max([])` which defaults to `0`. However, `AccountSyncMetrics.record_sync()` falls back to wall-clock ms when `ts=0`, so `grinder_account_sync_last_ts` always reflects "last successful sync" and `grinder_account_sync_age_seconds` computes correctly.
+When the account has no positions and no open orders, `build_account_snapshot()` computes `ts = max([])` which defaults to `0`. However, `AccountSyncMetrics.record_sync()` still sets `last_wall_ts` to wall-clock ms, so liveness metrics (`age_seconds`) always reflect sync health. `last_ts` remains 0 until the first non-empty snapshot.
 
-**Semantic contract:** `grinder_account_sync_last_ts` = timestamp of last successful sync attempt (wall-clock fallback for empty accounts). It is never 0 after at least one successful sync.
+**Semantic contract:**
+- `grinder_account_sync_last_wall_ts` = wall-clock ms of last successful `record_sync()` call. Never 0 after at least one successful sync.
+- `grinder_account_sync_last_ts` = max exchange `updateTime` across positions/orders (data freshness). May be 0 for empty accounts.
+- `grinder_account_sync_age_seconds` = seconds since `last_wall_ts` (liveness).
+- `grinder_account_sync_data_age_seconds` = seconds since `last_ts` (data freshness).
 
 Sync liveness can also be verified via HTTP request counters:
 

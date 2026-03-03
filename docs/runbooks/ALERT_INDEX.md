@@ -57,7 +57,7 @@ rg -n 'alert: <NAME>' monitoring/alert_rules.yml
 | `FillIngestNoPolls` | fills | availability | `grinder-overview` | [26_FILL_TRACKER_TRIAGE](26_FILL_TRACKER_TRIAGE.md#fillingestnopolls) | Reconcile loop may be stuck |
 | `FillCursorSaveErrors` | fills | integrity | `grinder-overview` | [26_FILL_TRACKER_TRIAGE](26_FILL_TRACKER_TRIAGE.md#fillcursorsaveerrors) | Check disk permissions, path |
 
-### Warning (27 alerts)
+### Warning (28 alerts)
 
 | Alert | component | category | `dashboard_uid` | Runbook | First look |
 |-------|-----------|----------|-----------------|---------|------------|
@@ -80,7 +80,8 @@ rg -n 'alert: <NAME>' monitoring/alert_rules.yml
 | `SorBlockedSpike` | sor | safety | — | [28_SOR_FIRE_DRILL](28_SOR_FIRE_DRILL.md#sorblockedspike) | Orders rejected by SOR |
 | `FillProbBlocksSpike` | sor | safety | — | [31_FILL_PROB_ROLLOUT](31_FILL_PROB_ROLLOUT.md#circuit-breaker-tuning) | Early warning before FillProbBlocksHigh |
 | `FillProbCircuitBreakerTripped` | sor | safety | — | [31_FILL_PROB_ROLLOUT](31_FILL_PROB_ROLLOUT.md#circuit-breaker-tuning) | Review model calibration, threshold |
-| `AccountSyncStale` | account | correctness | — | [29_ACCOUNT_SYNC](29_ACCOUNT_SYNC.md#accountsyncstale) | Positions/orders may be outdated |
+| `AccountSyncStale` | account | correctness | — | [29_ACCOUNT_SYNC](29_ACCOUNT_SYNC.md#accountsyncstale) | Sync process not completing (liveness) |
+| `AccountSyncDataStale` | account | correctness | — | [29_ACCOUNT_SYNC](29_ACCOUNT_SYNC.md#accountsyncdatastale) | Exchange data timestamp unchanged (freshness) |
 | `AccountSyncErrors` | account | availability | — | [29_ACCOUNT_SYNC](29_ACCOUNT_SYNC.md#accountsyncerrors) | Check API connectivity, credentials |
 | `AccountSyncMismatchSpike` | account | correctness | — | [30_ACCOUNT_SYNC_FIRE_DRILL](30_ACCOUNT_SYNC_FIRE_DRILL.md#accountsyncmismatchspike) | Expected vs observed diverged |
 | `FillIngestDisabled` | fills | availability | — | [26_FILL_TRACKER_TRIAGE](26_FILL_TRACKER_TRIAGE.md#fillingestdisabled) | Set `FILL_INGEST_ENABLED=1` |
@@ -118,11 +119,11 @@ rg -n 'alert: <NAME>' monitoring/alert_rules.yml
 |----------|-------|---------------------|
 | critical | 9 | 9 (100%) |
 | page | 6 | 6 (100%) |
-| warning | 27 | 0 |
+| warning | 28 | 0 |
 | ticket | 4 | 0 |
 | info | 7 | 0 |
 
-| **Total** | **53** | **15** |
+| **Total** | **54** | **15** |
 
 > `dashboard_uid` is required for `critical` and `page` alerts (OBS-3/OBS-4 contract).
 > Enforced by `scripts/verify_alert_rules.py`.

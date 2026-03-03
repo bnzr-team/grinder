@@ -164,8 +164,10 @@ Metrics from `src/grinder/account/metrics.py`.
 
 | Panel | PromQL | Type | Notes |
 |-------|--------|------|-------|
-| Sync age | `grinder_account_sync_age_seconds` | Gauge | >120s fires `AccountSyncStale` (if `last_ts > 0`) |
-| Last sync timestamp | `grinder_account_sync_last_ts` | Gauge | 0 = never synced; >0 after first successful sync (wall-clock fallback for empty accounts) |
+| Sync age (liveness) | `grinder_account_sync_age_seconds` | Gauge | Seconds since last successful sync completion (wall-clock). >120s fires `AccountSyncStale` (if `last_wall_ts > 0`) |
+| Data age (freshness) | `grinder_account_sync_data_age_seconds` | Gauge | Seconds since last exchange data update. >300s fires `AccountSyncDataStale` (if `last_ts > 0`) |
+| Last sync wall-clock | `grinder_account_sync_last_wall_ts` | Gauge | Wall-clock ms when last sync completed without error (liveness). 0 = never synced |
+| Last data timestamp | `grinder_account_sync_last_ts` | Gauge | Max exchange `updateTime` (data freshness). 0 = empty account or never synced |
 | Errors by reason | `sum by (reason) (increase(grinder_account_sync_errors_total[5m]))` | Counter | >0 fires `AccountSyncErrors`; check `reason` label |
 | Mismatches by rule | `sum by (rule) (increase(grinder_account_sync_mismatches_total[5m]))` | Counter | >0 fires `AccountSyncMismatchSpike` |
 | Position count | `grinder_account_sync_positions_count` | Gauge | Sanity: expected number of open positions |
@@ -174,9 +176,9 @@ Metrics from `src/grinder/account/metrics.py`.
 
 **Drilldowns:** Break by `reason=` on errors, `rule=` on mismatches.
 
-**What good looks like:** `age_seconds < 30`, zero errors, zero mismatches, position/order counts match expectations.
+**What good looks like:** `age_seconds < 30` (liveness), `data_age_seconds` reasonable for current activity, zero errors, zero mismatches, position/order counts match expectations.
 
-**What bad looks like:** `age_seconds` climbing (stale sync), errors by `http`/`auth`/`parse` reasons, mismatch spike.
+**What bad looks like:** `age_seconds` climbing (sync not completing), `data_age_seconds` climbing with active positions (exchange data frozen), errors by `http`/`auth`/`parse` reasons, mismatch spike.
 
 **Next step:** `bash scripts/ops_fill_triage.sh account-sync-drill` or [29_ACCOUNT_SYNC.md](runbooks/29_ACCOUNT_SYNC.md)
 

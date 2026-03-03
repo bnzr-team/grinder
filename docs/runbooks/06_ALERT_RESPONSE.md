@@ -122,7 +122,8 @@ Use this table to jump from any alert directly to the right dashboard panel and 
 | `FsmBadStateTooLong` | warning | Overview | FSM state | Check operator override | [27_FSM_OPERATOR_OVERRIDE](27_FSM_OPERATOR_OVERRIDE.md#fsmbadstatetoolong) |
 | `FsmActionBlockedSpike` | warning | Overview | FSM state | Intents rejected by permission matrix | [27_FSM_OPERATOR_OVERRIDE](27_FSM_OPERATOR_OVERRIDE.md#fsmactionblockedspike) |
 | `SorBlockedSpike` | warning | Overview | Router decisions | Orders rejected by SOR | [28_SOR_FIRE_DRILL](28_SOR_FIRE_DRILL.md#sorblockedspike) |
-| `AccountSyncStale` | warning | Overview | Sync age | Positions/orders may be outdated | [29_ACCOUNT_SYNC](29_ACCOUNT_SYNC.md#accountsyncstale) |
+| `AccountSyncStale` | warning | Overview | Sync liveness age | Sync process not completing | [29_ACCOUNT_SYNC](29_ACCOUNT_SYNC.md#accountsyncstale) |
+| `AccountSyncDataStale` | warning | Overview | Data freshness age | Exchange data not updating | [29_ACCOUNT_SYNC](29_ACCOUNT_SYNC.md#accountsyncdatastale) |
 | `AccountSyncErrors` | warning | Overview | Sync errors | Check API connectivity, credentials | [29_ACCOUNT_SYNC](29_ACCOUNT_SYNC.md#accountsyncerrors) |
 | `AccountSyncMismatchSpike` | warning | Overview | Sync mismatches | Expected vs observed diverged | [30_ACCOUNT_SYNC_FIRE_DRILL](30_ACCOUNT_SYNC_FIRE_DRILL.md#accountsyncmismatchspike) |
 | `FillIngestDisabled` | warning | Overview | Ingest enabled gauge | Set FILL_INGEST_ENABLED=1 | [26_FILL_TRACKER_TRIAGE](26_FILL_TRACKER_TRIAGE.md#fillingestdisabled) |

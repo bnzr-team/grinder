@@ -173,8 +173,10 @@ stable contract defined in `src/grinder/observability/metrics_contract.py`.
 | `grinder_emergency_exit_total{result}` | counter | Exit executions by result | `result="error"` = investigate |
 | `grinder_emergency_exit_orders_cancelled_total` | counter | Orders cancelled by exit | Unexpected increment |
 | `grinder_emergency_exit_positions_closed_total` | counter | Positions closed by exit | Unexpected increment |
-| `grinder_account_sync_last_ts` | gauge | Last successful sync timestamp | Stale (>120s old) |
-| `grinder_account_sync_age_seconds` | gauge | Seconds since last sync | >120 = sync stalled (fires `AccountSyncStale`) |
+| `grinder_account_sync_last_ts` | gauge | Last exchange data update timestamp (data freshness) | Frozen when orders unchanged |
+| `grinder_account_sync_last_wall_ts` | gauge | Wall-clock of last successful sync completion (liveness) | Stale (>120s old) |
+| `grinder_account_sync_age_seconds` | gauge | Seconds since last successful sync (liveness, wall-clock) | >120 = sync stalled (fires `AccountSyncStale`) |
+| `grinder_account_sync_data_age_seconds` | gauge | Seconds since last exchange data update (freshness) | >300 = data frozen (fires `AccountSyncDataStale`) |
 | `grinder_account_sync_errors_total{reason}` | counter | Sync errors | Sustained increment |
 | `grinder_account_sync_mismatches_total{rule}` | counter | Position/order mismatches | Any increment = check exchange |
 | `grinder_account_sync_positions_count` | gauge | Open positions count | Unexpected increase |
@@ -210,7 +212,7 @@ watch -n 5 'curl -sf http://localhost:9090/metrics | grep -E \
 | R2 | Drawdown approaching limit | `grinder_drawdown_pct >= 0.15` | 75% of default 0.20 threshold |
 | R3 | FSM stuck in EMERGENCY | `grinder_fsm_current_state{state="EMERGENCY"} == 1` for >10 min | 10 consecutive minutes |
 | R4 | Emergency exit error | `grinder_emergency_exit_total{result="error"}` incrementing | Any error result |
-| R5 | Account sync stalled | `grinder_account_sync_age_seconds > 120` | 2 minutes without sync |
+| R5 | Account sync stalled | `grinder_account_sync_age_seconds > 120` (liveness, wall-clock) | 2 minutes without successful sync |
 | R6 | HA flapping | `grinder_ha_role` changes >3 times in 5 min | 3 role changes / 5 min |
 | R7 | Fill-prob CB trip | `grinder_router_fill_prob_cb_trips_total > 0` | Any trip (see Runbook 32) |
 | R8 | Operator doubt | Anything unexpected | Judgment call |

@@ -202,7 +202,8 @@ curl -fsS http://localhost:9090/metrics | grep grinder_router_decision_total
 
 | Alert | Severity | Action |
 |-------|----------|--------|
-| `AccountSyncStale` | warning | Sync data >120s old. Check API connectivity, credentials, and `GRINDER_ACCOUNT_SYNC_ENABLED=1`. See [29_ACCOUNT_SYNC.md](29_ACCOUNT_SYNC.md). |
+| `AccountSyncStale` | warning | Sync process not completing >120s (liveness). Check API connectivity, credentials, and `GRINDER_ACCOUNT_SYNC_ENABLED=1`. See [29_ACCOUNT_SYNC.md](29_ACCOUNT_SYNC.md#accountsyncstale). |
+| `AccountSyncDataStale` | warning | Exchange data unchanged >300s (freshness). Normal for idle unchanged orders; investigate if actively trading. See [29_ACCOUNT_SYNC.md](29_ACCOUNT_SYNC.md#accountsyncdatastale). |
 | `AccountSyncErrors` | warning | HTTP/auth/parse failures during sync. Check Binance API status, API key validity. See [29_ACCOUNT_SYNC.md](29_ACCOUNT_SYNC.md). |
 | `AccountSyncMismatchSpike` | warning | Expected vs observed state diverged. Run fire drill: `bash scripts/ops_fill_triage.sh account-sync-drill`. See [30_ACCOUNT_SYNC_FIRE_DRILL.md](30_ACCOUNT_SYNC_FIRE_DRILL.md). |
 
@@ -354,7 +355,8 @@ If you have Prometheus running, paste these PromQL queries for a full picture:
 
 - FSM state: `grinder_fsm_current_state`
 - SOR decisions: `sum by (decision,reason) (increase(grinder_router_decision_total[5m]))`
-- Sync freshness: `grinder_account_sync_age_seconds`
+- Sync liveness: `grinder_account_sync_age_seconds` (wall-clock)
+- Data freshness: `grinder_account_sync_data_age_seconds`
 
 For detailed panel definitions and drilldowns, see [OBSERVABILITY_STACK.md -- Launch-13/14/15 Quick Panels](../OBSERVABILITY_STACK.md#launch-131415-quick-panels).
 

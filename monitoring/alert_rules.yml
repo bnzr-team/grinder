@@ -845,17 +845,18 @@ groups:
           description: "SOR has issued {{ $value | printf \"%.0f\" }} NOOP decisions in 5 minutes. Orders are being skipped (already in desired state)."
           runbook_url: "docs/runbooks/28_SOR_FIRE_DRILL.md#sornoopspike"
 
-  # Launch-15: AccountSync Alerts
+  # Launch-15 + PR-339: AccountSync Alerts
   # Metrics from src/grinder/account/metrics.py.
   # Labels: reason=, rule= only.
-  # Safe-by-default: AccountSyncStale guarded by last_ts > 0 (inactive = no alert).
+  # PR-339: split into liveness (wall-clock) and data freshness alerts.
+  # age_seconds derives from last_wall_ts (liveness), data_age_seconds from last_ts (freshness).
   - name: grinder_account_sync
     rules:
-      # Warning: Account sync data is stale (enabled but not refreshing)
-      # Guard: last_ts > 0 ensures alert only fires when sync has been active.
+      # Warning: Account sync process is stale (not completing syncs)
+      # Guard: last_wall_ts > 0 ensures alert only fires after first successful sync.
       - alert: AccountSyncStale
         expr: |
-          grinder_account_sync_last_ts > 0
+          grinder_account_sync_last_wall_ts > 0
           and
           grinder_account_sync_age_seconds > 120
         for: 2m
@@ -864,9 +865,26 @@ groups:
           component: account
           category: correctness
         annotations:
-          summary: "Account sync stale (age {{ $value | printf \"%.0f\" }}s)"
-          description: "Account sync data is {{ $value | printf \"%.0f\" }}s old (threshold: 120s). Positions and open orders may be outdated."
+          summary: "Account sync stale (liveness age {{ $value | printf \"%.0f\" }}s)"
+          description: "Account sync process has not completed in {{ $value | printf \"%.0f\" }}s (threshold: 120s). The sync loop may have stopped."
           runbook_url: "docs/runbooks/29_ACCOUNT_SYNC.md#accountsyncstale"
+
+      # Warning: Exchange data is not updating (orders/positions unchanged)
+      # Normal for idle accounts with unchanged limit orders; higher threshold (300s).
+      - alert: AccountSyncDataStale
+        expr: |
+          grinder_account_sync_last_ts > 0
+          and
+          grinder_account_sync_data_age_seconds > 300
+        for: 5m
+        labels:
+          severity: warning
+          component: account
+          category: correctness
+        annotations:
+          summary: "Account sync data stale (data age {{ $value | printf \"%.0f\" }}s)"
+          description: "Exchange data timestamp unchanged for {{ $value | printf \"%.0f\" }}s (threshold: 300s). Orders/positions may not be refreshing on Binance side."
+          runbook_url: "docs/runbooks/29_ACCOUNT_SYNC.md#accountsyncdatastale"
 
       # Warning: Account sync errors (HTTP, auth, parse failures)
       - alert: AccountSyncErrors

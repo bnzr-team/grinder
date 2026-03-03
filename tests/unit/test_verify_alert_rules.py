@@ -527,3 +527,6 @@ class TestAccountSyncAlertNamesPresent:
 
     def test_account_sync_mismatch_spike(self) -> None:
         assert "AccountSyncMismatchSpike" in _load_alert_names()
+
+    def test_account_sync_data_stale(self) -> None:
+        assert "AccountSyncDataStale" in _load_alert_names()
