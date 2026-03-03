@@ -59,13 +59,13 @@ INIT → READY → DEGRADED → EMERGENCY, with explicit transitions, reasons, a
 
 ### Delivered
 
-- FSM tick wired into `LiveEngineV0.process_snapshot()` **before** action processing (Gate 6 sees current state)
+- FSM tick wired into `LiveEngineV0.process_snapshot()` **before** action processing (Gate 7 sees current state)
 - FSM metrics exported:
   - one-hot current state gauge
   - state duration gauge
   - transitions counter (from/to/reason)
   - blocked intents counter (state/intent)
-- Gate 6 enforcement: intents blocked by FSM state return `FSM_STATE_BLOCKED`
+- Gate 7 enforcement: intents blocked by FSM state return `FSM_STATE_BLOCKED`
 - Operator override:
   - `GRINDER_OPERATOR_OVERRIDE` (normalized via `strip().upper()`)
   - documented runbook: `docs/runbooks/27_FSM_OPERATOR_OVERRIDE.md`
@@ -77,7 +77,7 @@ INIT → READY → DEGRADED → EMERGENCY, with explicit transitions, reasons, a
 
 - PR0 (#211) — Spec/ADR (SSOT wiring)
 - PR1 (#213) — Pure FSM core + 74 deterministic tests (merged @ `897ca8b`)
-- PR2 (#214) — Driver + metrics + Gate 6 (merged @ `89e329a`)
+- PR2 (#214) — Driver + metrics + Gate 7 (merged @ `89e329a`)
 - PR3 (#215) — Real loop wiring + runtime signals (merged @ `232d07b`)
 - PR4 (#216) — Operator override normalization + runbook (merged @ `6c37baf`)
 - PR5 (#217) — Deterministic evidence artifacts (merged @ `7793045`)

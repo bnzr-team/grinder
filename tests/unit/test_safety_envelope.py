@@ -248,7 +248,7 @@ class TestGateOrdering:
     """Verify gate ordering via observed behavior.
 
     The gate chain is:
-        1. armed  2. mode  3. kill_switch  4. whitelist  5. drawdown  6. FSM  7. fill_prob
+        1. armed  2. mode  3. kill_switch  4. whitelist  5. max_position  6. drawdown  7. FSM  8. fill_prob
 
     We prove ordering by showing that an earlier gate blocks BEFORE a later
     gate has any chance to fire.  The technique: configure a later gate to

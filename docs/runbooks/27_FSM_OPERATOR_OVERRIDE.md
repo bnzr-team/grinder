@@ -5,7 +5,7 @@ This runbook describes the operator-facing override that forces the LiveEngine F
 ## What it is
 
 `GRINDER_OPERATOR_OVERRIDE` is an environment variable read by `LiveEngineV0` on every `process_snapshot()` tick.
-It is applied **before** action processing, so the FSM state immediately affects Gate 6 (FSM permission gate).
+It is applied **before** action processing, so the FSM state immediately affects Gate 7 (FSM permission gate).
 
 The override is interpreted by the FSM driver and can force transitions such as:
 - `ACTIVE -> PAUSED`
@@ -79,7 +79,7 @@ FSM metrics reflect the forced state:
 - `grinder_fsm_current_state{state="EMERGENCY"} 1` when overridden to EMERGENCY
 - `grinder_fsm_transitions_total{from_state="ACTIVE",to_state="PAUSED",reason="OPERATOR_PAUSE"} 1`
 
-If Gate 6 blocks an intent due to FSM state:
+If Gate 7 blocks an intent due to FSM state:
 
 - `grinder_fsm_action_blocked_total{state="PAUSED",intent="INCREASE_RISK"} ...` increments
 - Warning log `FSM_ACTION_BLOCKED` with `state` and `intent` fields

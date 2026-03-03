@@ -3897,7 +3897,7 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
     - `ALLOW`: model=None (fail-open) OR enforce=True + prob >= threshold.
     - `BLOCK`: enforce=True + prob < threshold.
     - `SHADOW`: enforce=False (prediction computed, never blocks).
-  - **Integration:** Gate 7 in `LiveEngineV0._process_action()`, after FSM gate (Gate 6), before SOR routing. Only applies to PLACE/REPLACE actions. CANCEL/NOOP bypass entirely.
+  - **Integration:** Gate 8 in `LiveEngineV0._process_action()`, after FSM gate (Gate 7), before SOR routing. Only applies to PLACE/REPLACE actions. CANCEL/NOOP bypass entirely.
   - **Env vars:** `GRINDER_FILL_MODEL_ENFORCE` (bool, default false), `GRINDER_FILL_PROB_MIN_BPS` (int, default 2500, range 0..10000). Read once at engine init.
   - **Fail-open:** model=None → gate skipped entirely (no overhead, no log spam).
   - **Default OFF:** `GRINDER_FILL_MODEL_ENFORCE=0` means shadow mode (SHADOW verdict, never blocks).
@@ -4044,9 +4044,9 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
 - **Context:** The engine gate chain in `LiveEngineV0._process_action()` has grown to 7 sequential safety gates (arming, mode, kill-switch, whitelist, drawdown, FSM, fill-prob). Gate ordering is safety-critical: fail-fast behavior ensures the cheapest/most-decisive check runs first, and operators rely on deterministic BlockReason codes for triage. However, the ordering was implicit in code — no normative specification or contract tests existed to prevent accidental reordering.
 - **Decision:**
   - Declare gate ordering **normative** (not just implementation detail).
-  - Gate chain: 1. armed → 2. mode → 3. kill-switch → 4. whitelist → 5. drawdown → 6. FSM → 7. fill-prob → (SOR routing, not a safety gate) → execute.
+  - Gate chain: 1. armed → 2. mode → 3. kill-switch → 4. whitelist → 5. max-position → 6. drawdown → 7. FSM → 8. fill-prob → (SOR routing, not a safety gate) → execute.
   - Dry-run contract formula: **writes impossible unless** `armed=True AND mode=LIVE_TRADE AND exchange_port=futures`. Defaults: `armed=False`, `mode=READ_ONLY`, `exchange_port=noop`.
-  - ConsecutiveLossGuard is documented as an **indirect** gate: CLG trips → sets `GRINDER_OPERATOR_OVERRIDE=PAUSE` → FSM transitions to PAUSE → Gate 6 blocks.
+  - ConsecutiveLossGuard is documented as an **indirect** gate: CLG trips → sets `GRINDER_OPERATOR_OVERRIDE=PAUSE` → FSM transitions to PAUSE → Gate 7 blocks.
   - Contract tests (`tests/unit/test_safety_envelope.py`) freeze ordering via semantic behavior (observed BlockReason + spy guards proving later gates not called), not brittle line-number assertions.
   - SSOT document: `docs/20_SAFETY_ENVELOPE.md`.
 - **Consequences:**

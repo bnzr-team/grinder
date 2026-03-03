@@ -26,6 +26,7 @@ class LiveEngineConfig:
         symbol_whitelist: Symbols allowed to trade. Empty = all allowed.
         sor_enabled: SmartOrderRouter feature flag. False by default (safe-by-default).
         account_sync_enabled: AccountSyncer feature flag. False by default (Launch-15).
+        max_position_usd: Total position notional cap (USD). None = disabled (PR-INV-1).
     """
 
     armed: bool = False
@@ -34,6 +35,7 @@ class LiveEngineConfig:
     symbol_whitelist: list[str] = field(default_factory=list)
     sor_enabled: bool = False
     account_sync_enabled: bool = False
+    max_position_usd: float | None = None
 
     def is_symbol_allowed(self, symbol: str) -> bool:
         """Check if symbol is in whitelist (empty = all allowed)."""

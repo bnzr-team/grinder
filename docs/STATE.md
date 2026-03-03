@@ -1283,6 +1283,12 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - Post-deployment verification checklist
     - Rollback plan with exact commands
   - **Navigation updated:** `docs/DOCS_INDEX.md`, `docs/runbooks/README.md`
+- **Inventory cap + position-aware intent** (PR-INV-1):
+  - Gate 5 (`MAX_POSITION_EXCEEDED`): blocks INCREASE_RISK when total position notional >= cap
+  - `GRINDER_MAX_POSITION_USD` env var (None = disabled, safe-by-default)
+  - Position-aware `classify_intent()`: SELL when LONG = REDUCE_RISK, BUY when SHORT = REDUCE_RISK
+  - Hedge-mode only; one-way mode (`BOTH`) = fail-closed (all PLACE = INCREASE_RISK)
+  - Gate chain re-numbered: 8 gates (was 7). Doc-20 updated.
 
 ## Partially implemented
 - Package structure `src/grinder/*` (core, protocols/interfaces) -- scaffolding.
@@ -1324,7 +1330,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
 - [DONE] Launch-13 (P1): Centralized FSM Orchestrator — COMPLETE (main @ `7793045`).
   - PR0 (#211) — Spec/ADR (SSOT wiring)
   - PR1 (#213) — Pure FSM core + 74 deterministic tests (merged @ `897ca8b`)
-  - PR2 (#214) — Driver + metrics + Gate 6 (merged @ `89e329a`)
+  - PR2 (#214) — Driver + metrics + Gate 7 (merged @ `89e329a`)
   - PR3 (#215) — Real loop wiring + runtime signals (merged @ `232d07b`)
   - PR4 (#216) — Operator override normalization + runbook (merged @ `6c37baf`)
   - PR5 (#217) — Deterministic evidence artifacts (merged @ `7793045`)
@@ -1391,7 +1397,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
 - [DONE] Track C PR-C3c: Per-symbol guards + persistent state. Per-symbol independent streak tracking (`dict[symbol, ConsecutiveLossGuard]`). Persistent state via JSON + sha256 sidecar (`GRINDER_CONSEC_LOSS_STATE_PATH`). Monotonicity guard, strict `from_dict()` validation. Metrics: count=max across symbols, trips=sum. RoundtripTracker NOT persisted (limitation). 16 new tests (35 total in wiring). ADR-070 updated. Remaining: DEGRADED action channel, RoundtripTracker persistence, FillModelV0 integration.
 - [DONE] Track C PR-C3d: RoundtripTracker persistence + restart recovery. `to_state_dict()`/`from_state_dict()` on RoundtripTracker (Decimal->str, strict validation). State file v1->v2 with backward compat. Entry before restart + exit after restart = closed roundtrip. 9 new tests (3 tracker + 6 wiring, 41 total wiring). ADR-070 updated. Remaining: DEGRADED action channel, FillModelV0 integration.
 - [DONE] Track C PR-C4a: FillModelV0 shadow loader + metrics. New `src/grinder/ml/fill_model_loader.py` — loader with SHA256 verify, fail-open, online feature extraction. Shadow integration in `scripts/run_live_reconcile.py` (env-gated via `GRINDER_FILL_MODEL_ENABLED`, NO decision impact). Metrics: `grinder_ml_fill_prob_bps_last` (gauge), `grinder_ml_fill_model_loaded` (gauge). 14 tests. Remaining: SOR enforcement gate (PR-C5), evidence artifacts (PR-C4b).
-- [DONE] Track C PR-C5: Fill probability SOR enforcement gate. New `src/grinder/execution/fill_prob_gate.py` — pure gate function `check_fill_prob()` with ALLOW/BLOCK/SHADOW verdicts. Wired as Gate 7 in `LiveEngineV0._process_action()` (PLACE/REPLACE only). Env vars: `GRINDER_FILL_MODEL_ENFORCE` (default off), `GRINDER_FILL_PROB_MIN_BPS` (default 2500). Fail-open when model=None. Metrics: `grinder_router_fill_prob_blocks_total` (counter), `grinder_router_fill_prob_enforce_enabled` (gauge). ADR-071. Remaining: level filtering (PR-C5b), evidence artifacts (PR-C4b), calibration (PR-C6).
+- [DONE] Track C PR-C5: Fill probability SOR enforcement gate. New `src/grinder/execution/fill_prob_gate.py` — pure gate function `check_fill_prob()` with ALLOW/BLOCK/SHADOW verdicts. Wired as Gate 8 in `LiveEngineV0._process_action()` (PLACE/REPLACE only). Env vars: `GRINDER_FILL_MODEL_ENFORCE` (default off), `GRINDER_FILL_PROB_MIN_BPS` (default 2500). Fail-open when model=None. Metrics: `grinder_router_fill_prob_blocks_total` (counter), `grinder_router_fill_prob_enforce_enabled` (gauge). ADR-071. Remaining: level filtering (PR-C5b), evidence artifacts (PR-C4b), calibration (PR-C6).
 - [DONE] Track C PR-C6: Fill probability evidence artifacts. New `src/grinder/execution/fill_prob_evidence.py` — env-gated evidence writer for BLOCK/SHADOW events. JSON + sha256 sidecar in `{GRINDER_ARTIFACT_DIR}/fill_prob/`. Structured log `FILL_PROB_EVIDENCE` always on BLOCK, on SHADOW only when evidence env ON. Payload: verdict, prob_bps, threshold_bps, enforce, features, action metadata, model metadata. Atomic writes, deterministic format, fail-open. 20 tests. ADR-071a.
 - [DONE] Track C PR-C7: FillModelV0 threshold calibration & offline evaluation. New `src/grinder/ml/fill_model_eval.py` — evaluation library with threshold sweep (101 points, 0..10000 bps), cost-weighted scoring (`TP + cost_ratio * TN`, default ratio 2.0), calibration diagnostics (per-bin predicted vs actual, max error, well-calibrated flag). CLI: `scripts/eval_fill_model_v0.py`. Artifact: `eval_report.json + manifest.json` (deterministic, sha256 sidecar). 23 tests. ADR-072.
 - [DONE] Track C PR-C8: Controlled rollout for fill probability enforcement. Three deliverables: (1) `FillProbCircuitBreaker` in `fill_prob_gate.py` — rolling-window block rate tracker, trips when >50% blocks in 5-min window, fail-open, shadow-safe (zero overhead in shadow mode). Wired into `LiveEngineV0._check_fill_prob()` — CB check before gate, bypass on trip. Metric: `grinder_router_fill_prob_cb_trips_total`. Alert: `FillProbCircuitBreakerTripped`. (2) `scripts/preflight_fill_prob.py` — validates model, eval report, calibration, threshold match, evidence artifacts before enforcement enablement. (3) Runbook `docs/runbooks/31_FILL_PROB_ROLLOUT.md` — operator ceremony for enablement, monitoring, rollback. ADR-073.

@@ -5,7 +5,7 @@ Covers:
 - Fail-open: model=None → ALLOW.
 - Shadow mode: enforce=False → SHADOW (never blocks).
 - Enforce mode: prob >= threshold → ALLOW, prob < threshold → BLOCK.
-- Engine integration: Gate 7 wiring in LiveEngineV0.
+- Engine integration: Gate 8 wiring in LiveEngineV0.
 - Metrics: fill_prob_blocks_total counter, fill_prob_enforce_enabled gauge.
 - Contract: new metrics in REQUIRED_METRICS_PATTERNS, no FORBIDDEN_METRIC_LABELS.
 """

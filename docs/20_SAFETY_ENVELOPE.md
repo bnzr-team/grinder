@@ -28,11 +28,12 @@ Each gate returns early on block — later gates are never evaluated.
 | 2 | Mode | `mode != LIVE_TRADE` | `MODE_NOT_LIVE_TRADE` | ALL | - |
 | 3 | Kill-switch | `kill_switch_active=True` | `KILL_SWITCH_ACTIVE` | PLACE, REPLACE | CANCEL |
 | 4 | Symbol whitelist | `symbol_whitelist` (non-empty) | `SYMBOL_NOT_WHITELISTED` | unlisted symbols | listed symbols |
-| 5 | Drawdown guard | `DrawdownGuardV1` state | `DRAWDOWN_BLOCKED` | INCREASE_RISK in DRAWDOWN | CANCEL, REDUCE_RISK |
-| 6 | FSM permission | `FsmDriver.check_intent()` | `FSM_STATE_BLOCKED` | actions forbidden by FSM state | allowed intents |
-| 7 | Fill probability | `FillModelV0` threshold | `FILL_PROB_LOW` | low-prob PLACE/REPLACE | high-prob or CANCEL |
+| 5 | Max position | `max_position_usd` (non-None) | `MAX_POSITION_EXCEEDED` | INCREASE_RISK when notional >= cap | CANCEL, REDUCE_RISK |
+| 6 | Drawdown guard | `DrawdownGuardV1` state | `DRAWDOWN_BLOCKED` | INCREASE_RISK in DRAWDOWN | CANCEL, REDUCE_RISK |
+| 7 | FSM permission | `FsmDriver.check_intent()` | `FSM_STATE_BLOCKED` | actions forbidden by FSM state | allowed intents |
+| 8 | Fill probability | `FillModelV0` threshold | `FILL_PROB_LOW` | low-prob PLACE/REPLACE | high-prob or CANCEL |
 
-After all 7 gates pass, SOR routing (not a safety gate) may adjust the order
+After all 8 gates pass, SOR routing (not a safety gate) may adjust the order
 before execution via the exchange port.
 
 ### Ordering rationale
@@ -44,6 +45,29 @@ before execution via the exchange port.
 Any change to gate ordering requires updating this document, the contract tests,
 and ADR-076.
 
+### Position-aware intent classification (PR-INV-1)
+
+`classify_intent(action, pos_sign)` determines INCREASE_RISK vs REDUCE_RISK
+based on current position direction:
+
+| pos_sign | Action side | Intent |
+|----------|------------|--------|
+| +1 (LONG) | SELL | REDUCE_RISK |
+| +1 (LONG) | BUY | INCREASE_RISK |
+| -1 (SHORT) | BUY | REDUCE_RISK |
+| -1 (SHORT) | SELL | INCREASE_RISK |
+| None (unknown/BOTH/flat) | any | INCREASE_RISK (fail-closed) |
+
+`pos_sign` is derived from `AccountSnapshot.positions` (hedge-mode only).
+In one-way mode (`side="BOTH"`), sign is unknown → fail-closed.
+
+### Gate 5: Max position (PR-INV-1)
+
+Enabled by `GRINDER_MAX_POSITION_USD` environment variable.
+Uses `_position_notional_usd` from AccountSyncer (total across all symbols).
+When `notional >= cap`, blocks INCREASE_RISK; allows CANCEL and REDUCE_RISK.
+Disabled when env var is unset or AccountSync has not run yet.
+
 ## ConsecutiveLossGuard (indirect gate)
 
 ConsecutiveLossGuard is **not** in the engine gate chain.  It is wired into
@@ -52,9 +76,9 @@ the live reconciliation pipeline (`risk/consecutive_loss_wiring.py`):
 1. `ConsecutiveLossService.process_trades()` tracks per-symbol loss streaks
 2. On trip (N consecutive losses): sets `GRINDER_OPERATOR_OVERRIDE=PAUSE`
 3. FSM reads this env var and transitions to PAUSE state
-4. Gate 6 (FSM permission) blocks risk-increasing actions
+4. Gate 7 (FSM permission) blocks risk-increasing actions
 
-This is an **indirect** safety mechanism: CLG -> env var -> FSM -> Gate 6.
+This is an **indirect** safety mechanism: CLG -> env var -> FSM -> Gate 7.
 
 ## BinanceFuturesPort guards (port level)
 
