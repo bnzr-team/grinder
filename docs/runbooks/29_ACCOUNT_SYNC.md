@@ -77,8 +77,10 @@ All metrics are exposed via the Prometheus `/metrics` endpoint through `MetricsB
 
 | Metric | Type | Description |
 |--------|------|-------------|
-| `grinder_account_sync_last_ts` | gauge | Unix ms of last successful sync |
-| `grinder_account_sync_age_seconds` | gauge | Seconds since last successful sync |
+| `grinder_account_sync_last_ts` | gauge | Unix ms of last exchange data update (data freshness) |
+| `grinder_account_sync_last_wall_ts` | gauge | Unix ms wall-clock when last sync completed without error (liveness) |
+| `grinder_account_sync_age_seconds` | gauge | Seconds since last successful sync completion (liveness, wall-clock) |
+| `grinder_account_sync_data_age_seconds` | gauge | Seconds since last exchange data update (freshness) |
 | `grinder_account_sync_errors_total{reason=...}` | counter | Sync errors by reason |
 | `grinder_account_sync_mismatches_total{rule=...}` | counter | Mismatches by rule |
 | `grinder_account_sync_positions_count` | gauge | Positions in last snapshot |
@@ -122,15 +124,17 @@ cat summary.txt
 
 **Severity:** Warning | **Category:** correctness | **`for`:** 2m
 
-**Meaning:** Account sync data has not refreshed for >120 seconds, despite sync having
-been active at some point (`last_ts > 0`).
+**Meaning:** Sync has not completed successfully for >120 seconds, despite having
+been active at some point (`last_wall_ts > 0`). This is a **liveness** alert --
+it fires when `record_sync()` stops being called, regardless of whether exchange
+data timestamps are advancing.
 
 **Impact:** Position and open-order views are stale. Mismatch detection is blind.
 If an orphan order appears during this window, no alert will fire until sync resumes.
 
 **PromQL:**
 ```promql
-grinder_account_sync_last_ts > 0
+grinder_account_sync_last_wall_ts > 0
 and
 grinder_account_sync_age_seconds > 120
 ```
@@ -141,9 +145,10 @@ grinder_account_sync_age_seconds > 120
    ```bash
    curl -s localhost:9090/metrics | grep grinder_account_sync
    ```
-   - `age_seconds` climbing → sync loop not running or fetch failing
+   - `age_seconds` climbing → sync loop not running or fetch failing (liveness problem)
+   - `data_age_seconds` climbing but `age_seconds` stable → exchange data unchanged, sync still running (not a liveness problem)
    - `errors_total` incrementing → fetch failures (check `reason` label)
-   - `last_ts` = 0 → sync was never active (alert should not fire; check `last_ts > 0` guard)
+   - `last_wall_ts` = 0 → sync was never active (alert should not fire; check `last_wall_ts > 0` guard)
 
 2. Check if sync is enabled:
    ```bash
@@ -164,6 +169,52 @@ grinder_account_sync_age_seconds > 120
 - Sync disabled: enable `GRINDER_ACCOUNT_SYNC_ENABLED=1` or silence alert
 - Fetch errors: check API keys, rate limits, network connectivity
 - Process stuck: restart gracefully (`kill -TERM <pid>`)
+
+---
+
+### AccountSyncDataStale {#accountsyncdatastale}
+
+**Severity:** Warning | **Category:** correctness | **`for`:** 5m
+
+**Meaning:** Exchange data timestamps have not advanced for >300 seconds, despite sync
+having received data at some point (`last_ts > 0`). This is a **data freshness** alert --
+it fires when the exchange's `updateTime` values stop advancing.
+
+**Impact:** Position and order data may be stale even though sync is running. This can
+happen legitimately when a single unchanged open order sits on the exchange (its
+`updateTime` is frozen at creation). Investigate whether stale data is expected.
+
+**PromQL:**
+```promql
+grinder_account_sync_last_ts > 0
+and
+grinder_account_sync_data_age_seconds > 300
+```
+
+**Triage Steps:**
+
+1. Check both age metrics:
+   ```bash
+   curl -s localhost:9090/metrics | grep grinder_account_sync
+   ```
+   - `age_seconds` stable AND `data_age_seconds` climbing → sync running but exchange data unchanged (may be expected)
+   - Both climbing → sync not running (see `AccountSyncStale` triage)
+
+2. Check if unchanged open orders explain the frozen timestamp:
+   ```bash
+   curl -s localhost:9090/metrics | grep grinder_account_sync_open_orders_count
+   ```
+   - If orders exist and haven't been filled/cancelled, `last_ts` will be frozen at order creation time. This is expected.
+
+3. Check positions for activity:
+   ```bash
+   curl -s localhost:9090/metrics | grep grinder_account_sync_positions_count
+   ```
+
+**Resolution:**
+- Unchanged orders: expected behavior -- consider silencing or adjusting threshold
+- No orders/positions but `data_age_seconds` climbing: likely a parsing or API issue -- check logs
+- Active trading but frozen `last_ts`: bug in timestamp extraction -- file an issue
 
 ---
 
