@@ -81,7 +81,7 @@ rg -n 'alert: <NAME>' monitoring/alert_rules.yml
 | `FillProbBlocksSpike` | sor | safety | — | [31_FILL_PROB_ROLLOUT](31_FILL_PROB_ROLLOUT.md#circuit-breaker-tuning) | Early warning before FillProbBlocksHigh |
 | `FillProbCircuitBreakerTripped` | sor | safety | — | [31_FILL_PROB_ROLLOUT](31_FILL_PROB_ROLLOUT.md#circuit-breaker-tuning) | Review model calibration, threshold |
 | `AccountSyncStale` | account | correctness | — | [29_ACCOUNT_SYNC](29_ACCOUNT_SYNC.md#accountsyncstale) | Sync process not completing (liveness) |
-| `AccountSyncDataStale` | account | correctness | — | [29_ACCOUNT_SYNC](29_ACCOUNT_SYNC.md#accountsyncdatastale) | Exchange data timestamp unchanged (freshness) |
+| `AccountSyncDataStale` | account | correctness | — | [29_ACCOUNT_SYNC](29_ACCOUNT_SYNC.md#accountsyncdatastale) | Exchange data stale (non-empty accounts only) |
 | `AccountSyncErrors` | account | availability | — | [29_ACCOUNT_SYNC](29_ACCOUNT_SYNC.md#accountsyncerrors) | Check API connectivity, credentials |
 | `AccountSyncMismatchSpike` | account | correctness | — | [30_ACCOUNT_SYNC_FIRE_DRILL](30_ACCOUNT_SYNC_FIRE_DRILL.md#accountsyncmismatchspike) | Expected vs observed diverged |
 | `FillIngestDisabled` | fills | availability | — | [26_FILL_TRACKER_TRIAGE](26_FILL_TRACKER_TRIAGE.md#fillingestdisabled) | Set `FILL_INGEST_ENABLED=1` |

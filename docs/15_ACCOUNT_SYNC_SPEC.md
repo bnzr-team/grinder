@@ -182,6 +182,11 @@ new_snapshot.ts >= last_snapshot.ts
 Reject snapshots with timestamps older than the last accepted snapshot. This prevents
 state rollback from stale API responses or clock skew.
 
+**Exception:** Empty snapshots (`ts=0`, no positions, no open orders) are exempt from
+this check. An empty account is a normal state transition (e.g., all orders filled or
+expired), not a data regression. When an empty snapshot is accepted, `last_ts` resets
+to 0, enabling clean re-entry when the account becomes non-empty again.
+
 ### I6: No duplicate keys
 
 Position keys `(symbol, side)` and order keys `(order_id)` must be unique within a
@@ -360,6 +365,15 @@ Two distinct concerns, two distinct metric families:
 ### Edge case: empty account (`snapshot.ts=0`)
 
 When the account has no positions and no open orders, `build_account_snapshot()` computes `ts = max([])` which defaults to `0`. However, `AccountSyncMetrics.record_sync()` still sets `last_wall_ts` to wall-clock ms, so liveness metrics (`age_seconds`) always reflect sync health. `last_ts` remains 0 until the first non-empty snapshot.
+
+**ts_regression exemption:** Empty snapshots (`ts=0`, no positions, no orders) do not
+trigger the I5 monotonic timestamp guard. This prevents false `ts_regression` mismatches
+when transitioning from non-empty to empty (e.g., all orders filled or expired). The
+syncer resets `last_ts` to 0 on empty snapshots, enabling clean re-entry.
+
+**Alert guard:** `AccountSyncDataStale` only fires when the account has active orders or
+positions (`open_orders_count > 0 or positions_count > 0`). Empty accounts have nothing
+to be "stale" about; sync liveness is covered by `AccountSyncStale`.
 
 **Semantic contract:**
 - `grinder_account_sync_last_wall_ts` = wall-clock ms of last successful `record_sync()` call. Never 0 after at least one successful sync.
