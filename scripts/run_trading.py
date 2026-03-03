@@ -481,6 +481,20 @@ def _build_grid_planners(
     return planners
 
 
+def _parse_max_position_usd() -> float | None:
+    """Parse GRINDER_MAX_POSITION_USD env var (PR-INV-1)."""
+    raw = os.environ.get("GRINDER_MAX_POSITION_USD", "").strip()
+    if not raw:
+        return None
+    try:
+        cap = float(raw)
+        print(f"  Max position cap: ${cap:.2f}")
+        return cap
+    except ValueError:
+        print(f"  WARNING: invalid GRINDER_MAX_POSITION_USD={raw!r}, cap disabled")
+        return None
+
+
 def build_engine(
     mode: SafeMode,
     *,
@@ -541,7 +555,7 @@ def build_engine(
         paper_kwargs["cooldown_ms"] = paper_cooldown_ms
     paper_engine = PaperEngine(**paper_kwargs)  # type: ignore[arg-type]
     port = exchange_port if exchange_port is not None else NoOpExchangePort()
-    config = LiveEngineConfig(armed=armed, mode=mode)
+    config = LiveEngineConfig(armed=armed, mode=mode, max_position_usd=_parse_max_position_usd())
 
     fill_model = None
     model_dir = os.environ.get("GRINDER_FILL_MODEL_DIR", "").strip()

@@ -14,7 +14,7 @@
 #   Gate 1: armed check             src/grinder/live/engine.py:280
 #   Gate 3: kill-switch             src/grinder/live/engine.py:304
 #   Gate 4: symbol whitelist        src/grinder/live/engine.py:319
-#   Gate 5: drawdown guard          src/grinder/live/engine.py:332
+#   Gate 6: drawdown guard          src/grinder/live/engine.py:332
 #   _execute_action() retry loop    src/grinder/live/engine.py:371
 #   _execute_single() port call     src/grinder/live/engine.py:457
 #   classify_intent()               src/grinder/live/engine.py:149
@@ -809,7 +809,7 @@ F_RETRY_METRIC="$(get_metric_line "$DRILL_F_METRICS" 'grinder_connector_retries_
   echo "  Gate 1: armed check             src/grinder/live/engine.py:280"
   echo "  Gate 3: kill-switch             src/grinder/live/engine.py:304"
   echo "  Gate 4: symbol whitelist        src/grinder/live/engine.py:319"
-  echo "  Gate 5: drawdown guard          src/grinder/live/engine.py:332"
+  echo "  Gate 6: drawdown guard          src/grinder/live/engine.py:332"
   echo "  _execute_action() retry loop    src/grinder/live/engine.py:371"
   echo "  _execute_single() port call     src/grinder/live/engine.py:457"
   echo "  classify_intent()               src/grinder/live/engine.py:149"

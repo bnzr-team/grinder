@@ -46,7 +46,7 @@ update cycle.
 
 | Input | Type | Source | Description |
 |-------|------|--------|-------------|
-| `intent` | `OrderIntent` | Gate 6 / FSM | INCREASE_RISK, REDUCE_RISK, CANCEL |
+| `intent` | `OrderIntent` | Gate 7 / FSM | INCREASE_RISK, REDUCE_RISK, CANCEL |
 | `desired` | `GridLevel` | ExecutionEngine | Target price + qty for this level |
 | `existing` | `OrderRecord \| None` | Order book state | Currently open order on this level (if any) |
 | `constraints` | `SymbolConstraints` | ConstraintProvider | stepSize, minQty from exchangeInfo |

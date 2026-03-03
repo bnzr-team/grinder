@@ -33,7 +33,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from grinder.account.contracts import AccountSnapshot
+from grinder.account.contracts import AccountSnapshot, PositionSnap
 from grinder.connectors.circuit_breaker import (
     CircuitBreaker,
     CircuitBreakerConfig,
@@ -602,7 +602,7 @@ class TestIntentClassification:
 
 
 class TestFsmStateGate:
-    """Tests for Gate 6: FSM state-based intent blocking."""
+    """Tests for Gate 7: FSM state-based intent blocking."""
 
     def setup_method(self) -> None:
         reset_fsm_metrics()
@@ -642,7 +642,7 @@ class TestFsmStateGate:
         sample_snapshot: Snapshot,
         cancel_action: ExecutionAction,
     ) -> None:
-        """FSM in PAUSED → CANCEL allowed (reduce-risk intents pass Gate 6)."""
+        """FSM in PAUSED → CANCEL allowed (reduce-risk intents pass Gate 7)."""
         mock_paper_engine.process_snapshot.return_value = MagicMock(actions=[cancel_action])
 
         # state_enter_ts matches sample_snapshot.ts so cooldown hasn't elapsed
@@ -727,10 +727,10 @@ class TestFsmLoopWiring:
         place_action: ExecutionAction,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """GRINDER_OPERATOR_OVERRIDE=PAUSE → ACTIVE→PAUSED → PLACE blocked by Gate 6.
+        """GRINDER_OPERATOR_OVERRIDE=PAUSE → ACTIVE→PAUSED → PLACE blocked by Gate 7.
 
         This also proves tick-before-gate ordering: the FSM transitions in
-        the same snapshot that contains the PLACE action, and Gate 6 sees
+        the same snapshot that contains the PLACE action, and Gate 7 sees
         the new state (PAUSED) which blocks INCREASE_RISK.
         """
         mock_paper_engine.process_snapshot.return_value = MagicMock(actions=[place_action])
@@ -761,7 +761,7 @@ class TestFsmLoopWiring:
 
         # FSM transitioned to PAUSED
         assert driver.state == SystemState.PAUSED
-        # PLACE blocked by Gate 6 (not Gate 3 — kill switch is off)
+        # PLACE blocked by Gate 7 (not Gate 3 — kill switch is off)
         assert output.live_actions[0].status == LiveActionStatus.BLOCKED
         assert output.live_actions[0].block_reason == BlockReason.FSM_STATE_BLOCKED
         # 0 port calls
@@ -863,7 +863,7 @@ class TestFsmLoopWiring:
         sample_snapshot: Snapshot,
         place_action: ExecutionAction,
     ) -> None:
-        """No active signals → FSM stays ACTIVE → PLACE passes Gate 6."""
+        """No active signals → FSM stays ACTIVE → PLACE passes Gate 7."""
         mock_paper_engine.process_snapshot.return_value = MagicMock(actions=[place_action])
 
         fsm = OrchestratorFSM(state=SystemState.ACTIVE, state_enter_ts=1000)
@@ -926,7 +926,7 @@ class TestFsmLoopWiring:
         place_action: ExecutionAction,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """' pause ' (whitespace + lowercase) → normalized to PAUSE → Gate 6 blocks."""
+        """' pause ' (whitespace + lowercase) → normalized to PAUSE → Gate 7 blocks."""
         mock_paper_engine.process_snapshot.return_value = MagicMock(actions=[place_action])
         monkeypatch.setenv("GRINDER_OPERATOR_OVERRIDE", " pause ")
 
@@ -1451,3 +1451,161 @@ class TestLiveGridPlanner:
         mock_paper_engine.process_snapshot.assert_not_called()
         # FSM advanced (INIT -> READY)
         assert driver.state == SystemState.READY
+
+
+# --- PR-INV-1: Position-aware intent + inventory cap gate ---
+
+
+class TestPositionAwareIntent:
+    """Tests for position-aware classify_intent (PR-INV-1)."""
+
+    def test_long_sell_is_reduce_risk(self) -> None:
+        """LONG position + SELL PLACE → REDUCE_RISK."""
+        action = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            price=Decimal("50000"),
+            quantity=Decimal("0.01"),
+        )
+        intent = classify_intent(action, pos_sign=1)
+        assert intent == RiskIntent.REDUCE_RISK
+
+    def test_long_buy_is_increase_risk(self) -> None:
+        """LONG position + BUY PLACE → INCREASE_RISK."""
+        action = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.BUY,
+            price=Decimal("49000"),
+            quantity=Decimal("0.01"),
+        )
+        intent = classify_intent(action, pos_sign=1)
+        assert intent == RiskIntent.INCREASE_RISK
+
+    def test_short_buy_is_reduce_risk(self) -> None:
+        """SHORT position + BUY PLACE → REDUCE_RISK."""
+        action = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.BUY,
+            price=Decimal("49000"),
+            quantity=Decimal("0.01"),
+        )
+        intent = classify_intent(action, pos_sign=-1)
+        assert intent == RiskIntent.REDUCE_RISK
+
+    def test_short_sell_is_increase_risk(self) -> None:
+        """SHORT position + SELL PLACE → INCREASE_RISK."""
+        action = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            price=Decimal("50000"),
+            quantity=Decimal("0.01"),
+        )
+        intent = classify_intent(action, pos_sign=-1)
+        assert intent == RiskIntent.INCREASE_RISK
+
+    def test_unknown_pos_sign_is_increase_risk(self) -> None:
+        """pos_sign=None (BOTH/unknown) + PLACE → INCREASE_RISK (fail-closed)."""
+        action = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.BUY,
+            price=Decimal("49000"),
+            quantity=Decimal("0.01"),
+        )
+        intent = classify_intent(action, pos_sign=None)
+        assert intent == RiskIntent.INCREASE_RISK
+
+
+class TestMaxPositionGate:
+    """Tests for Gate 5: max position cap (PR-INV-1)."""
+
+    @staticmethod
+    def _make_engine(
+        mock_paper_engine: MagicMock,
+        port: NoOpExchangePort,
+        max_position_usd: float | None,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> LiveEngineV0:
+        monkeypatch.setenv("GRINDER_ACCOUNT_SYNC_ENABLED", "1")
+        config = LiveEngineConfig(
+            armed=True,
+            mode=SafeMode.LIVE_TRADE,
+            max_position_usd=max_position_usd,
+        )
+        mock_syncer = MagicMock()
+        return LiveEngineV0(
+            paper_engine=mock_paper_engine,
+            exchange_port=port,
+            config=config,
+            account_syncer=mock_syncer,
+        )
+
+    def test_increase_risk_blocked_above_cap(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        place_action: ExecutionAction,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """position_notional >= cap + INCREASE_RISK → BLOCKED."""
+        engine = self._make_engine(mock_paper_engine, noop_port, 1000.0, monkeypatch)
+        engine._position_notional_usd = 1500.0
+        result = engine._process_action(place_action, ts=1000)
+        assert result.status == LiveActionStatus.BLOCKED
+        assert result.block_reason == BlockReason.MAX_POSITION_EXCEEDED
+
+    def test_cancel_allowed_above_cap(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        cancel_action: ExecutionAction,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """position_notional >= cap + CANCEL → ALLOWED (not blocked by gate)."""
+        engine = self._make_engine(mock_paper_engine, noop_port, 1000.0, monkeypatch)
+        engine._position_notional_usd = 1500.0
+        result = engine._process_action(cancel_action, ts=1000)
+        # CANCEL should pass through Gate 5 (intent != INCREASE_RISK)
+        assert result.block_reason != BlockReason.MAX_POSITION_EXCEEDED
+
+    def test_reduce_risk_allowed_above_cap(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """position_notional >= cap + REDUCE_RISK SELL (LONG pos) → ALLOWED."""
+        engine = self._make_engine(mock_paper_engine, noop_port, 1000.0, monkeypatch)
+        engine._position_notional_usd = 1500.0
+        # Set up a LONG position so SELL = REDUCE_RISK
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(
+                PositionSnap(
+                    symbol="BTCUSDT",
+                    side="LONG",
+                    qty=Decimal("0.03"),
+                    entry_price=Decimal("50000"),
+                    mark_price=Decimal("50000"),
+                    unrealized_pnl=Decimal("0"),
+                    leverage=1,
+                    ts=1000,
+                ),
+            ),
+            open_orders=(),
+            ts=1000,
+            source="test",
+        )
+        sell_action = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            price=Decimal("51000"),
+            quantity=Decimal("0.01"),
+        )
+        result = engine._process_action(sell_action, ts=1000)
+        # SELL when LONG = REDUCE_RISK, should pass Gate 5
+        assert result.block_reason != BlockReason.MAX_POSITION_EXCEEDED

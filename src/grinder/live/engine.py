@@ -46,7 +46,7 @@ from grinder.connectors.errors import (
 )
 from grinder.connectors.live_connector import SafeMode
 from grinder.connectors.retries import RetryPolicy, is_retryable
-from grinder.core import SystemState
+from grinder.core import OrderSide, SystemState
 from grinder.env_parse import parse_bool, parse_csv, parse_enum, parse_int
 from grinder.execution.fill_prob_evidence import maybe_emit_fill_prob_evidence
 from grinder.execution.fill_prob_gate import (
@@ -106,6 +106,7 @@ class BlockReason(Enum):
     FSM_STATE_BLOCKED = "FSM_STATE_BLOCKED"
     ROUTER_BLOCKED = "ROUTER_BLOCKED"
     FILL_PROB_LOW = "FILL_PROB_LOW"
+    MAX_POSITION_EXCEEDED = "MAX_POSITION_EXCEEDED"
 
 
 class LiveActionStatus(Enum):
@@ -188,7 +189,7 @@ class LiveEngineOutput:
 # PR-338: FSM states where paper engine evaluation is deferred.
 # In INIT/READY, paper engine would mutate internal state via NoOp port,
 # creating ghost orders that freeze reconciliation after ACTIVE transition.
-# Post-ACTIVE states (PAUSED/THROTTLED/etc) are handled by Gate 6.
+# Post-ACTIVE states (PAUSED/THROTTLED/etc) are handled by Gate 7.
 _FSM_DEFER_STATES = frozenset({SystemState.INIT, SystemState.READY})
 
 
@@ -209,27 +210,41 @@ class _DeferredPaperOutput:
         }
 
 
-def classify_intent(action: ExecutionAction) -> RiskIntent:
-    """Classify execution action into risk intent.
+def classify_intent(
+    action: ExecutionAction,
+    pos_sign: int | None = None,
+) -> RiskIntent:
+    """Classify execution action into risk intent (PR-INV-1: position-aware).
 
-    Mapping (conservative approach):
+    Mapping:
         CANCEL → CANCEL (always allowed)
-        PLACE → INCREASE_RISK (new order = potential exposure increase)
-        REPLACE → INCREASE_RISK (order modification = exposure change)
         NOOP → CANCEL (no action, treated as safe)
+        PLACE/REPLACE with pos_sign:
+            pos_sign=+1 (LONG) + SELL → REDUCE_RISK
+            pos_sign=-1 (SHORT) + BUY → REDUCE_RISK
+            pos_sign=None (unknown/BOTH) → INCREASE_RISK (fail-closed)
+            Otherwise → INCREASE_RISK
 
     Args:
-        action: ExecutionAction from PaperEngine
+        action: ExecutionAction from PaperEngine or LiveGridPlanner.
+        pos_sign: +1 if net LONG, -1 if net SHORT, None if unknown/BOTH.
+            None triggers fail-closed conservative behavior.
 
     Returns:
-        RiskIntent for DrawdownGuardV1 evaluation
+        RiskIntent for DrawdownGuardV1 / FSM evaluation.
     """
     if action.action_type == ActionType.CANCEL:
         return RiskIntent.CANCEL
     elif action.action_type == ActionType.NOOP:
         return RiskIntent.CANCEL  # NOOP is safe, treat as CANCEL
     else:
-        # PLACE and REPLACE are potentially risk-increasing
+        # PLACE and REPLACE: check if this would reduce existing position
+        if pos_sign is not None and action.side is not None:
+            if pos_sign > 0 and action.side == OrderSide.SELL:
+                return RiskIntent.REDUCE_RISK
+            if pos_sign < 0 and action.side == OrderSide.BUY:
+                return RiskIntent.REDUCE_RISK
+        # Default: conservative — all PLACE/REPLACE = INCREASE_RISK
         return RiskIntent.INCREASE_RISK
 
 
@@ -771,17 +786,53 @@ class LiveEngineV0:
             if evidence_dir is not None:
                 logger.info("Account sync evidence written to %s", evidence_dir)
 
+    def _get_position_sign(self, symbol: str) -> int | None:
+        """Determine net position direction for a symbol (PR-INV-1).
+
+        Returns:
+            +1 if net LONG, -1 if net SHORT, None if unknown/BOTH/flat.
+
+        Hedge-mode (LONG/SHORT separate entries): returns sign of the
+        non-zero side.  If both sides have qty > 0, returns None (hedged).
+
+        One-way mode (side="BOTH"): returns None (fail-closed, qty is
+        always absolute and sign is lost in BinanceFuturesPort parsing).
+        """
+        snap = self._last_account_snapshot
+        if snap is None:
+            return None
+        has_long = False
+        has_short = False
+        for p in snap.positions:
+            if p.symbol != symbol:
+                continue
+            if p.side == "BOTH":
+                return None  # one-way mode, sign unknown
+            if p.side == "LONG" and p.qty > 0:
+                has_long = True
+            elif p.side == "SHORT" and p.qty > 0:
+                has_short = True
+        if has_long and has_short:
+            return None  # hedged
+        if has_long:
+            return 1
+        if has_short:
+            return -1
+        return None  # flat or no position
+
     def _process_action(self, action: ExecutionAction, ts: int) -> LiveAction:  # noqa: PLR0911
         """Process single action through safety gates and execute.
 
         Args:
-            action: ExecutionAction from PaperEngine
+            action: ExecutionAction from PaperEngine or LiveGridPlanner
             ts: Current timestamp
 
         Returns:
             LiveAction with execution result
         """
-        intent = classify_intent(action)
+        # PR-INV-1: position-aware intent classification
+        pos_sign = self._get_position_sign(action.symbol) if action.symbol else None
+        intent = classify_intent(action, pos_sign=pos_sign)
 
         # Gate 1: Arming check
         if not self._config.armed:
@@ -835,7 +886,31 @@ class LiveEngineV0:
                 intent=intent,
             )
 
-        # Gate 5: DrawdownGuardV1 (if configured)
+        # Gate 5: Max position cap (PR-INV-1)
+        if (
+            self._config.max_position_usd is not None
+            and self._position_notional_usd is not None
+            and intent == RiskIntent.INCREASE_RISK
+            and self._position_notional_usd >= self._config.max_position_usd
+        ):
+            logger.warning(
+                "Action blocked: MAX_POSITION_EXCEEDED "
+                "(symbol=%s side=%s notional=%.2f cap=%.2f intent=%s action=%s)",
+                action.symbol,
+                action.side.value if action.side else "None",
+                self._position_notional_usd,
+                self._config.max_position_usd,
+                intent.value,
+                action.action_type.value,
+            )
+            return LiveAction(
+                action=action,
+                status=LiveActionStatus.BLOCKED,
+                block_reason=BlockReason.MAX_POSITION_EXCEEDED,
+                intent=intent,
+            )
+
+        # Gate 6: DrawdownGuardV1 (if configured)
         if self._drawdown_guard is not None:
             allow_decision = self._drawdown_guard.allow(intent, symbol=action.symbol or None)
             if not allow_decision.allowed:
@@ -851,7 +926,7 @@ class LiveEngineV0:
                     intent=intent,
                 )
 
-        # Gate 6: FSM state permission (Launch-13)
+        # Gate 7: FSM state permission (Launch-13)
         if self._fsm_driver is not None and not self._fsm_driver.check_intent(intent):
             return LiveAction(
                 action=action,
@@ -860,7 +935,7 @@ class LiveEngineV0:
                 intent=intent,
             )
 
-        # Gate 7: Fill probability gate (PR-C5, PLACE/REPLACE only)
+        # Gate 8: Fill probability gate (PR-C5, PLACE/REPLACE only)
         if self._fill_model is not None and action.action_type in (
             ActionType.PLACE,
             ActionType.REPLACE,
@@ -931,7 +1006,7 @@ class LiveEngineV0:
                 best_ask=self._last_snapshot.ask_price,
             ),
             filters=self._exchange_filters,
-            drawdown_breached=False,  # Already handled by Gate 5
+            drawdown_breached=False,  # Already handled by Gate 6
         )
 
         result = route(router_inputs)
