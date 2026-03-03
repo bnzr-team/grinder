@@ -142,6 +142,7 @@ class LiveGridPlannerV1:
         natr_bps: int | None = None,
         natr_last_ts: int = 0,
         regime: Regime = Regime.RANGE,
+        suppress_increase: bool = False,
     ) -> GridPlanResult:
         """Compute grid plan by diffing desired vs exchange orders.
 
@@ -153,6 +154,8 @@ class LiveGridPlannerV1:
             natr_bps: NATR(14) in integer bps (None = unavailable).
             natr_last_ts: Timestamp of last NATR computation.
             regime: Market regime (default RANGE).
+            suppress_increase: If True, filter out PLACE/REPLACE actions
+                (cancel-only mode for non-ACTIVE states, PR-INV-2).
 
         Returns:
             GridPlanResult with actions and diff statistics.
@@ -188,6 +191,10 @@ class LiveGridPlannerV1:
 
         # Step F: Generate actions
         actions = self._generate_actions(symbol, diff, desired, mid_price)
+
+        # PR-INV-2: cancel-only mode (suppress PLACE/REPLACE in non-ACTIVE states)
+        if suppress_increase:
+            actions = [a for a in actions if a.action_type == ActionType.CANCEL]
 
         # Update hysteresis cache
         self._last_plan_center[symbol] = mid_price

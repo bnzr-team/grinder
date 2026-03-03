@@ -1453,6 +1453,97 @@ class TestLiveGridPlanner:
         assert driver.state == SystemState.READY
 
 
+# --- PR-INV-2: suppress_increase wiring ---
+
+
+class TestSuppressIncreaseWiring:
+    """PR-INV-2: FSM non-ACTIVE triggers cancel-only planner mode."""
+
+    def setup_method(self) -> None:
+        reset_fsm_metrics()
+
+    def test_paused_suppresses_place_actions(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        sample_snapshot: Snapshot,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """FSM PAUSED + planner enabled -> no PLACE actions (cancel-only)."""
+        monkeypatch.setenv("GRINDER_LIVE_PLANNER_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_ACCOUNT_SYNC_ENABLED", "1")
+
+        planner = LiveGridPlannerV1(
+            LiveGridConfig(tick_size=Decimal("0.10"), levels=2, size_per_level=Decimal("0.01"))
+        )
+        mock_syncer = MagicMock()
+        fsm = OrchestratorFSM(state=SystemState.PAUSED, state_enter_ts=1000, config=FsmConfig())
+        driver = FsmDriver(fsm)
+
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        engine = LiveEngineV0(
+            mock_paper_engine,
+            noop_port,
+            config,
+            fsm_driver=driver,
+            account_syncer=mock_syncer,
+            grid_planners={"BTCUSDT": planner},
+        )
+
+        # Simulate empty exchange (all levels missing -> normally 4 PLACE)
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(), open_orders=(), ts=1000, source="test"
+        )
+
+        output = engine.process_snapshot(sample_snapshot)
+
+        # PAUSED -> suppress_increase=True -> zero PLACE actions
+        place_actions = [
+            la for la in output.live_actions if la.action.action_type == ActionType.PLACE
+        ]
+        assert len(place_actions) == 0
+
+    def test_active_allows_place_actions(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        sample_snapshot: Snapshot,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """FSM ACTIVE + planner enabled -> PLACE actions pass through."""
+        monkeypatch.setenv("GRINDER_LIVE_PLANNER_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_ACCOUNT_SYNC_ENABLED", "1")
+
+        planner = LiveGridPlannerV1(
+            LiveGridConfig(tick_size=Decimal("0.10"), levels=2, size_per_level=Decimal("0.01"))
+        )
+        mock_syncer = MagicMock()
+        fsm = OrchestratorFSM(state=SystemState.ACTIVE, state_enter_ts=1000, config=FsmConfig())
+        driver = FsmDriver(fsm)
+
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        engine = LiveEngineV0(
+            mock_paper_engine,
+            noop_port,
+            config,
+            fsm_driver=driver,
+            account_syncer=mock_syncer,
+            grid_planners={"BTCUSDT": planner},
+        )
+
+        # Empty exchange -> 4 PLACE (2 buy + 2 sell)
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(), open_orders=(), ts=1000, source="test"
+        )
+
+        output = engine.process_snapshot(sample_snapshot)
+
+        place_actions = [
+            la for la in output.live_actions if la.action.action_type == ActionType.PLACE
+        ]
+        assert len(place_actions) == 4
+
+
 # --- PR-INV-1: Position-aware intent + inventory cap gate ---
 
 

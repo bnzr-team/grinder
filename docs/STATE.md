@@ -1289,6 +1289,11 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - Position-aware `classify_intent()`: SELL when LONG = REDUCE_RISK, BUY when SHORT = REDUCE_RISK
   - Hedge-mode only; one-way mode (`BOTH`) = fail-closed (all PLACE = INCREASE_RISK)
   - Gate chain re-numbered: 8 gates (was 7). Doc-20 updated.
+- **Planner cancel-only mode** (PR-INV-2):
+  - `LiveGridPlannerV1.plan(suppress_increase=True)`: filters out PLACE/REPLACE, keeps CANCEL only
+  - Wired in `LiveEngineV0._plan_grid()`: enabled when FSM state != ACTIVE
+  - Prevents risk accumulation in PAUSED/DEGRADED/THROTTLED/EMERGENCY
+  - Doc-25 updated (§25.8 Suppress Increase Mode section)
 
 ## Partially implemented
 - Package structure `src/grinder/*` (core, protocols/interfaces) -- scaffolding.

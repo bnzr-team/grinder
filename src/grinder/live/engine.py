@@ -725,6 +725,16 @@ class LiveEngineV0:
         natr_bps = features.natr_bps if features and features.symbol == snapshot.symbol else None
         natr_last_ts = features.ts if features else 0
 
+        # PR-INV-2: suppress PLACE/REPLACE when FSM not ACTIVE
+        suppress_increase = (
+            self._fsm_driver is not None and self._fsm_driver.state != SystemState.ACTIVE
+        )
+        if suppress_increase:
+            logger.info(
+                "Grid planner cancel-only mode: FSM state=%s",
+                self._fsm_driver.state.value if self._fsm_driver else "None",
+            )
+
         plan_result = planner.plan(
             symbol=snapshot.symbol,
             mid_price=snapshot.mid_price,
@@ -732,6 +742,7 @@ class LiveEngineV0:
             open_orders=open_orders,
             natr_bps=natr_bps,
             natr_last_ts=natr_last_ts,
+            suppress_increase=suppress_increase,
         )
 
         if plan_result.actions:
