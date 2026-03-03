@@ -49,6 +49,7 @@ from grinder.core import OrderSide, SystemState
 from grinder.execution.idempotent_port import IdempotentExchangePort
 from grinder.execution.port import NoOpExchangePort
 from grinder.execution.types import ActionType, ExecutionAction
+from grinder.features.engine import FeatureEngine, FeatureEngineConfig
 from grinder.live import (
     BlockReason,
     LiveActionStatus,
@@ -1225,3 +1226,83 @@ class TestFsmDeferPaperEngine:
         output_dict = output.to_dict()
         assert output_dict["paper_output"]["actions"] == []
         assert "deferred_by_fsm" not in output_dict["paper_output"]
+
+
+class TestFeatureEngine:
+    """Tests for PR-L0: FeatureEngine wiring in LiveEngineV0.
+
+    FeatureEngine computes NATR/volatility features from snapshots.
+    PR-L0 lifts it into LiveEngineV0 for future LiveGridPlanner consumption.
+    """
+
+    def setup_method(self) -> None:
+        reset_fsm_metrics()
+
+    @pytest.fixture(autouse=True)
+    def _clean_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("GRINDER_OPERATOR_OVERRIDE", raising=False)
+
+    def test_feature_engine_none_unchanged(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        sample_snapshot: Snapshot,
+    ) -> None:
+        """feature_engine=None (default) → no feature snapshot, paper engine still called."""
+        config = LiveEngineConfig(armed=False, mode=SafeMode.READ_ONLY)
+        engine = LiveEngineV0(mock_paper_engine, noop_port, config, feature_engine=None)
+
+        engine.process_snapshot(sample_snapshot)
+
+        assert engine.last_feature_snapshot is None
+        mock_paper_engine.process_snapshot.assert_called_once()
+
+    def test_feature_engine_called_on_snapshot(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        sample_snapshot: Snapshot,
+    ) -> None:
+        """feature_engine set → process_snapshot called, snapshot stored."""
+        feature_engine = FeatureEngine(FeatureEngineConfig())
+        config = LiveEngineConfig(armed=False, mode=SafeMode.READ_ONLY)
+        engine = LiveEngineV0(mock_paper_engine, noop_port, config, feature_engine=feature_engine)
+
+        engine.process_snapshot(sample_snapshot)
+
+        snap = engine.last_feature_snapshot
+        assert snap is not None
+        assert snap.symbol == "BTCUSDT"
+        assert hasattr(snap, "natr_bps")
+
+    def test_feature_engine_runs_during_fsm_defer(
+        self,
+        mock_paper_engine: MagicMock,
+        tracking_port: MagicMock,
+        sample_snapshot: Snapshot,
+    ) -> None:
+        """FSM INIT → paper engine deferred, but FeatureEngine still runs (bar warmup)."""
+        mock_paper_engine.process_snapshot.return_value = MagicMock(actions=[])
+
+        feature_engine = FeatureEngine(FeatureEngineConfig())
+        fsm = OrchestratorFSM(state=SystemState.INIT, state_enter_ts=0)
+        driver = FsmDriver(fsm)
+
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        engine = LiveEngineV0(
+            mock_paper_engine,
+            tracking_port,
+            config,
+            fsm_driver=driver,
+            feature_engine=feature_engine,
+        )
+
+        engine.process_snapshot(sample_snapshot)
+
+        # FeatureEngine ran (bar building continues during warmup)
+        assert engine.last_feature_snapshot is not None
+        assert engine.last_feature_snapshot.symbol == "BTCUSDT"
+        # Paper engine was deferred (PR-338 logic)
+        mock_paper_engine.process_snapshot.assert_not_called()
+        # FSM still ticked (advances INIT → READY)
+        assert driver.state == SystemState.READY
