@@ -7,6 +7,9 @@ Usage:
 Rehearsal knobs (safe with NoOpExchangePort):
     --armed                 Arm engine gates (lets actions reach fill-prob gate)
     --paper-size-per-level  Override PaperEngine size_per_level (Decimal, e.g. 0.001)
+    --paper-spacing-bps     Override grid spacing in bps (default 10.0, lower = tighter grid)
+    --paper-levels          Override grid levels per side (default 5)
+    --paper-cooldown-ms     Override per-symbol cooldown in ms (default 100)
 
 Exchange port selection:
     --exchange-port noop        Default, no real orders (NoOpExchangePort)
@@ -447,6 +450,9 @@ def build_engine(
     *,
     armed: bool = False,
     paper_size_per_level: Decimal | None = None,
+    paper_spacing_bps: float | None = None,
+    paper_levels: int | None = None,
+    paper_cooldown_ms: int | None = None,
     exchange_port: ExchangePort | None = None,
 ) -> LiveEngineV0:
     """Build LiveEngineV0 with configurable ExchangePort.
@@ -467,6 +473,9 @@ def build_engine(
             Default PaperEngine uses 100 (base asset units), which exceeds
             notional gating limits at current BTC prices. Use e.g. 0.001
             for rehearsal to get actions through gating.
+        paper_spacing_bps: Override PaperEngine grid spacing (default 10.0 bps).
+        paper_levels: Override PaperEngine grid levels per side (default 5).
+        paper_cooldown_ms: Override PaperEngine per-symbol cooldown (default 100ms).
         exchange_port: ExchangePort to use. Defaults to NoOpExchangePort.
 
     Returns:
@@ -480,17 +489,19 @@ def build_engine(
     else:
         print("  Symbol constraints not available (fail-open, using price_precision only)")
 
+    paper_kwargs: dict[str, object] = {
+        "constraints_enabled": constraints_enabled,
+        "symbol_constraints": symbol_constraints,
+    }
     if paper_size_per_level is not None:
-        paper_engine = PaperEngine(
-            size_per_level=paper_size_per_level,
-            constraints_enabled=constraints_enabled,
-            symbol_constraints=symbol_constraints,
-        )
-    else:
-        paper_engine = PaperEngine(
-            constraints_enabled=constraints_enabled,
-            symbol_constraints=symbol_constraints,
-        )
+        paper_kwargs["size_per_level"] = paper_size_per_level
+    if paper_spacing_bps is not None:
+        paper_kwargs["spacing_bps"] = paper_spacing_bps
+    if paper_levels is not None:
+        paper_kwargs["levels"] = paper_levels
+    if paper_cooldown_ms is not None:
+        paper_kwargs["cooldown_ms"] = paper_cooldown_ms
+    paper_engine = PaperEngine(**paper_kwargs)  # type: ignore[arg-type]
     port = exchange_port if exchange_port is not None else NoOpExchangePort()
     config = LiveEngineConfig(armed=armed, mode=mode)
 
@@ -646,6 +657,25 @@ def build_parser() -> argparse.ArgumentParser:
         help="Max orders per run (default 1, canary safety cap). "
         "Values >1 require GRINDER_MAX_ORDERS_ACK=YES_I_ACCEPT_MULTI_ORDER.",
     )
+    parser.add_argument(
+        "--paper-spacing-bps",
+        type=float,
+        default=None,
+        help="Override PaperEngine grid spacing in basis points (default 10.0). "
+        "Lower values = tighter grid = more frequent cancel/replace.",
+    )
+    parser.add_argument(
+        "--paper-levels",
+        type=int,
+        default=None,
+        help="Override PaperEngine grid levels per side (default 5). Total orders = 2 * levels.",
+    )
+    parser.add_argument(
+        "--paper-cooldown-ms",
+        type=int,
+        default=None,
+        help="Override PaperEngine per-symbol cooldown in milliseconds (default 100).",
+    )
     return parser
 
 
@@ -698,6 +728,12 @@ def main() -> None:  # noqa: PLR0915
     )
     if paper_size is not None:
         print(f"  Paper size_per_level: {paper_size}")
+    if args.paper_spacing_bps is not None:
+        print(f"  Paper spacing_bps: {args.paper_spacing_bps}")
+    if args.paper_levels is not None:
+        print(f"  Paper levels: {args.paper_levels}")
+    if args.paper_cooldown_ms is not None:
+        print(f"  Paper cooldown_ms: {args.paper_cooldown_ms}")
     if args.exchange_port == "futures":
         print(
             f"  FUTURES_PORT_CONFIG_OK max_orders_per_run={max_orders} "
@@ -714,6 +750,9 @@ def main() -> None:  # noqa: PLR0915
         mode,
         armed=args.armed,
         paper_size_per_level=paper_size,
+        paper_spacing_bps=args.paper_spacing_bps,
+        paper_levels=args.paper_levels,
+        paper_cooldown_ms=args.paper_cooldown_ms,
         exchange_port=port,
     )
     print("  Engine initialized: grinder_live_engine_initialized=1")
