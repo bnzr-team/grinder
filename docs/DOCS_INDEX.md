@@ -45,6 +45,14 @@ Where to find information:
 
 ---
 
+## Contracts & hooks
+- `docs/22_POLICY_CONTRACT.md` — GridPolicy + GridPlan interface contract (TRD-2)
+- `docs/23_NATR_CONTRACT.md` — NATR(14) computation contract
+- `docs/24_NATR_SPACING_HOOK.md` — NATR-to-spacing hook (TRD-3b)
+- `docs/25_LIVE_GRID_PLANNER_SPEC.md` — LiveGridPlanner (exchange-truth reconciliation)
+
+---
+
 ## Smart Grid (versioned specs)
 - `docs/smart_grid/README.md` — overview + version matrix
 - `docs/smart_grid/ROADMAP.md` — feature roadmap by version
