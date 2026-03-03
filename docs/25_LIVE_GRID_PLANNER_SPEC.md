@@ -167,8 +167,24 @@ Stale threshold default: `natr_stale_ms = 120_000` (2 * 60s bar interval).
 
 ### FSM Orchestrator
 
-Planner runs **only when FSM state = ACTIVE**. In INIT/READY/DEGRADED/PAUSED/EMERGENCY,
-LiveEngineV0 skips the planner call (same defer logic as PaperEngine, PR-338).
+Planner behavior depends on FSM state:
+
+- **INIT/READY**: Planner is skipped entirely (FSM defer, PR-338).
+- **ACTIVE**: Normal mode — planner emits PLACE + CANCEL as computed.
+- **PAUSED/DEGRADED/THROTTLED/EMERGENCY**: Planner runs in **cancel-only mode**
+  (`suppress_increase=True`, PR-INV-2). Only CANCEL actions are emitted;
+  PLACE/REPLACE are filtered out. This prevents risk accumulation while
+  still allowing order cleanup/trimming.
+
+### Suppress Increase Mode (PR-INV-2)
+
+`plan(..., suppress_increase=True)` filters the action list after generation:
+
+- CANCEL actions: **kept** (trim/cleanup always allowed)
+- PLACE / REPLACE actions: **removed** (no new risk)
+
+Enabled automatically by LiveEngineV0 when `FSM state != ACTIVE`.
+No side effects — only the returned action list is affected.
 
 ### Gate Chain
 
@@ -191,8 +207,8 @@ a flag in LiveEngineV0 (e.g., `GRINDER_LIVE_PLANNER_ENABLED`).
 ### Kill Switch / Emergency Exit
 
 Kill switch triggers FSM PAUSED, emergency exit triggers EMERGENCY.
-Both cause FSM != ACTIVE, so planner is skipped and existing cancel-all
-logic in LiveEngineV0 handles cleanup.
+Both cause FSM != ACTIVE, so planner runs in cancel-only mode (PR-INV-2)
+and existing emergency exit logic in LiveEngineV0 handles cleanup.
 
 ## 25.9 Observability
 

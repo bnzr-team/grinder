@@ -330,3 +330,74 @@ class TestFailSafe:
 
         assert result.actions == []
         assert result.desired_count == 0
+
+
+# --- PR-INV-2: suppress_increase (cancel-only mode) ---
+
+
+class TestSuppressIncrease:
+    """PR-INV-2: suppress_increase filters out PLACE/REPLACE."""
+
+    def test_suppress_removes_place_keeps_cancel(self) -> None:
+        """suppress_increase=True: PLACE filtered out, CANCEL kept."""
+        config = _make_config(levels=3, spacing_bps=10.0)
+        planner = LiveGridPlannerV1(config)
+
+        old_mid = Decimal("50000")
+        old_orders = _build_matching_orders(old_mid, config)
+
+        # Establish center
+        planner.plan(symbol="BTCUSDT", mid_price=old_mid, ts_ms=1000, open_orders=old_orders)
+
+        # Large shift: old orders mismatch -> normally produces CANCEL + PLACE
+        new_mid = Decimal("50100")
+        result_normal = planner.plan(
+            symbol="BTCUSDT",
+            mid_price=new_mid,
+            ts_ms=2000,
+            open_orders=old_orders,
+            suppress_increase=False,
+        )
+        normal_places = [a for a in result_normal.actions if a.action_type == ActionType.PLACE]
+        normal_cancels = [a for a in result_normal.actions if a.action_type == ActionType.CANCEL]
+        assert len(normal_places) > 0, "Normal mode should produce PLACE actions"
+        assert len(normal_cancels) > 0, "Normal mode should produce CANCEL actions"
+
+        # Reset planner center for fair comparison
+        planner2 = LiveGridPlannerV1(config)
+        planner2.plan(symbol="BTCUSDT", mid_price=old_mid, ts_ms=1000, open_orders=old_orders)
+
+        # suppress_increase=True: only CANCEL survives
+        result_suppressed = planner2.plan(
+            symbol="BTCUSDT",
+            mid_price=new_mid,
+            ts_ms=2000,
+            open_orders=old_orders,
+            suppress_increase=True,
+        )
+        suppressed_places = [
+            a for a in result_suppressed.actions if a.action_type == ActionType.PLACE
+        ]
+        suppressed_cancels = [
+            a for a in result_suppressed.actions if a.action_type == ActionType.CANCEL
+        ]
+        assert len(suppressed_places) == 0, "suppress_increase must filter out all PLACE"
+        assert len(suppressed_cancels) == len(normal_cancels), "CANCEL actions must be preserved"
+
+    def test_suppress_empty_exchange_no_place(self) -> None:
+        """suppress_increase=True + empty exchange -> zero actions (no PLACE)."""
+        config = _make_config(levels=3)
+        planner = LiveGridPlannerV1(config)
+
+        result = planner.plan(
+            symbol="BTCUSDT",
+            mid_price=Decimal("50000"),
+            ts_ms=1000,
+            open_orders=(),
+            suppress_increase=True,
+        )
+
+        # Normally would produce 6 PLACE (3 buy + 3 sell), but all suppressed
+        assert result.desired_count == 6
+        assert result.diff_missing == 6
+        assert len(result.actions) == 0
