@@ -391,6 +391,106 @@ class TestBinanceWsConnector:
         # Only first snapshot should be yielded due to idempotency
         assert len(snapshots) == 1
 
+    @pytest.mark.asyncio
+    async def test_silent_disconnect_triggers_reconnect(self) -> None:
+        """When transport.is_connected becomes False, connector reconnects (not exit).
+
+        Simulates the real-world scenario: WS drops (FIN/RST), ws.open=False,
+        but no exception — iter_snapshots must detect via is_connected check
+        and call reconnect().
+        """
+        msg1 = make_bookticker_message("BTCUSDT", "50000.00", "1.5", "50001.00", "2.0")
+        msg2 = make_bookticker_message("BTCUSDT", "50002.00", "1.0", "50003.00", "1.5")
+
+        # Custom transport: yields msg1, then is_connected flips to False
+        # (simulating silent TCP close). After reconnect, yields msg2.
+        class DisconnectingTransport(FakeWsTransport):
+            def __init__(self) -> None:
+                super().__init__(messages=[msg1])
+                self._phase = 0  # 0=initial, 1=post-reconnect
+
+            @property
+            def is_connected(self) -> bool:
+                # After msg1 delivered (index >= messages), report disconnected.
+                # This is checked BEFORE recv() by iter_snapshots.
+                if self._phase == 0 and self._index >= len(self._messages):
+                    return False
+                return self._connected
+
+            async def connect(self, url: str) -> None:
+                await super().connect(url)
+                if self._phase > 0:
+                    # After reconnect: load phase2 messages
+                    self._messages = [msg2]
+                    self._index = 0
+                    self._recv_count = 0
+
+            async def close(self) -> None:
+                self._phase += 1
+                await super().close()
+
+        ts_counter = [1000000]
+
+        def fake_clock() -> float:
+            ts_counter[0] += 1000
+            return ts_counter[0] / 1000.0
+
+        transport = DisconnectingTransport()
+        config = BinanceWsConfig(
+            symbols=["BTCUSDT"],
+            use_testnet=True,
+        )
+        connector = BinanceWsConnector(config, transport=transport, clock=fake_clock)
+        await connector.connect()
+
+        snapshots: list[Snapshot] = []
+
+        async def collect() -> None:
+            async for s in connector.iter_snapshots():
+                snapshots.append(s)
+                if len(snapshots) >= 2:
+                    break
+
+        await asyncio.wait_for(collect(), timeout=5.0)
+        await connector.close()
+
+        # Got snapshots from both phases (before and after reconnect)
+        assert len(snapshots) == 2
+        assert snapshots[0].bid_price == Decimal("50000.00")
+        assert snapshots[1].bid_price == Decimal("50002.00")
+        assert connector.stats.reconnects >= 1
+
+    @pytest.mark.asyncio
+    async def test_closed_flag_exits_without_reconnect(self) -> None:
+        """When _closed is set, iter_snapshots exits without reconnect."""
+        msg1 = make_bookticker_message("BTCUSDT", "50000.00", "1.5", "50001.00", "2.0")
+
+        ts_counter = [1000000]
+
+        def fake_clock() -> float:
+            ts_counter[0] += 1000
+            return ts_counter[0] / 1000.0
+
+        transport = FakeWsTransport(messages=[msg1])
+        config = BinanceWsConfig(symbols=["BTCUSDT"], use_testnet=True)
+        connector = BinanceWsConnector(config, transport=transport, clock=fake_clock)
+        await connector.connect()
+
+        snapshots: list[Snapshot] = []
+        initial_reconnects = connector.stats.reconnects
+
+        async def collect() -> None:
+            async for s in connector.iter_snapshots():
+                snapshots.append(s)
+                # Close connector after first snapshot — should exit, not reconnect
+                await connector.close()
+
+        await asyncio.wait_for(collect(), timeout=2.0)
+
+        assert len(snapshots) == 1
+        # No reconnect attempts after close
+        assert connector.stats.reconnects == initial_reconnects
+
 
 # --- LiveFeed tests ---
 
