@@ -413,7 +413,20 @@ class BinanceWsConnector(DataConnector):
             msg = f"Not connected (state={self._state.value})"
             raise ConnectorClosedError(msg)
 
-        while not self._closed and self._transport.is_connected:
+        while not self._closed:
+            # Silent disconnect: transport reports not connected (WS FIN/RST/drop).
+            # Instead of exiting, attempt reconnect with backoff.
+            if not self._transport.is_connected:
+                logger.warning("WS disconnected (open=false), attempting reconnect")
+                try:
+                    await self.reconnect()
+                except ConnectorClosedError:
+                    break
+                except ConnectorTransientError:
+                    logger.error("WS reconnect failed after max retries, exiting")
+                    break
+                continue
+
             try:
                 raw_msg = await asyncio.wait_for(
                     self._transport.recv(),
