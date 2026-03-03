@@ -77,6 +77,7 @@ from grinder.risk.emergency_exit import EmergencyExitExecutor
 from grinder.risk.emergency_exit_metrics import get_emergency_exit_metrics
 
 if TYPE_CHECKING:
+    from grinder.account.contracts import AccountSnapshot
     from grinder.contracts import Snapshot
     from grinder.execution.port import ExchangePort
     from grinder.features.engine import FeatureEngine
@@ -84,6 +85,7 @@ if TYPE_CHECKING:
     from grinder.gating.toxicity_gate import ToxicityGate
     from grinder.live.config import LiveEngineConfig
     from grinder.live.fsm_driver import FsmDriver
+    from grinder.live.grid_planner import LiveGridPlannerV1
     from grinder.ml.fill_model_v0 import FillModelV0
     from grinder.paper.engine import PaperEngine
 
@@ -200,7 +202,11 @@ class _DeferredPaperOutput:
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize for LiveEngineOutput compatibility."""
-        return {"ts": self.ts, "symbol": self.symbol, "actions": []}
+        return {
+            "ts": self.ts,
+            "symbol": self.symbol,
+            "actions": [a.to_dict() if hasattr(a, "to_dict") else a for a in self.actions],
+        }
 
 
 def classify_intent(action: ExecutionAction) -> RiskIntent:
@@ -259,6 +265,7 @@ class LiveEngineV0:
         fill_model: FillModelV0 | None = None,
         toxicity_gate: ToxicityGate | None = None,
         feature_engine: FeatureEngine | None = None,
+        grid_planners: dict[str, LiveGridPlannerV1] | None = None,
     ) -> None:
         """Initialize LiveEngineV0.
 
@@ -274,6 +281,7 @@ class LiveEngineV0:
             fill_model: Optional FillModelV0 for fill probability gating (PR-C5)
             toxicity_gate: Optional ToxicityGate for toxicity signal (PR-A1)
             feature_engine: Optional FeatureEngine for NATR/volatility features (PR-L0)
+            grid_planners: Per-symbol grid planners for live mode (PR-L2). None = disabled.
         """
         self._paper_engine = paper_engine
         self._exchange_port = exchange_port
@@ -288,6 +296,13 @@ class LiveEngineV0:
         self._feature_engine = feature_engine
         self._last_feature_snapshot: FeatureSnapshot | None = None
         self._last_snapshot: Snapshot | None = None
+        self._grid_planners = grid_planners
+        self._last_account_snapshot: AccountSnapshot | None = None
+        # Read GRINDER_LIVE_PLANNER_ENABLED once at init (PR-L2)
+        self._live_planner_env_override = parse_bool(
+            "GRINDER_LIVE_PLANNER_ENABLED", default=False, strict=False
+        )
+        self._warned_live_planner_no_sync = False
         # Per-symbol feed staleness tracking (ms timestamps, PR-A1)
         self._prev_snapshot_ts: dict[str, int] = {}
         # Read GRINDER_SOR_ENABLED once at init (via env_parse SSOT)
@@ -427,6 +442,11 @@ class LiveEngineV0:
         return self._last_feature_snapshot
 
     @property
+    def last_account_snapshot(self) -> AccountSnapshot | None:
+        """Latest AccountSnapshot from AccountSync (None if never synced)."""
+        return self._last_account_snapshot
+
+    @property
     def config(self) -> LiveEngineConfig:
         """Get current configuration."""
         return self._config
@@ -478,8 +498,16 @@ class LiveEngineV0:
                 kill_switch_active=self._config.kill_switch_active,
             )
 
-        # Step 1: Get paper engine decisions
-        paper_output = self._paper_engine.process_snapshot(snapshot)
+        # Step 1: Get actions -- either from LiveGridPlannerV1 or PaperEngine
+        if self._is_live_planner_enabled():
+            # PR-L2: Exchange-truth grid planner replaces PaperEngine for action generation.
+            # PaperEngine is NOT called (avoids ghost state mutation, doc-25 I1).
+            raw_actions = self._plan_grid(snapshot)
+            paper_output: Any = _DeferredPaperOutput(
+                ts=snapshot.ts, symbol=snapshot.symbol, actions=raw_actions
+            )
+        else:
+            paper_output = self._paper_engine.process_snapshot(snapshot)
 
         # FSM tick: update state before action processing (Launch-13 PR3)
         if self._fsm_driver is not None:
@@ -636,6 +664,78 @@ class LiveEngineV0:
             return False
         return True
 
+    def _is_live_planner_enabled(self) -> bool:
+        """Check if live grid planner is active (PR-L2).
+
+        Requires: env flag AND planner instances AND AccountSync enabled.
+        """
+        if not self._live_planner_env_override:
+            return False
+        if not self._grid_planners:
+            return False
+        if not self._is_account_sync_enabled():
+            if not self._warned_live_planner_no_sync:
+                logger.warning(
+                    "GRINDER_LIVE_PLANNER_ENABLED=1 but AccountSync disabled "
+                    "-- planner cannot function without exchange order truth"
+                )
+                self._warned_live_planner_no_sync = True
+            return False
+        return True
+
+    def _plan_grid(self, snapshot: Snapshot) -> list[ExecutionAction]:
+        """Generate grid actions from LiveGridPlannerV1 (PR-L2).
+
+        Uses last AccountSync snapshot for exchange truth.
+        Returns empty list if no snapshot yet (safe startup).
+        """
+        assert self._grid_planners is not None
+
+        planner = self._grid_planners.get(snapshot.symbol)
+        if planner is None:
+            logger.debug("No grid planner for %s, skipping", snapshot.symbol)
+            return []
+
+        if self._last_account_snapshot is None:
+            logger.debug("No account snapshot yet, planner returns 0 actions (safe startup)")
+            return []
+
+        # Filter open orders for this symbol only
+        open_orders = tuple(
+            o for o in self._last_account_snapshot.open_orders if o.symbol == snapshot.symbol
+        )
+
+        # Extract NATR from FeatureEngine (PR-L0)
+        features = self._last_feature_snapshot
+        natr_bps = features.natr_bps if features and features.symbol == snapshot.symbol else None
+        natr_last_ts = features.ts if features else 0
+
+        plan_result = planner.plan(
+            symbol=snapshot.symbol,
+            mid_price=snapshot.mid_price,
+            ts_ms=snapshot.ts,
+            open_orders=open_orders,
+            natr_bps=natr_bps,
+            natr_last_ts=natr_last_ts,
+        )
+
+        if plan_result.actions:
+            logger.info(
+                "Grid plan %s: desired=%d actual=%d missing=%d extra=%d mismatch=%d "
+                "spacing=%.1f bps natr_fallback=%s actions=%d",
+                snapshot.symbol,
+                plan_result.desired_count,
+                plan_result.actual_count,
+                plan_result.diff_missing,
+                plan_result.diff_extra,
+                plan_result.diff_mismatch,
+                plan_result.effective_spacing_bps,
+                plan_result.natr_fallback,
+                len(plan_result.actions),
+            )
+
+        return plan_result.actions
+
     def _tick_account_sync(self) -> None:
         """Run one account sync cycle (read-only).
 
@@ -662,6 +762,8 @@ class LiveEngineV0:
         # PR-A4: update position notional from confirmed snapshot
         if result.snapshot is not None:
             self._position_notional_usd = AccountSyncer.compute_position_notional(result.snapshot)
+            # PR-L2: Store full snapshot for LiveGridPlannerV1 (open_orders as exchange truth)
+            self._last_account_snapshot = result.snapshot
 
         # Evidence writing (env-gated, safe-by-default)
         if result.snapshot is not None:
