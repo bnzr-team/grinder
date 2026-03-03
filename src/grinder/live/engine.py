@@ -79,6 +79,8 @@ from grinder.risk.emergency_exit_metrics import get_emergency_exit_metrics
 if TYPE_CHECKING:
     from grinder.contracts import Snapshot
     from grinder.execution.port import ExchangePort
+    from grinder.features.engine import FeatureEngine
+    from grinder.features.types import FeatureSnapshot
     from grinder.gating.toxicity_gate import ToxicityGate
     from grinder.live.config import LiveEngineConfig
     from grinder.live.fsm_driver import FsmDriver
@@ -256,6 +258,7 @@ class LiveEngineV0:
         account_syncer: AccountSyncer | None = None,
         fill_model: FillModelV0 | None = None,
         toxicity_gate: ToxicityGate | None = None,
+        feature_engine: FeatureEngine | None = None,
     ) -> None:
         """Initialize LiveEngineV0.
 
@@ -270,6 +273,7 @@ class LiveEngineV0:
             account_syncer: Optional account syncer for position/order sync (Launch-15)
             fill_model: Optional FillModelV0 for fill probability gating (PR-C5)
             toxicity_gate: Optional ToxicityGate for toxicity signal (PR-A1)
+            feature_engine: Optional FeatureEngine for NATR/volatility features (PR-L0)
         """
         self._paper_engine = paper_engine
         self._exchange_port = exchange_port
@@ -281,6 +285,8 @@ class LiveEngineV0:
         self._account_syncer = account_syncer
         self._fill_model = fill_model
         self._toxicity_gate = toxicity_gate
+        self._feature_engine = feature_engine
+        self._last_feature_snapshot: FeatureSnapshot | None = None
         self._last_snapshot: Snapshot | None = None
         # Per-symbol feed staleness tracking (ms timestamps, PR-A1)
         self._prev_snapshot_ts: dict[str, int] = {}
@@ -416,6 +422,11 @@ class LiveEngineV0:
         )
 
     @property
+    def last_feature_snapshot(self) -> FeatureSnapshot | None:
+        """Latest FeatureSnapshot from FeatureEngine (None if no engine or no tick yet)."""
+        return self._last_feature_snapshot
+
+    @property
     def config(self) -> LiveEngineConfig:
         """Get current configuration."""
         return self._config
@@ -444,6 +455,10 @@ class LiveEngineV0:
         """
         # Store snapshot for SOR market data (Launch-14 PR2)
         self._last_snapshot = snapshot
+
+        # PR-L0: Feed FeatureEngine (must run every tick for bar building, even in FSM defer)
+        if self._feature_engine is not None:
+            self._last_feature_snapshot = self._feature_engine.process_snapshot(snapshot)
 
         # Record price for toxicity gate (needs history before check, PR-A1)
         if self._toxicity_gate is not None:

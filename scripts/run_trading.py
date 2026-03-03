@@ -85,6 +85,7 @@ from grinder.execution.constraint_provider import (
 )
 from grinder.execution.port import ExchangePort, NoOpExchangePort
 from grinder.execution.port_metrics import get_port_metrics
+from grinder.features.engine import FeatureEngine, FeatureEngineConfig
 from grinder.gating.metrics import get_gating_metrics
 from grinder.ha.leader import LeaderElector, LeaderElectorConfig
 from grinder.ha.role import HARole, get_ha_state
@@ -545,6 +546,12 @@ def build_engine(
         account_syncer = AccountSyncer(port)
         print("  AccountSyncer enabled")
 
+    # FeatureEngine for NATR/volatility (PR-L0, feeds future LiveGridPlanner)
+    feature_engine = FeatureEngine(
+        FeatureEngineConfig(bar_interval_ms=60_000, atr_period=14, max_bars=1000)
+    )
+    print("  FeatureEngine enabled (bar_interval=60s, atr_period=14)")
+
     return LiveEngineV0(
         paper_engine=paper_engine,
         exchange_port=port,
@@ -554,6 +561,7 @@ def build_engine(
         drawdown_guard=drawdown_guard,
         toxicity_gate=toxicity_gate,
         account_syncer=account_syncer,
+        feature_engine=feature_engine,
     )
 
 
