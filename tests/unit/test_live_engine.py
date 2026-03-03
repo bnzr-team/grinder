@@ -33,6 +33,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from grinder.account.contracts import AccountSnapshot
 from grinder.connectors.circuit_breaker import (
     CircuitBreaker,
     CircuitBreakerConfig,
@@ -60,6 +61,7 @@ from grinder.live import (
 from grinder.live.fsm_driver import FsmDriver
 from grinder.live.fsm_metrics import get_fsm_metrics, reset_fsm_metrics
 from grinder.live.fsm_orchestrator import FsmConfig, OrchestratorFSM
+from grinder.live.grid_planner import LiveGridConfig, LiveGridPlannerV1
 from grinder.risk.drawdown_guard_v1 import (
     DrawdownGuardV1,
     DrawdownGuardV1Config,
@@ -1305,4 +1307,147 @@ class TestFeatureEngine:
         # Paper engine was deferred (PR-338 logic)
         mock_paper_engine.process_snapshot.assert_not_called()
         # FSM still ticked (advances INIT → READY)
+        assert driver.state == SystemState.READY
+
+
+# --- I) LiveGridPlanner wiring (PR-L2) ---
+
+
+class TestLiveGridPlanner:
+    """PR-L2: LiveGridPlannerV1 wiring into LiveEngineV0."""
+
+    def setup_method(self) -> None:
+        """Reset FSM metrics to avoid inter-test leakage."""
+        reset_fsm_metrics()
+
+    def test_planner_disabled_uses_paper_engine(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        sample_snapshot: Snapshot,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Planner disabled (default) -> PaperEngine is called."""
+        monkeypatch.setenv("GRINDER_LIVE_PLANNER_ENABLED", "0")
+
+        config = LiveEngineConfig(armed=False, mode=SafeMode.READ_ONLY)
+        engine = LiveEngineV0(mock_paper_engine, noop_port, config, grid_planners=None)
+
+        engine.process_snapshot(sample_snapshot)
+
+        mock_paper_engine.process_snapshot.assert_called_once()
+
+    def test_planner_enabled_no_snapshot_zero_actions(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        sample_snapshot: Snapshot,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Planner enabled but no AccountSnapshot yet -> 0 actions (safe startup)."""
+        monkeypatch.setenv("GRINDER_LIVE_PLANNER_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_ACCOUNT_SYNC_ENABLED", "1")
+
+        planner = LiveGridPlannerV1(
+            LiveGridConfig(tick_size=Decimal("0.10"), levels=2, size_per_level=Decimal("0.01"))
+        )
+        mock_syncer = MagicMock()
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        engine = LiveEngineV0(
+            mock_paper_engine,
+            noop_port,
+            config,
+            account_syncer=mock_syncer,
+            grid_planners={"BTCUSDT": planner},
+        )
+
+        output = engine.process_snapshot(sample_snapshot)
+
+        # No account snapshot -> 0 actions (safe startup)
+        assert output.live_actions == []
+        # PaperEngine NOT called (planner path active)
+        mock_paper_engine.process_snapshot.assert_not_called()
+
+    def test_planner_enabled_with_snapshot_produces_actions(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        sample_snapshot: Snapshot,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Planner enabled + AccountSnapshot present -> PLACE actions for missing levels."""
+        monkeypatch.setenv("GRINDER_LIVE_PLANNER_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_ACCOUNT_SYNC_ENABLED", "1")
+
+        planner = LiveGridPlannerV1(
+            LiveGridConfig(tick_size=Decimal("0.10"), levels=2, size_per_level=Decimal("0.01"))
+        )
+        mock_syncer = MagicMock()
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        engine = LiveEngineV0(
+            mock_paper_engine,
+            noop_port,
+            config,
+            account_syncer=mock_syncer,
+            grid_planners={"BTCUSDT": planner},
+        )
+
+        # Simulate AccountSync having run: empty exchange (no orders)
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(), open_orders=(), ts=1000, source="test"
+        )
+
+        output = engine.process_snapshot(sample_snapshot)
+
+        # Planner sees empty exchange -> emits PLACE for all desired levels (2 buy + 2 sell = 4)
+        assert len(output.live_actions) == 4
+        for la in output.live_actions:
+            assert la.action.action_type == ActionType.PLACE
+        # PaperEngine NOT called
+        mock_paper_engine.process_snapshot.assert_not_called()
+
+    def test_planner_fsm_defer_skips_planner(
+        self,
+        mock_paper_engine: MagicMock,
+        tracking_port: MagicMock,
+        sample_snapshot: Snapshot,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """FSM INIT -> planner skipped (deferred), FeatureEngine still runs."""
+        monkeypatch.setenv("GRINDER_LIVE_PLANNER_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_ACCOUNT_SYNC_ENABLED", "1")
+
+        planner = LiveGridPlannerV1(
+            LiveGridConfig(tick_size=Decimal("0.10"), levels=2, size_per_level=Decimal("0.01"))
+        )
+        mock_syncer = MagicMock()
+        feature_engine = FeatureEngine(FeatureEngineConfig())
+        fsm = OrchestratorFSM(state=SystemState.INIT, state_enter_ts=0)
+        driver = FsmDriver(fsm)
+
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        engine = LiveEngineV0(
+            mock_paper_engine,
+            tracking_port,
+            config,
+            fsm_driver=driver,
+            feature_engine=feature_engine,
+            account_syncer=mock_syncer,
+            grid_planners={"BTCUSDT": planner},
+        )
+
+        # Even with a snapshot, FSM defer should prevent planner from running
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(), open_orders=(), ts=1000, source="test"
+        )
+
+        output = engine.process_snapshot(sample_snapshot)
+
+        # Deferred: no actions
+        assert output.live_actions == []
+        # FeatureEngine still ran (bar warmup continues)
+        assert engine.last_feature_snapshot is not None
+        # PaperEngine also deferred
+        mock_paper_engine.process_snapshot.assert_not_called()
+        # FSM advanced (INIT -> READY)
         assert driver.state == SystemState.READY

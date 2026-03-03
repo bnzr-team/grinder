@@ -65,7 +65,7 @@ import urllib.request
 from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from grinder.connectors.binance_ws import BINANCE_WS_MAINNET, FakeWsTransport
 from grinder.connectors.live_connector import (
@@ -104,6 +104,7 @@ from scripts.http_measured_client import RequestsHttpClient, build_measured_clie
 
 if TYPE_CHECKING:
     from grinder.execution.engine import SymbolConstraints
+    from grinder.live.grid_planner import LiveGridPlannerV1
 
 # Module-level readiness flags.
 _loop_ready = False
@@ -446,6 +447,40 @@ def _load_symbol_constraints() -> dict[str, SymbolConstraints] | None:
     return None
 
 
+def _build_grid_planners(
+    symbols: list[str],
+    symbol_constraints: dict[str, SymbolConstraints] | None,
+    paper_kwargs: dict[str, Any],
+) -> dict[str, LiveGridPlannerV1] | None:
+    """Build per-symbol LiveGridPlannerV1 instances (PR-L2).
+
+    Returns None if GRINDER_LIVE_PLANNER_ENABLED is not set.
+    tick_size fail-safe: if unavailable for a symbol, planner gets tick_size=None
+    and will produce 0 actions + WARN log (doc-25 invariant).
+    """
+    if not parse_bool("GRINDER_LIVE_PLANNER_ENABLED", default=False) or not symbols:
+        return None
+
+    from grinder.live.grid_planner import LiveGridConfig, LiveGridPlannerV1  # noqa: PLC0415
+
+    planners: dict[str, LiveGridPlannerV1] = {}
+    for sym in symbols:
+        tick = None
+        if symbol_constraints and sym in symbol_constraints:
+            tick = symbol_constraints[sym].tick_size
+        cfg = LiveGridConfig(
+            base_spacing_bps=paper_kwargs.get("spacing_bps", 10.0),
+            levels=paper_kwargs.get("levels", 5),
+            size_per_level=paper_kwargs.get("size_per_level", Decimal("0.01")),
+            tick_size=tick,
+            adaptive_enabled=True,
+        )
+        planners[sym] = LiveGridPlannerV1(cfg)
+    syms_str = ", ".join(f"{s}(tick={planners[s]._config.tick_size})" for s in symbols)
+    print(f"  LiveGridPlanner enabled: {syms_str}")
+    return planners
+
+
 def build_engine(
     mode: SafeMode,
     *,
@@ -455,6 +490,7 @@ def build_engine(
     paper_levels: int | None = None,
     paper_cooldown_ms: int | None = None,
     exchange_port: ExchangePort | None = None,
+    symbols: list[str] | None = None,
 ) -> LiveEngineV0:
     """Build LiveEngineV0 with configurable ExchangePort.
 
@@ -478,6 +514,7 @@ def build_engine(
         paper_levels: Override PaperEngine grid levels per side (default 5).
         paper_cooldown_ms: Override PaperEngine per-symbol cooldown (default 100ms).
         exchange_port: ExchangePort to use. Defaults to NoOpExchangePort.
+        symbols: Trading symbols for per-symbol planner creation (PR-L2).
 
     Returns:
         Configured LiveEngineV0 instance (gauge set to 1 after init).
@@ -552,6 +589,9 @@ def build_engine(
     )
     print("  FeatureEngine enabled (bar_interval=60s, atr_period=14)")
 
+    # Live grid planner (opt-in via GRINDER_LIVE_PLANNER_ENABLED, PR-L2)
+    grid_planners = _build_grid_planners(symbols or [], symbol_constraints, paper_kwargs)
+
     return LiveEngineV0(
         paper_engine=paper_engine,
         exchange_port=port,
@@ -562,6 +602,7 @@ def build_engine(
         toxicity_gate=toxicity_gate,
         account_syncer=account_syncer,
         feature_engine=feature_engine,
+        grid_planners=grid_planners,
     )
 
 
@@ -762,6 +803,7 @@ def main() -> None:  # noqa: PLR0915
         paper_levels=args.paper_levels,
         paper_cooldown_ms=args.paper_cooldown_ms,
         exchange_port=port,
+        symbols=symbols,
     )
     print("  Engine initialized: grinder_live_engine_initialized=1")
 
