@@ -870,12 +870,16 @@ groups:
           runbook_url: "docs/runbooks/29_ACCOUNT_SYNC.md#accountsyncstale"
 
       # Warning: Exchange data is not updating (orders/positions unchanged)
-      # Normal for idle accounts with unchanged limit orders; higher threshold (300s).
+      # Only fires for non-empty accounts (at least 1 order or position).
+      # Empty accounts have nothing to be "stale" about; liveness is covered
+      # by AccountSyncStale (age_seconds).
       - alert: AccountSyncDataStale
         expr: |
           grinder_account_sync_last_ts > 0
           and
           grinder_account_sync_data_age_seconds > 300
+          and
+          (grinder_account_sync_open_orders_count > 0 or grinder_account_sync_positions_count > 0)
         for: 5m
         labels:
           severity: warning
@@ -883,7 +887,7 @@ groups:
           category: correctness
         annotations:
           summary: "Account sync data stale (data age {{ $value | printf \"%.0f\" }}s)"
-          description: "Exchange data timestamp unchanged for {{ $value | printf \"%.0f\" }}s (threshold: 300s). Orders/positions may not be refreshing on Binance side."
+          description: "Exchange data timestamp unchanged for {{ $value | printf \"%.0f\" }}s (threshold: 300s). Account has active orders/positions but data is not refreshing. Empty accounts are excluded from this alert."
           runbook_url: "docs/runbooks/29_ACCOUNT_SYNC.md#accountsyncdatastale"
 
       # Warning: Account sync errors (HTTP, auth, parse failures)

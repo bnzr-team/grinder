@@ -149,14 +149,20 @@ class AccountSyncer:
 
         Rules:
         - duplicate_key: position (symbol, side) or order_id uniqueness
-        - ts_regression: snapshot.ts < last accepted ts
+        - ts_regression: snapshot.ts < last accepted ts (non-empty snapshots only;
+          empty snapshots with ts=0 are a normal transition, not a regression)
         - negative_qty: position/order qty < 0
         - orphan_order: exchange order not in known_order_ids
         """
         mismatches: list[Mismatch] = []
 
         # Check ts_regression -- invariant I5
-        if self._last_ts > 0 and snapshot.ts < self._last_ts:
+        # Exception: empty snapshots (ts=0, no positions, no orders) are exempt.
+        # An empty account is a normal transition (orders expired/filled), not
+        # data regression.  Suppressing this avoids infinite mismatch loops when
+        # _last_ts is frozen at the old value.
+        is_empty = len(snapshot.positions) == 0 and len(snapshot.open_orders) == 0
+        if self._last_ts > 0 and snapshot.ts < self._last_ts and not is_empty:
             mismatches.append(
                 Mismatch(
                     rule="ts_regression",

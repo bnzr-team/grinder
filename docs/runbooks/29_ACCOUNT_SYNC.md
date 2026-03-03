@@ -176,9 +176,10 @@ grinder_account_sync_age_seconds > 120
 
 **Severity:** Warning | **Category:** correctness | **`for`:** 5m
 
-**Meaning:** Exchange data timestamps have not advanced for >300 seconds, despite sync
-having received data at some point (`last_ts > 0`). This is a **data freshness** alert --
-it fires when the exchange's `updateTime` values stop advancing.
+**Meaning:** Exchange data timestamps have not advanced for >300 seconds on an account
+that has active orders or positions. This is a **data freshness** alert -- it fires when
+the exchange's `updateTime` values stop advancing despite the account being non-empty.
+Empty accounts are excluded (nothing to be "stale" about).
 
 **Impact:** Position and order data may be stale even though sync is running. This can
 happen legitimately when a single unchanged open order sits on the exchange (its
@@ -189,6 +190,8 @@ happen legitimately when a single unchanged open order sits on the exchange (its
 grinder_account_sync_last_ts > 0
 and
 grinder_account_sync_data_age_seconds > 300
+and
+(grinder_account_sync_open_orders_count > 0 or grinder_account_sync_positions_count > 0)
 ```
 
 **Triage Steps:**

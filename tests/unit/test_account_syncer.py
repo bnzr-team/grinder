@@ -222,12 +222,15 @@ class TestDuplicateKey:
 
 class TestTsRegression:
     def test_ts_regression_detected(self) -> None:
-        port1 = FakePort(snapshot=_snapshot(ts=5000))
+        """Non-empty snapshot with older ts triggers ts_regression."""
+        snap1 = _snapshot(positions=(_pos(ts=5000),), ts=5000)
+        port1 = FakePort(snapshot=snap1)
         syncer = AccountSyncer(port1)  # type: ignore[arg-type]
         syncer.sync()  # establishes last_ts=5000
 
-        # Now feed older snapshot
-        port2 = FakePort(snapshot=_snapshot(ts=3000))
+        # Now feed older non-empty snapshot
+        snap2 = _snapshot(positions=(_pos(ts=3000),), ts=3000)
+        port2 = FakePort(snapshot=snap2)
         syncer._port = port2  # type: ignore[assignment]
 
         result = syncer.sync()
@@ -235,11 +238,14 @@ class TestTsRegression:
         assert "ts_regression" in rules
 
     def test_ts_regression_does_not_update_last_ts(self) -> None:
-        port1 = FakePort(snapshot=_snapshot(ts=5000))
+        """Real regression keeps last_ts at the higher value."""
+        snap1 = _snapshot(positions=(_pos(ts=5000),), ts=5000)
+        port1 = FakePort(snapshot=snap1)
         syncer = AccountSyncer(port1)  # type: ignore[arg-type]
         syncer.sync()
 
-        port2 = FakePort(snapshot=_snapshot(ts=3000))
+        snap2 = _snapshot(positions=(_pos(ts=3000),), ts=3000)
+        port2 = FakePort(snapshot=snap2)
         syncer._port = port2  # type: ignore[assignment]
         syncer.sync()
 
@@ -254,6 +260,67 @@ class TestTsRegression:
         result = syncer.sync()  # same ts=5000
         rules = [m.rule for m in result.mismatches]
         assert "ts_regression" not in rules
+
+
+class TestEmptySnapshotNoRegression:
+    """Empty snapshot (ts=0, no positions/orders) is not a ts_regression.
+
+    Covers the "non-empty → empty → non-empty" lifecycle that occurs when
+    all orders are filled or expire, leaving the account temporarily empty.
+    build_account_snapshot() returns ts=0 for empty accounts (max([]) = 0).
+    """
+
+    def test_nonempty_then_empty_no_regression(self) -> None:
+        """Non-empty → empty: no ts_regression, last_ts resets to 0."""
+        snap1 = _snapshot(positions=(_pos(ts=5000),), ts=5000)
+        port1 = FakePort(snapshot=snap1)
+        syncer = AccountSyncer(port1)  # type: ignore[arg-type]
+        syncer.sync()
+        assert syncer.last_ts == 5000
+
+        # Account becomes empty (orders expired/filled)
+        snap2 = _snapshot(ts=0)  # empty: no positions, no orders
+        port2 = FakePort(snapshot=snap2)
+        syncer._port = port2  # type: ignore[assignment]
+
+        result = syncer.sync()
+        rules = [m.rule for m in result.mismatches]
+        assert "ts_regression" not in rules, "empty snapshot must not trigger ts_regression"
+        assert syncer.last_ts == 0, "last_ts must reset to 0 (not stay frozen at 5000)"
+
+    def test_real_regression_nonempty_still_detected(self) -> None:
+        """Non-empty → non-empty with older ts: ts_regression still fires."""
+        snap1 = _snapshot(open_orders=(_order(ts=5000),), ts=5000)
+        port1 = FakePort(snapshot=snap1)
+        syncer = AccountSyncer(port1)  # type: ignore[arg-type]
+        syncer.sync()
+
+        snap2 = _snapshot(open_orders=(_order(ts=3000),), ts=3000)
+        port2 = FakePort(snapshot=snap2)
+        syncer._port = port2  # type: ignore[assignment]
+
+        result = syncer.sync()
+        rules = [m.rule for m in result.mismatches]
+        assert "ts_regression" in rules, "real regression must still be detected"
+        assert syncer.last_ts == 5000, "last_ts must not roll back"
+
+    def test_empty_then_nonempty_no_regression(self) -> None:
+        """Empty → non-empty: clean transition, no regression."""
+        snap1 = _snapshot(ts=0)  # start empty
+        port1 = FakePort(snapshot=snap1)
+        syncer = AccountSyncer(port1)  # type: ignore[arg-type]
+        syncer.sync()
+        assert syncer.last_ts == 0
+
+        # Account gets new orders
+        snap2 = _snapshot(open_orders=(_order(ts=7000),), ts=7000)
+        port2 = FakePort(snapshot=snap2)
+        syncer._port = port2  # type: ignore[assignment]
+
+        result = syncer.sync()
+        rules = [m.rule for m in result.mismatches]
+        assert "ts_regression" not in rules, "empty→non-empty must not trigger regression"
+        assert syncer.last_ts == 7000
 
 
 class TestNegativeQty:
