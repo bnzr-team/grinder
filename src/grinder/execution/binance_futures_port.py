@@ -514,13 +514,13 @@ class BinanceFuturesPort:
         # P0-2: debug openOrders snapshot (bounded, env-gated)
         if self._debug_open_orders:
             symbols_sample = sorted({o.get("symbol", "?") for o in raw_orders[:20]})
-            logger.info(
+            logger.warning(
                 "ACCOUNT_SYNC_DEBUG raw_orders: count=%d symbols=%s",
                 len(raw_orders),
                 symbols_sample,
             )
             for i, o in enumerate(raw_orders[:5]):  # bounded: first 5 only
-                logger.info(
+                logger.warning(
                     "  [%d] clientOrderId=%s orderId=%s symbol=%s side=%s "
                     "price=%s qty=%s status=%s type=%s timeInForce=%s reduceOnly=%s",
                     i,

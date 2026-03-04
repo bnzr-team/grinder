@@ -856,7 +856,7 @@ class LiveEngineV0:
             )
             now_ms = int(time.time() * 1000)
             corr = correlate_recent_places(self._recent_places, open_ids, now_ms)
-            logger.info(
+            logger.warning(
                 "PLACE_CORRELATION open_orders_count=%d parsable_grinder=%d "
                 "recent=%d found=%d missing=%d",
                 len(open_ids),
@@ -866,7 +866,7 @@ class LiveEngineV0:
                 corr.missing,
             )
             for entry in corr.missing_details[:5]:  # bounded
-                logger.info("  MISSING: %s", entry)
+                logger.warning("  MISSING: %s", entry)
 
     def _get_position_sign(self, symbol: str) -> int | None:
         """Determine net position direction for a symbol (PR-INV-1).
