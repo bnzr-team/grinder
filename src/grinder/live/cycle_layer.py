@@ -17,6 +17,7 @@ PR-INV-3b additions:
 - TP expiry: TPs older than tp_ttl_ms are cancelled (GRINDER_TP_TTL_MS env var)
 - Metrics: CycleMetrics singleton tracks tp_generated, tp_expired, fill_candidates
 - tp_created_ts cleanup: entries removed when TP disappears from open_orders
+- Stale tp_created_ts cleanup: time-based eviction for rejected TPs (never on exchange)
 """
 
 from __future__ import annotations
@@ -46,6 +47,8 @@ logger = logging.getLogger(__name__)
 
 _MAX_DEDUP_ENTRIES = 1000
 _CANCEL_TTL_MS = 30_000  # 30s = ~6 AccountSync cycles
+_STALE_TP_CREATED_FALLBACK_MS = 600_000  # 10min fallback when tp_ttl_ms disabled
+_STALE_TP_CREATED_MIN_MS = 60_000  # floor for stale cleanup TTL
 
 
 @dataclass
@@ -228,8 +231,8 @@ class LiveCycleLayerV1:
         actions.extend(expiry_cancels)
 
         # --- Phase 3: Clean up tp_created_ts for TPs no longer in open_orders ---
-        # (not expired, just gone — e.g., filled by exchange)
-        self._cleanup_tp_created_ts(current)
+        # (not expired, just gone — e.g., filled by exchange, or rejected/stale)
+        self._cleanup_tp_created_ts(current, ts_ms)
 
         self._prev_orders = current
         return actions
@@ -281,21 +284,52 @@ class LiveCycleLayerV1:
                 )
         return cancels
 
-    def _cleanup_tp_created_ts(self, current: dict[str, OpenOrderSnap]) -> None:
+    def _cleanup_tp_created_ts(self, current: dict[str, OpenOrderSnap], ts_ms: int) -> None:
         """Remove tp_created_ts entries for TPs no longer in open_orders.
 
-        Prevents memory leak: if a TP was filled (disappeared without expiry),
-        its tracking entry is cleaned up.
+        Two cleanup paths:
+        1. Primary: TP was previously seen in open_orders (prev_orders) but
+           disappeared — filled by exchange.
+        2. Secondary (stale): TP was generated but never appeared in open_orders
+           (e.g., exchange rejected the order). Time-based eviction prevents
+           unbounded growth of _tp_created_ts.
 
-        Only cleans up TPs that were previously seen in open_orders (prev_orders).
-        Newly generated TPs (not yet on exchange) are kept until they appear
-        in a future snapshot.
+        Stale TTL formula:
+        - tp_ttl_ms enabled: max(2 * tp_ttl_ms, 60_000)
+        - tp_ttl_ms disabled (None/0): 600_000 (10 minutes)
         """
-        gone = [
-            oid for oid in self._tp_created_ts if oid not in current and oid in self._prev_orders
-        ]
-        for oid in gone:
+        stale_ttl = self._stale_tp_created_ttl_ms()
+        to_delete: list[str] = []
+        for oid, created_ts in self._tp_created_ts.items():
+            if oid in current:
+                continue  # still on exchange, keep tracking
+            # Path 1: previously seen in open_orders, now gone (filled)
+            if oid in self._prev_orders:
+                to_delete.append(oid)
+                continue
+            # Path 2: never appeared in open_orders, stale by time
+            age_ms = ts_ms - created_ts
+            if age_ms > stale_ttl:
+                logger.info(
+                    "TP_CREATED_STALE_CLEANUP: tp_id=%s age_ms=%d stale_ttl_ms=%d",
+                    oid,
+                    age_ms,
+                    stale_ttl,
+                )
+                to_delete.append(oid)
+        for oid in to_delete:
             del self._tp_created_ts[oid]
+
+    def _stale_tp_created_ttl_ms(self) -> int:
+        """Compute stale TTL for tp_created_ts cleanup.
+
+        Returns:
+            max(2 * tp_ttl_ms, 60_000) if TTL enabled, else 600_000.
+        """
+        ttl = self._config.tp_ttl_ms
+        if not ttl or ttl <= 0:
+            return _STALE_TP_CREATED_FALLBACK_MS
+        return max(2 * ttl, _STALE_TP_CREATED_MIN_MS)
 
     def _compute_tp_price(self, fill_price: Decimal, fill_side: str) -> Decimal:
         """Compute TP price offset from fill price.

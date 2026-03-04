@@ -436,8 +436,113 @@ class TestExpiryDisabledNoCancel:
         assert cancel_actions == []
 
 
+class TestStaleRejectedTpCleanup:
+    """Test 12: Rejected TP (never in open_orders) cleaned up by stale TTL."""
+
+    def test_rejected_tp_cleaned_up_by_stale_ttl(self) -> None:
+        # TTL=60s -> stale TTL = max(2*60_000, 60_000) = 120_000
+        layer = LiveCycleLayerV1(
+            LiveCycleConfig(spacing_bps=10.0, tick_size=Decimal("0.10"), tp_ttl_ms=60_000)
+        )
+        grid_oid = "grinder_d_BTCUSDT_3_1000_1"
+        grid_order = _snap(grid_oid)
+
+        # Call 1: establish prev with grid order
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(grid_order,),
+            mid_price=Decimal("50000"),
+            ts_ms=1_000_000,
+        )
+
+        # Call 2: grid order gone -> TP generated (but exchange will reject it)
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(),
+            mid_price=Decimal("50000"),
+            ts_ms=2_000_000,
+        )
+        assert len(actions) == 1
+        tp_oid = actions[0].client_order_id
+        assert tp_oid is not None
+
+        # Verify: tp_created_ts is tracking the TP
+        assert tp_oid in layer._tp_created_ts
+
+        # Call 3: TP never appears in open_orders (rejected by exchange).
+        # Time within stale TTL (50s < 120s stale TTL) -> entry survives
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(),
+            mid_price=Decimal("50000"),
+            ts_ms=2_050_000,
+        )
+        assert tp_oid in layer._tp_created_ts
+
+        # Call 4: Time exceeds stale TTL (121s > 120s) -> entry cleaned up
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(),
+            mid_price=Decimal("50000"),
+            ts_ms=2_121_000,
+        )
+        assert tp_oid not in layer._tp_created_ts
+
+    def test_stale_ttl_with_disabled_tp_ttl(self) -> None:
+        # tp_ttl_ms=None -> stale TTL = 600_000 (10 min fallback)
+        layer = LiveCycleLayerV1(
+            LiveCycleConfig(spacing_bps=10.0, tick_size=Decimal("0.10"), tp_ttl_ms=None)
+        )
+        tp_oid = "grinder_tp_BTCUSDT_3_2000_1"
+        layer._tp_created_ts[tp_oid] = 1_000_000
+
+        # Call 1: no open orders, time within fallback (500s < 600s)
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(),
+            mid_price=Decimal("50000"),
+            ts_ms=1_500_000,
+        )
+        assert tp_oid in layer._tp_created_ts
+
+        # Call 2: time exceeds fallback (601s > 600s) -> cleaned up
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(),
+            mid_price=Decimal("50000"),
+            ts_ms=1_601_000,
+        )
+        assert tp_oid not in layer._tp_created_ts
+
+    def test_stale_ttl_floor_at_60s(self) -> None:
+        # tp_ttl_ms=10_000 (10s) -> stale TTL = max(2*10_000, 60_000) = 60_000
+        layer = LiveCycleLayerV1(
+            LiveCycleConfig(spacing_bps=10.0, tick_size=Decimal("0.10"), tp_ttl_ms=10_000)
+        )
+        tp_oid = "grinder_tp_BTCUSDT_3_2000_1"
+        layer._tp_created_ts[tp_oid] = 1_000_000
+
+        # Within floor (50s < 60s) -> survives
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(),
+            mid_price=Decimal("50000"),
+            ts_ms=1_050_000,
+        )
+        assert tp_oid in layer._tp_created_ts
+
+        # Exceeds floor (61s > 60s) -> cleaned up
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(),
+            mid_price=Decimal("50000"),
+            ts_ms=1_061_000,
+        )
+        assert tp_oid not in layer._tp_created_ts
+
+
 class TestCycleMetrics:
-    """Test 12: CycleMetrics counters (PR-INV-3b)."""
+    """Test 15: CycleMetrics counters (PR-INV-3b)."""
 
     def test_metrics_recorded_on_fill_and_expiry(self) -> None:
         reset_cycle_metrics()
