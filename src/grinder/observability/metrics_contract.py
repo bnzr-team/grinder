@@ -277,6 +277,10 @@ REQUIRED_METRICS_PATTERNS = [
     "# HELP grinder_emergency_exit_enabled",
     "# TYPE grinder_emergency_exit_enabled",
     "grinder_emergency_exit_enabled",
+    # P0-2: Cancel unknown (-2011) counter
+    "# HELP grinder_port_cancel_unknown_total",
+    "# TYPE grinder_port_cancel_unknown_total",
+    "grinder_port_cancel_unknown_total{port=",
 ]
 
 # PR6: Concrete series patterns requiring fill ingest to be running.

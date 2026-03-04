@@ -43,6 +43,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import hmac
+import logging
 import os
 import time
 import urllib.parse
@@ -59,6 +60,7 @@ from grinder.account.contracts import (
 from grinder.connectors.errors import ConnectorNonRetryableError
 from grinder.connectors.live_connector import SafeMode
 from grinder.core import OrderSide, OrderState
+from grinder.env_parse import parse_bool
 from grinder.execution.binance_port import HttpClient, map_binance_error
 from grinder.execution.port_metrics import get_port_metrics
 from grinder.execution.types import OrderRecord
@@ -77,6 +79,8 @@ from grinder.reconcile.identity import (
     get_default_identity_config,
     parse_client_order_id,
 )
+
+logger = logging.getLogger(__name__)
 
 # --- Binance Futures URLs ---
 
@@ -218,6 +222,8 @@ class BinanceFuturesPort:
     Default SafeMode.READ_ONLY blocks all writes by design.
     """
 
+    _PORT_NAME = "futures"
+
     http_client: HttpClient
     config: BinanceFuturesPortConfig = field(default_factory=BinanceFuturesPortConfig)
 
@@ -226,6 +232,12 @@ class BinanceFuturesPort:
     _position_mode: str | None = field(default=None, repr=False)
     _leverage_set: dict[str, int] = field(default_factory=dict, repr=False)
     _ts_offset_ms: int = field(default=0, repr=False)
+
+    def __post_init__(self) -> None:
+        """Read debug flags once at init."""
+        self._debug_open_orders = parse_bool(
+            "GRINDER_ACCOUNT_SYNC_DEBUG_OPEN_ORDERS", default=False, strict=False
+        )
 
     def _validate_mode(self, op: str) -> None:
         """Validate SafeMode allows write operations."""
@@ -499,6 +511,31 @@ class BinanceFuturesPort:
             ord_resp.json_data if isinstance(ord_resp.json_data, list) else []
         )
 
+        # P0-2: debug openOrders snapshot (bounded, env-gated)
+        if self._debug_open_orders:
+            symbols_sample = sorted({o.get("symbol", "?") for o in raw_orders[:20]})
+            logger.info(
+                "ACCOUNT_SYNC_DEBUG raw_orders: count=%d symbols=%s",
+                len(raw_orders),
+                symbols_sample,
+            )
+            for i, o in enumerate(raw_orders[:5]):  # bounded: first 5 only
+                logger.info(
+                    "  [%d] clientOrderId=%s orderId=%s symbol=%s side=%s "
+                    "price=%s qty=%s status=%s type=%s timeInForce=%s reduceOnly=%s",
+                    i,
+                    o.get("clientOrderId", "?"),
+                    o.get("orderId", "?"),
+                    o.get("symbol", "?"),
+                    o.get("side", "?"),
+                    o.get("price", "?"),
+                    o.get("origQty", "?"),
+                    o.get("status", "?"),
+                    o.get("type", "?"),
+                    o.get("timeInForce", "?"),
+                    o.get("reduceOnly", "?"),
+                )
+
         # --- Parse positions -> PositionSnap ---
         positions: list[PositionSnap] = []
         for p in raw_positions:
@@ -610,7 +647,7 @@ class BinanceFuturesPort:
         Returns:
             order_id: Binance order ID as string
         """
-        get_port_metrics().record_order_attempt("futures", "place")
+        get_port_metrics().record_order_attempt(self._PORT_NAME, "place")
         self._validate_mode("place_order")
         self._validate_symbol(symbol)
         self._validate_notional(price, quantity)
@@ -747,7 +784,7 @@ class BinanceFuturesPort:
         Returns:
             True if cancellation succeeded
         """
-        get_port_metrics().record_order_attempt("futures", "cancel")
+        get_port_metrics().record_order_attempt(self._PORT_NAME, "cancel")
         self._validate_mode("cancel_order")
 
         # LC-12: Use proper identity parsing to extract symbol
@@ -782,6 +819,17 @@ class BinanceFuturesPort:
         )
 
         if response.status_code != 200:
+            # P0-2: diagnostic for -2011 (unknown order)
+            error_code = None
+            if isinstance(response.json_data, dict):
+                error_code = response.json_data.get("code")
+            if error_code == -2011:
+                logger.warning(
+                    "CANCEL_2011_DIAG order_id=%s parsed=%s",
+                    order_id,
+                    parse_client_order_id(order_id),
+                )
+                get_port_metrics().record_cancel_unknown(self._PORT_NAME)
             map_binance_error(response.status_code, response.json_data)
 
         if isinstance(response.json_data, dict):
@@ -871,7 +919,7 @@ class BinanceFuturesPort:
         ts: int,
     ) -> str:
         """Replace an order (cancel + new)."""
-        get_port_metrics().record_order_attempt("futures", "replace")
+        get_port_metrics().record_order_attempt(self._PORT_NAME, "replace")
         self._validate_mode("replace_order")
 
         parts = order_id.split("_")

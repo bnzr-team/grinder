@@ -1331,6 +1331,16 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - Cap logic in `_build_desired_grid()`: reduces `desired_count` naturally
   - Backward-compatible: defaults preserve existing behavior
 
+- **AccountSync visibility instrumentation** (PR-P0-2):
+  - `GRINDER_ACCOUNT_SYNC_DEBUG_OPEN_ORDERS=1` (default 0): one flag enables both raw logging + correlation
+  - Port: logs raw openOrders response summary (count + symbols_sample + first 5 entries with clientOrderId/status/timeInForce)
+  - Engine: correlates recent_places (last 20 successful PLACEs by sent clientOrderId + wall-clock ts) with open_orders; logs parsable_grinder_ids count for hypothesis narrowing
+  - `grinder_port_cancel_unknown_total{port}` counter for -2011 errors (no symbol label)
+  - CANCEL -2011 diagnostic log: order_id + parsed identity (before map_binance_error raises)
+  - Pure helper `correlate_recent_places()` in `place_tracker.py` for testability
+  - DRY: `_PORT_NAME = "futures"` class constant replaces hardcoded strings in BinanceFuturesPort
+  - Debug-only, default off, no behavioral changes
+
 ## Partially implemented
 - Package structure `src/grinder/*` (core, protocols/interfaces) -- scaffolding.
 - Documentation in `docs/*` -- SSOT for architecture/specs (must match implementation).

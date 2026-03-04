@@ -32,6 +32,7 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections import deque
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import TYPE_CHECKING, Any
@@ -66,12 +67,13 @@ from grinder.execution.smart_order_router import (
 )
 from grinder.execution.sor_metrics import get_sor_metrics
 from grinder.execution.types import ActionType, ExecutionAction
+from grinder.live.place_tracker import correlate_recent_places
 from grinder.ml.fill_model_loader import extract_online_features
 from grinder.ml.threshold_resolver import (
     resolve_threshold_result,
     write_threshold_resolution_evidence,
 )
-from grinder.reconcile.identity import is_tp_order
+from grinder.reconcile.identity import is_tp_order, parse_client_order_id
 from grinder.risk.drawdown_guard_v1 import DrawdownGuardV1
 from grinder.risk.drawdown_guard_v1 import OrderIntent as RiskIntent
 from grinder.risk.emergency_exit import EmergencyExitExecutor
@@ -379,6 +381,11 @@ class LiveEngineV0:
         # Account sync throttle: at most once per interval to avoid REST rate-limits
         self._account_sync_interval_ms: int = 5_000  # 5s default
         self._account_sync_last_attempt_ms: int = -(5_000)  # ensures first tick always syncs
+        # P0-2: debug open orders + recent places correlation
+        self._debug_open_orders = parse_bool(
+            "GRINDER_ACCOUNT_SYNC_DEBUG_OPEN_ORDERS", default=False, strict=False
+        )
+        self._recent_places: deque[tuple[str, int, str]] = deque(maxlen=20)
         if self._emergency_exit_enabled:
             # Duck-type check: port must have cancel_all_orders + place_market_order + get_positions
             port = self._exchange_port
@@ -841,6 +848,26 @@ class LiveEngineV0:
             if evidence_dir is not None:
                 logger.info("Account sync evidence written to %s", evidence_dir)
 
+        # P0-2: correlate recent PLACEs with AccountSync open_orders
+        if self._debug_open_orders and result.snapshot is not None:
+            open_ids = {o.order_id for o in result.snapshot.open_orders}
+            parsable_grinder_ids = sum(
+                1 for oid in open_ids if parse_client_order_id(oid) is not None
+            )
+            now_ms = int(time.time() * 1000)
+            corr = correlate_recent_places(self._recent_places, open_ids, now_ms)
+            logger.info(
+                "PLACE_CORRELATION open_orders_count=%d parsable_grinder=%d "
+                "recent=%d found=%d missing=%d",
+                len(open_ids),
+                parsable_grinder_ids,
+                corr.total,
+                corr.found,
+                corr.missing,
+            )
+            for entry in corr.missing_details[:5]:  # bounded
+                logger.info("  MISSING: %s", entry)
+
     def _get_position_sign(self, symbol: str) -> int | None:
         """Determine net position direction for a symbol (PR-INV-1).
 
@@ -1201,13 +1228,18 @@ class LiveEngineV0:
         for attempt in range(1, max_attempts + 1):
             try:
                 order_id = self._execute_single(action, ts)
-                return LiveAction(
+                live_action = LiveAction(
                     action=action,
                     status=LiveActionStatus.EXECUTED,
                     order_id=order_id,
                     attempts=attempt,
                     intent=intent,
                 )
+                # P0-2: track successful PLACEs for AccountSync correlation
+                if action.action_type == ActionType.PLACE:
+                    cid_sent = action.client_order_id or live_action.order_id or ""
+                    self._recent_places.append((cid_sent, int(time.time() * 1000), action.symbol))
+                return live_action
             except ConnectorNonRetryableError as e:
                 # Non-retryable: fail immediately
                 logger.error(

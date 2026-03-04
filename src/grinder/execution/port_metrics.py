@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 # Metric name constants (stable contracts)
 METRIC_PORT_ORDER_ATTEMPTS = "grinder_port_order_attempts_total"
 METRIC_PORT_HTTP_REQUESTS = "grinder_port_http_requests_total"
+METRIC_PORT_CANCEL_UNKNOWN = "grinder_port_cancel_unknown_total"
 
 # Label keys
 LABEL_PORT = "port"
@@ -37,6 +38,9 @@ class PortMetrics:
     http_requests: dict[tuple[str, str, str], int] = field(default_factory=dict)
     """HTTP request counter by (port_name, method, route) tuple."""
 
+    cancel_unknown: dict[str, int] = field(default_factory=dict)
+    """Cancel -2011 counter by port name."""
+
     def record_order_attempt(self, port: str, op: str) -> None:
         """Record an order operation attempt.
 
@@ -46,6 +50,10 @@ class PortMetrics:
         """
         key = (port, op)
         self.order_attempts[key] = self.order_attempts.get(key, 0) + 1
+
+    def record_cancel_unknown(self, port: str) -> None:
+        """Record a -2011 (Unknown order) cancel error."""
+        self.cancel_unknown[port] = self.cancel_unknown.get(port, 0) + 1
 
     def record_http_request(self, port: str, method: str, route: str) -> None:
         """Record an HTTP request attempt.
@@ -71,6 +79,7 @@ class PortMetrics:
             key = (port, op)
             if key not in self.order_attempts:
                 self.order_attempts[key] = 0
+        self.cancel_unknown.setdefault(port, 0)
 
     def to_prometheus_lines(self) -> list[str]:
         """Export metrics in Prometheus text format."""
@@ -110,12 +119,27 @@ class PortMetrics:
                 " 0"
             )
 
+        # --- cancel unknown (-2011) ---
+        lines.append(
+            f"# HELP {METRIC_PORT_CANCEL_UNKNOWN} Cancel attempts that got -2011 unknown order"
+        )
+        lines.append(f"# TYPE {METRIC_PORT_CANCEL_UNKNOWN} counter")
+        if self.cancel_unknown:
+            for port_name in sorted(self.cancel_unknown):
+                lines.append(
+                    f"{METRIC_PORT_CANCEL_UNKNOWN}"
+                    f'{{port="{port_name}"}} {self.cancel_unknown[port_name]}'
+                )
+        else:
+            lines.append(f'{METRIC_PORT_CANCEL_UNKNOWN}{{port="none"}} 0')
+
         return lines
 
     def reset(self) -> None:
         """Reset all metrics (for testing)."""
         self.order_attempts.clear()
         self.http_requests.clear()
+        self.cancel_unknown.clear()
 
 
 # Global singleton
