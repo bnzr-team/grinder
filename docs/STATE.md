@@ -1308,6 +1308,14 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - V1: single tick_size for all symbols. Multi-symbol tick mismatch -> cycle layer disabled.
   - Contract: non-numeric `level_id` (e.g., "cleanup") -> TP `level_id=0`
   - Contract: planner filters TPs by `is_tp_order()` -- essential because TP clientOrderIds parse as valid grinder orders
+- **TP expiry + observability** (PR-INV-3b):
+  - TP orders older than `GRINDER_TP_TTL_MS` (default 300s) are auto-cancelled (reason `TP_EXPIRED`)
+  - `LiveCycleConfig.tp_ttl_ms`: `int | None` (None/0 = disabled)
+  - `_tp_created_ts`: tracks TP creation timestamps; cleaned up when TP disappears from open_orders
+  - Fail-closed: only cancels TPs tracked in `_tp_created_ts` (we created them)
+  - `CycleMetrics` singleton (`cycle_metrics.py`): `grinder_cycle_tp_generated_total`, `grinder_cycle_tp_expired_total`, `grinder_cycle_fill_candidates_total`
+  - Fill candidate outcomes: `tp_generated`, `skipped_pending_cancel`, `skipped_tp_order`, `skipped_dedup`
+  - Wired into `MetricsBuilder` for Prometheus `/metrics` endpoint
 
 ## Partially implemented
 - Package structure `src/grinder/*` (core, protocols/interfaces) -- scaffolding.

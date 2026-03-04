@@ -12,6 +12,11 @@ Invariants:
 - reduce_only=True is semantic invariant for TPs (Binance prevents position increase)
 - V1 limitation: single tick_size for all symbols (BTCUSDT only in current C4)
 - Contract: non-numeric level_id (e.g., "cleanup") -> TP level_id=0
+
+PR-INV-3b additions:
+- TP expiry: TPs older than tp_ttl_ms are cancelled (GRINDER_TP_TTL_MS env var)
+- Metrics: CycleMetrics singleton tracks tp_generated, tp_expired, fill_candidates
+- tp_created_ts cleanup: entries removed when TP disappears from open_orders
 """
 
 from __future__ import annotations
@@ -24,6 +29,7 @@ from typing import TYPE_CHECKING
 
 from grinder.core import OrderSide
 from grinder.execution.types import ActionType, ExecutionAction
+from grinder.live.cycle_metrics import get_cycle_metrics
 from grinder.reconcile.identity import (
     DEFAULT_PREFIX,
     TP_STRATEGY_ID,
@@ -49,10 +55,13 @@ class LiveCycleConfig:
     Attributes:
         spacing_bps: TP price offset from fill price in basis points.
         tick_size: Tick size for price rounding (None = no rounding).
+        tp_ttl_ms: TP order TTL in milliseconds. None or 0 = disabled (no expiry).
+            Default: 300_000 (5 minutes).
     """
 
     spacing_bps: float = 10.0
     tick_size: Decimal | None = None
+    tp_ttl_ms: int | None = 300_000
 
 
 class LiveCycleLayerV1:
@@ -78,6 +87,9 @@ class LiveCycleLayerV1:
             require_strategy_allowlist=False,
         )
         self._tp_seq = 0
+        # PR-INV-3b: Track TP creation timestamps for expiry
+        self._tp_created_ts: dict[str, int] = {}
+        self._metrics = get_cycle_metrics()
 
     def register_cancels(self, actions: list[ExecutionAction], ts_ms: int) -> None:
         """Register CANCEL actions with timestamp for TTL expiry.
@@ -113,7 +125,7 @@ class LiveCycleLayerV1:
         mid_price: Decimal,  # noqa: ARG002 - reserved for future use
         ts_ms: int,
     ) -> list[ExecutionAction]:
-        """Detect fills and generate TP PLACE actions.
+        """Detect fills, generate TP PLACEs, and expire stale TPs.
 
         Args:
             symbol: Trading symbol to process.
@@ -122,7 +134,7 @@ class LiveCycleLayerV1:
             ts_ms: Current timestamp in milliseconds.
 
         Returns:
-            List of TP PLACE ExecutionActions (may be empty).
+            List of ExecutionActions: TP PLACEs + TP expiry CANCELs (may be empty).
         """
         # Cleanup expired pending cancels
         self._cleanup_pending_cancels(ts_ms)
@@ -136,7 +148,9 @@ class LiveCycleLayerV1:
             if parsed is not None:
                 current[o.order_id] = o
 
-        tp_actions: list[ExecutionAction] = []
+        actions: list[ExecutionAction] = []
+
+        # --- Phase 1: Fill detection → TP generation ---
         for oid, snap in self._prev_orders.items():
             if oid in current:
                 continue  # still open
@@ -144,14 +158,19 @@ class LiveCycleLayerV1:
             # Skip pending cancels (we initiated the removal)
             if oid in self._pending_cancels:
                 del self._pending_cancels[oid]  # consumed
+                self._metrics.record_fill_candidate(symbol, "skipped_pending_cancel")
                 continue
 
             # Skip TP orders (TP disappearance = filled/expired, no action)
             if is_tp_order(oid):
+                # PR-INV-3b: Clean up tp_created_ts when TP disappears
+                self._tp_created_ts.pop(oid, None)
+                self._metrics.record_fill_candidate(symbol, "skipped_tp_order")
                 continue
 
             # Idempotency: don't generate TP twice for same source
             if oid in self._generated_tp_ids:
+                self._metrics.record_fill_candidate(symbol, "skipped_dedup")
                 continue
             self._dedup_add(oid, ts_ms)
 
@@ -176,7 +195,7 @@ class LiveCycleLayerV1:
                 seq=self._tp_seq,
             )
 
-            tp_actions.append(
+            actions.append(
                 ExecutionAction(
                     action_type=ActionType.PLACE,
                     symbol=symbol,
@@ -190,6 +209,11 @@ class LiveCycleLayerV1:
                 )
             )
 
+            # PR-INV-3b: Track TP creation time for expiry
+            self._tp_created_ts[tp_client_id] = ts_ms
+            self._metrics.record_tp_generated(symbol)
+            self._metrics.record_fill_candidate(symbol, "tp_generated")
+
             logger.info(
                 "TP generated: src=%s side=%s price=%s qty=%s -> tp_id=%s",
                 oid,
@@ -199,8 +223,79 @@ class LiveCycleLayerV1:
                 tp_client_id,
             )
 
+        # --- Phase 2: TP expiry → CANCEL stale TPs ---
+        expiry_cancels = self._expire_stale_tps(current, symbol, ts_ms)
+        actions.extend(expiry_cancels)
+
+        # --- Phase 3: Clean up tp_created_ts for TPs no longer in open_orders ---
+        # (not expired, just gone — e.g., filled by exchange)
+        self._cleanup_tp_created_ts(current)
+
         self._prev_orders = current
-        return tp_actions
+        return actions
+
+    def _expire_stale_tps(
+        self,
+        current: dict[str, OpenOrderSnap],
+        symbol: str,
+        ts_ms: int,
+    ) -> list[ExecutionAction]:
+        """Cancel TP orders that exceed TTL (PR-INV-3b).
+
+        Only cancels TPs that:
+        1. Have is_tp_order() == True
+        2. Are tracked in _tp_created_ts (we created them)
+        3. Have exceeded tp_ttl_ms
+
+        Returns list of CANCEL ExecutionActions.
+        """
+        ttl = self._config.tp_ttl_ms
+        if not ttl or ttl <= 0:
+            return []
+
+        cancels: list[ExecutionAction] = []
+        for oid, snap in current.items():
+            if snap.symbol != symbol:
+                continue
+            if not is_tp_order(oid):
+                continue
+            created_ts = self._tp_created_ts.get(oid)
+            if created_ts is None:
+                continue  # Not ours (fail-closed)
+            if ts_ms - created_ts > ttl:
+                cancels.append(
+                    ExecutionAction(
+                        action_type=ActionType.CANCEL,
+                        symbol=symbol,
+                        order_id=oid,
+                        reason="TP_EXPIRED",
+                    )
+                )
+                self._tp_created_ts.pop(oid, None)
+                self._metrics.record_tp_expired(symbol)
+                logger.info(
+                    "TP expired: order_id=%s age_ms=%d ttl_ms=%d",
+                    oid,
+                    ts_ms - created_ts,
+                    ttl,
+                )
+        return cancels
+
+    def _cleanup_tp_created_ts(self, current: dict[str, OpenOrderSnap]) -> None:
+        """Remove tp_created_ts entries for TPs no longer in open_orders.
+
+        Prevents memory leak: if a TP was filled (disappeared without expiry),
+        its tracking entry is cleaned up.
+
+        Only cleans up TPs that were previously seen in open_orders (prev_orders).
+        Newly generated TPs (not yet on exchange) are kept until they appear
+        in a future snapshot.
+        """
+        gone = [
+            oid for oid in self._tp_created_ts if oid not in current and oid in self._prev_orders
+        ]
+        for oid in gone:
+            del self._tp_created_ts[oid]
 
     def _compute_tp_price(self, fill_price: Decimal, fill_side: str) -> Decimal:
         """Compute TP price offset from fill price.

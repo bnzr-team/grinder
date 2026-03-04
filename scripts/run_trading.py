@@ -512,12 +512,26 @@ def _build_cycle_layer(
         )
         return None
 
+    # PR-INV-3b: TP TTL from env var (None/0 = disabled, default 300000 = 5min)
+    tp_ttl_ms: int | None = 300_000
+    raw_ttl = os.environ.get("GRINDER_TP_TTL_MS", "").strip()
+    if raw_ttl:
+        try:
+            parsed_ttl = int(raw_ttl)
+            tp_ttl_ms = parsed_ttl if parsed_ttl > 0 else None
+        except ValueError:
+            print(f"  WARNING: invalid GRINDER_TP_TTL_MS={raw_ttl!r}, using default 300000ms")
+
     cfg = LiveCycleConfig(
         spacing_bps=paper_kwargs.get("spacing_bps", 10.0),
         tick_size=first_tick,
+        tp_ttl_ms=tp_ttl_ms,
     )
     layer = LiveCycleLayerV1(cfg)
-    print(f"  LiveCycleLayer enabled: spacing={cfg.spacing_bps}bps tick={first_tick}")
+    ttl_str = f"{cfg.tp_ttl_ms}ms" if cfg.tp_ttl_ms else "disabled"
+    print(
+        f"  LiveCycleLayer enabled: spacing={cfg.spacing_bps}bps tick={first_tick} tp_ttl={ttl_str}"
+    )
     return layer
 
 
