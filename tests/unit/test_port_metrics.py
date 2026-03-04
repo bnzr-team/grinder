@@ -14,6 +14,7 @@ from __future__ import annotations
 import pytest
 
 from grinder.execution.port_metrics import (
+    METRIC_PORT_CANCEL_UNKNOWN,
     METRIC_PORT_HTTP_REQUESTS,
     METRIC_PORT_ORDER_ATTEMPTS,
     PortMetrics,
@@ -182,6 +183,46 @@ class TestPrometheusOutput:
         assert f'{METRIC_PORT_ORDER_ATTEMPTS}{{port="futures",op="replace"}} 0' in output
         # Should NOT have the fallback placeholder for order_attempts
         assert '{port="none",op="none"' not in output
+
+
+class TestCancelUnknown:
+    """Tests for cancel -2011 counter (P0-2)."""
+
+    def test_cancel_unknown_counter_with_port(self) -> None:
+        """P0-2: cancel_unknown counter keyed by port."""
+        metrics = PortMetrics()
+        metrics.initialize_zero_series("futures")
+        assert metrics.cancel_unknown.get("futures", 0) == 0
+        metrics.record_cancel_unknown("futures")
+        metrics.record_cancel_unknown("futures")
+        assert metrics.cancel_unknown["futures"] == 2
+        lines = metrics.to_prometheus_lines()
+        text = "\n".join(lines)
+        assert f'{METRIC_PORT_CANCEL_UNKNOWN}{{port="futures"}} 2' in text
+
+    def test_cancel_unknown_zero_series(self) -> None:
+        """P0-2: zero-series init includes cancel_unknown."""
+        metrics = PortMetrics()
+        metrics.initialize_zero_series("futures")
+        lines = metrics.to_prometheus_lines()
+        text = "\n".join(lines)
+        assert f'{METRIC_PORT_CANCEL_UNKNOWN}{{port="futures"}} 0' in text
+
+    def test_cancel_unknown_empty_fallback(self) -> None:
+        """P0-2: empty cancel_unknown shows none placeholder."""
+        metrics = PortMetrics()
+        lines = metrics.to_prometheus_lines()
+        text = "\n".join(lines)
+        assert f"# HELP {METRIC_PORT_CANCEL_UNKNOWN}" in text
+        assert f"# TYPE {METRIC_PORT_CANCEL_UNKNOWN}" in text
+        assert f'{METRIC_PORT_CANCEL_UNKNOWN}{{port="none"}} 0' in text
+
+    def test_cancel_unknown_reset(self) -> None:
+        """P0-2: reset clears cancel_unknown."""
+        metrics = PortMetrics()
+        metrics.record_cancel_unknown("futures")
+        metrics.reset()
+        assert len(metrics.cancel_unknown) == 0
 
 
 class TestGlobalSingleton:
