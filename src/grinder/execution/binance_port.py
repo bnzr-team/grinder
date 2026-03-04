@@ -463,6 +463,8 @@ class BinanceExchangePort:
         quantity: Decimal,
         level_id: int,
         ts: int,
+        reduce_only: bool = False,  # noqa: ARG002 - spot has no reduceOnly
+        client_order_id: str | None = None,
     ) -> str:
         """Place a limit order on Binance.
 
@@ -473,6 +475,8 @@ class BinanceExchangePort:
             quantity: Order quantity
             level_id: Grid level identifier (used for client order ID)
             ts: Current timestamp
+            reduce_only: Ignored for spot (no reduceOnly in spot API)
+            client_order_id: Pre-generated clientOrderId override (PR-INV-3)
 
         Returns:
             order_id: Binance order ID as string
@@ -488,15 +492,17 @@ class BinanceExchangePort:
         self._validate_order_count()
 
         # Generate deterministic client order ID (LC-12: configurable identity)
+        # If client_order_id override provided (e.g., TP orders), skip generation.
         self._order_counter += 1
-        identity = self.config.identity_config or get_default_identity_config()
-        client_order_id = generate_client_order_id(
-            config=identity,
-            symbol=symbol,
-            level_id=level_id,
-            ts=ts,
-            seq=self._order_counter,
-        )
+        if client_order_id is None:
+            identity = self.config.identity_config or get_default_identity_config()
+            client_order_id = generate_client_order_id(
+                config=identity,
+                symbol=symbol,
+                level_id=level_id,
+                ts=ts,
+                seq=self._order_counter,
+            )
 
         # Track order count (even for dry-run to maintain consistency)
         # Use object.__setattr__ since config is a dataclass

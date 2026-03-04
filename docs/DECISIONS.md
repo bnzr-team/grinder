@@ -4087,3 +4087,18 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
   - Adding a second NATR field to `FeatureSnapshot` requires justification via a new ADR — the default position is one field per metric.
   - Contract tests do NOT verify ATR algorithm correctness (SMA vs EMA) — that is covered by `tests/unit/test_indicators.py::TestATR`.
 - **Alternatives rejected:** Adding `natr_14_x1000` (x1000 encoding) alongside `natr_bps` — rejected because two fields representing the same metric with different scales creates drift risk and consumer confusion.
+
+## ADR-082: ExecutionAction + ExchangePort contract extension (PR-INV-3)
+
+- **Status:** Accepted
+- **Context:** TP orders need `reduce_only` flag (Binance semantics to prevent position increase) and pre-generated `clientOrderId` (grinder_tp_ namespace for cycle layer identification). `ExecutionAction` had neither field, and `ExchangePort.place_order()` did not accept `reduce_only` or `client_order_id` override.
+- **Decision:**
+  - `ExecutionAction`: add `reduce_only: bool = False`, `client_order_id: str | None = None`
+  - `ExchangePort.place_order()`: add `reduce_only: bool = False`, `client_order_id: str | None = None`
+  - All 5 implementations updated: Protocol, NoOp, BinanceFutures, Binance, Idempotent
+  - `IdempotentExchangePort` includes both `reduce_only` + `client_order_id` in idempotency key to prevent TP order collapse
+  - TP identification: `is_tp_order()` helper in `reconcile/identity.py` checks `strategy_id == "tp"` (NOT `reduce_only` flag)
+- **Backward compatibility:** New fields have defaults; old serialized `ExecutionAction`s deserialize correctly via `.get()` with defaults.
+- **Consequences:**
+  - Replay digests changed (new fields in `to_dict()` affect hash): `sample_day_allowed` = `887812017a697c8a`, `sample_day_toxic` = `97c8b0d37cae3ce3`, `sample_day_multisymbol` = `b605159aac9c0aac`. `sample_day` unchanged (0 fills).
+- **SSOT:** `src/grinder/execution/types.py` (ExecutionAction), `src/grinder/execution/port.py` (Protocol)

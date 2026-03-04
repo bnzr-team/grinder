@@ -23,6 +23,7 @@ from grinder.reconcile.identity import (
     generate_client_order_id,
     get_default_identity_config,
     is_ours,
+    is_tp_order,
     parse_client_order_id,
     reset_default_identity_config,
     set_default_identity_config,
@@ -489,3 +490,28 @@ class TestSecurityEdgeCases:
         assert is_ours("grinder_Momentum_BTCUSDT_1_1704067200000_1", config) is True
         assert is_ours("grinder_momentum_BTCUSDT_1_1704067200000_1", config) is False
         assert is_ours("grinder_MOMENTUM_BTCUSDT_1_1704067200000_1", config) is False
+
+
+# =============================================================================
+# is_tp_order Tests (PR-INV-3)
+# =============================================================================
+
+
+class TestIsTpOrder:
+    """Tests for is_tp_order function."""
+
+    def test_tp_order_detected(self) -> None:
+        """TP order with strategy_id='tp' returns True."""
+        assert is_tp_order("grinder_tp_BTCUSDT_3_1000_1") is True
+
+    def test_grid_order_not_tp(self) -> None:
+        """Grid order with strategy_id='d' returns False."""
+        assert is_tp_order("grinder_d_BTCUSDT_3_1000_1") is False
+
+    def test_foreign_order_not_tp(self) -> None:
+        """Unparseable order returns False."""
+        assert is_tp_order("manual_123") is False
+
+    def test_empty_string_not_tp(self) -> None:
+        """Empty string returns False."""
+        assert is_tp_order("") is False

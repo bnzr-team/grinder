@@ -124,6 +124,8 @@ class IdempotentExchangePort:
         quantity: Decimal,
         level_id: int,
         ts: int,
+        reduce_only: bool = False,
+        client_order_id: str | None = None,
     ) -> str:
         """Place an order with idempotency and circuit breaker guarantees.
 
@@ -141,6 +143,8 @@ class IdempotentExchangePort:
             self.breaker.before_call("place")
 
         # Compute idempotency key (ts excluded - same intent = same key regardless of time)
+        # PR-INV-3 P0-1: include reduce_only + client_order_id so TP orders
+        # with different client_order_id don't collapse into same key.
         key = compute_idempotency_key(
             self.scope,
             "place",
@@ -149,6 +153,8 @@ class IdempotentExchangePort:
             price=price,
             quantity=quantity,
             level_id=level_id,
+            reduce_only=reduce_only,
+            client_order_id=client_order_id,
         )
 
         fingerprint = compute_request_fingerprint(
@@ -208,6 +214,8 @@ class IdempotentExchangePort:
                 quantity=quantity,
                 level_id=level_id,
                 ts=ts,
+                reduce_only=reduce_only,
+                client_order_id=client_order_id,
             )
             self.store.mark_done(key, order_id)
             self._stats.place_executed += 1

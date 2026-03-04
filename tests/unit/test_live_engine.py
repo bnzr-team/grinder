@@ -33,7 +33,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from grinder.account.contracts import AccountSnapshot, PositionSnap
+from grinder.account.contracts import AccountSnapshot, OpenOrderSnap, PositionSnap
 from grinder.connectors.circuit_breaker import (
     CircuitBreaker,
     CircuitBreakerConfig,
@@ -58,6 +58,7 @@ from grinder.live import (
     LiveEngineV0,
     classify_intent,
 )
+from grinder.live.cycle_layer import LiveCycleConfig, LiveCycleLayerV1
 from grinder.live.fsm_driver import FsmDriver
 from grinder.live.fsm_metrics import get_fsm_metrics, reset_fsm_metrics
 from grinder.live.fsm_orchestrator import FsmConfig, OrchestratorFSM
@@ -1700,3 +1701,117 @@ class TestMaxPositionGate:
         result = engine._process_action(sell_action, ts=1000)
         # SELL when LONG = REDUCE_RISK, should pass Gate 5
         assert result.block_reason != BlockReason.MAX_POSITION_EXCEEDED
+
+
+# =============================================================================
+# PR-INV-3: Cycle layer integration tests
+# =============================================================================
+
+
+class TestCycleLayerIntegration:
+    """Integration tests for LiveCycleLayerV1 wired into LiveEngineV0."""
+
+    def test_cycle_layer_generates_tp_on_fill(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        sample_snapshot: Snapshot,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """When a grid order disappears (fill), cycle layer generates TP PLACE."""
+        monkeypatch.setenv("GRINDER_LIVE_PLANNER_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_ACCOUNT_SYNC_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_LIVE_CYCLE_ENABLED", "1")
+
+        planner = LiveGridPlannerV1(
+            LiveGridConfig(tick_size=Decimal("0.10"), levels=2, size_per_level=Decimal("0.01"))
+        )
+        cycle_layer = LiveCycleLayerV1(LiveCycleConfig(spacing_bps=10.0, tick_size=Decimal("0.10")))
+        mock_syncer = MagicMock()
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        engine = LiveEngineV0(
+            mock_paper_engine,
+            noop_port,
+            config,
+            account_syncer=mock_syncer,
+            grid_planners={"BTCUSDT": planner},
+            cycle_layer=cycle_layer,
+        )
+
+        # Snapshot 1: one BUY grid order present
+        grid_order = OpenOrderSnap(
+            order_id="grinder_d_BTCUSDT_3_1000_1",
+            symbol="BTCUSDT",
+            side="BUY",
+            order_type="LIMIT",
+            price=Decimal("50000"),
+            qty=Decimal("0.01"),
+            filled_qty=Decimal("0"),
+            reduce_only=False,
+            status="NEW",
+            ts=1000000,
+        )
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(),
+            open_orders=(grid_order,),
+            ts=1000000,
+            source="test",
+        )
+        engine.process_snapshot(sample_snapshot)
+
+        # Snapshot 2: grid order gone (filled) -> cycle layer should generate TP
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(),
+            open_orders=(),
+            ts=2000000,
+            source="test",
+        )
+        snap2 = Snapshot(
+            ts=2000000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50001"),
+            bid_qty=Decimal("1.0"),
+            ask_qty=Decimal("1.0"),
+            last_price=Decimal("50000.5"),
+            last_qty=Decimal("0.5"),
+        )
+        output = engine.process_snapshot(snap2)
+
+        # Should have TP action(s) among live_actions
+        tp_actions = [la for la in output.live_actions if la.action.reason == "TP_CLOSE"]
+        assert len(tp_actions) >= 1
+        tp = tp_actions[0]
+        assert tp.action.reduce_only is True
+        assert tp.action.client_order_id is not None
+        assert tp.action.client_order_id.startswith("grinder_tp_")
+        assert tp.action.side == OrderSide.SELL  # opposite of BUY fill
+
+    def test_tp_classified_as_reduce_risk(self) -> None:
+        """TP SELL when LONG (pos_sign=+1) classifies as REDUCE_RISK."""
+        tp_action = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            price=Decimal("50050"),
+            quantity=Decimal("0.01"),
+            reason="TP_CLOSE",
+            reduce_only=True,
+            client_order_id="grinder_tp_BTCUSDT_3_1000_1",
+        )
+        # LONG position + SELL -> REDUCE_RISK
+        intent = classify_intent(tp_action, pos_sign=1)
+        assert intent == RiskIntent.REDUCE_RISK
+
+        # SHORT position + BUY TP -> REDUCE_RISK
+        tp_buy = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.BUY,
+            price=Decimal("49950"),
+            quantity=Decimal("0.01"),
+            reason="TP_CLOSE",
+            reduce_only=True,
+        )
+        intent = classify_intent(tp_buy, pos_sign=-1)
+        assert intent == RiskIntent.REDUCE_RISK

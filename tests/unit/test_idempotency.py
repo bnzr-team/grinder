@@ -628,6 +628,8 @@ class TestRetryIdempotencyIntegration:
                 quantity: Decimal,  # noqa: ARG002
                 level_id: int,  # noqa: ARG002
                 ts: int,  # noqa: ARG002
+                reduce_only: bool = False,  # noqa: ARG002
+                client_order_id: str | None = None,  # noqa: ARG002
             ) -> str:
                 self.execute_count += 1
                 self._order_counter += 1
@@ -693,6 +695,8 @@ class TestRetryIdempotencyIntegration:
                 quantity: Decimal,  # noqa: ARG002
                 level_id: int,  # noqa: ARG002
                 ts: int,  # noqa: ARG002
+                reduce_only: bool = False,  # noqa: ARG002
+                client_order_id: str | None = None,  # noqa: ARG002
             ) -> str:
                 self.call_count += 1
                 if self.call_count == 1:
@@ -889,6 +893,8 @@ class TestIdempotentPortWithCircuitBreaker:
                 quantity: Decimal,  # noqa: ARG002
                 level_id: int,  # noqa: ARG002
                 ts: int,  # noqa: ARG002
+                reduce_only: bool = False,  # noqa: ARG002
+                client_order_id: str | None = None,  # noqa: ARG002
             ) -> str:
                 nonlocal call_count
                 call_count += 1
@@ -957,6 +963,8 @@ class TestIdempotentPortWithCircuitBreaker:
                 quantity: Decimal,  # noqa: ARG002
                 level_id: int,  # noqa: ARG002
                 ts: int,  # noqa: ARG002
+                reduce_only: bool = False,  # noqa: ARG002
+                client_order_id: str | None = None,  # noqa: ARG002
             ) -> str:
                 raise ConnectorTransientError("network error")
 

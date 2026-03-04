@@ -168,6 +168,19 @@ def parse_client_order_id(client_order_id: str) -> ParsedOrderId | None:
     return None
 
 
+TP_STRATEGY_ID = "tp"
+
+
+def is_tp_order(client_order_id: str) -> bool:
+    """Check if a clientOrderId belongs to the TP cycle layer (PR-INV-3).
+
+    TP orders use strategy_id="tp" -> format: grinder_tp_BTCUSDT_3_ts_seq.
+    Returns False for unparseable or non-TP orders.
+    """
+    parsed = parse_client_order_id(client_order_id)
+    return parsed is not None and parsed.strategy_id == TP_STRATEGY_ID
+
+
 def is_ours(
     client_order_id: str,
     config: OrderIdentityConfig,

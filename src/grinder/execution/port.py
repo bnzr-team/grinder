@@ -30,6 +30,8 @@ class ExchangePort(Protocol):
         quantity: Decimal,
         level_id: int,
         ts: int,
+        reduce_only: bool = False,
+        client_order_id: str | None = None,
     ) -> str:
         """Place an order on the exchange.
 
@@ -40,6 +42,8 @@ class ExchangePort(Protocol):
             quantity: Order quantity
             level_id: Grid level identifier
             ts: Current timestamp
+            reduce_only: If True, only reduce position (PR-INV-3)
+            client_order_id: Pre-generated clientOrderId override (PR-INV-3)
 
         Returns:
             order_id: Unique order identifier
@@ -141,10 +145,15 @@ class NoOpExchangePort:
         quantity: Decimal,
         level_id: int,
         ts: int,
+        reduce_only: bool = False,  # noqa: ARG002
+        client_order_id: str | None = None,
     ) -> str:
         """Place an order (stub - stores in memory only)."""
         get_port_metrics().record_order_attempt("noop", "place")
-        order_id = self._generate_order_id(symbol, side, level_id, ts)
+        if client_order_id is not None:
+            order_id = client_order_id
+        else:
+            order_id = self._generate_order_id(symbol, side, level_id, ts)
 
         record = OrderRecord(
             order_id=order_id,

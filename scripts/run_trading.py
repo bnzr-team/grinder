@@ -90,6 +90,7 @@ from grinder.gating.metrics import get_gating_metrics
 from grinder.ha.leader import LeaderElector, LeaderElectorConfig
 from grinder.ha.role import HARole, get_ha_state
 from grinder.live.config import LiveEngineConfig
+from grinder.live.cycle_layer import LiveCycleConfig, LiveCycleLayerV1
 from grinder.live.engine import LiveEngineV0
 from grinder.ml.fill_model_loader import load_fill_model_v0
 from grinder.net.fixture_guard import install_fixture_network_guard
@@ -481,6 +482,45 @@ def _build_grid_planners(
     return planners
 
 
+def _build_cycle_layer(
+    symbols: list[str],
+    symbol_constraints: dict[str, SymbolConstraints] | None,
+    paper_kwargs: dict[str, Any],
+) -> LiveCycleLayerV1 | None:
+    """Build LiveCycleLayerV1 if enabled (PR-INV-3).
+
+    Returns None if GRINDER_LIVE_CYCLE_ENABLED is not set.
+    V1: single tick_size for all symbols. Fail-closed on tick_size mismatch.
+    """
+    if not parse_bool("GRINDER_LIVE_CYCLE_ENABLED", default=False):
+        return None
+
+    first_tick = None
+    tick_mismatch = False
+    for sym in symbols:
+        tick = None
+        if symbol_constraints and sym in symbol_constraints:
+            tick = symbol_constraints[sym].tick_size
+        if first_tick is None:
+            first_tick = tick
+        elif tick != first_tick:
+            tick_mismatch = True
+
+    if tick_mismatch:
+        print(
+            "  WARNING: LiveCycleLayer disabled -- tick_size differs across symbols (V1 limitation)"
+        )
+        return None
+
+    cfg = LiveCycleConfig(
+        spacing_bps=paper_kwargs.get("spacing_bps", 10.0),
+        tick_size=first_tick,
+    )
+    layer = LiveCycleLayerV1(cfg)
+    print(f"  LiveCycleLayer enabled: spacing={cfg.spacing_bps}bps tick={first_tick}")
+    return layer
+
+
 def _parse_max_position_usd() -> float | None:
     """Parse GRINDER_MAX_POSITION_USD env var (PR-INV-1)."""
     raw = os.environ.get("GRINDER_MAX_POSITION_USD", "").strip()
@@ -495,7 +535,7 @@ def _parse_max_position_usd() -> float | None:
         return None
 
 
-def build_engine(
+def build_engine(  # noqa: PLR0915
     mode: SafeMode,
     *,
     armed: bool = False,
@@ -606,6 +646,9 @@ def build_engine(
     # Live grid planner (opt-in via GRINDER_LIVE_PLANNER_ENABLED, PR-L2)
     grid_planners = _build_grid_planners(symbols or [], symbol_constraints, paper_kwargs)
 
+    # Live cycle layer (opt-in via GRINDER_LIVE_CYCLE_ENABLED, PR-INV-3)
+    cycle_layer = _build_cycle_layer(symbols or [], symbol_constraints, paper_kwargs)
+
     return LiveEngineV0(
         paper_engine=paper_engine,
         exchange_port=port,
@@ -617,6 +660,7 @@ def build_engine(
         account_syncer=account_syncer,
         feature_engine=feature_engine,
         grid_planners=grid_planners,
+        cycle_layer=cycle_layer,
     )
 
 

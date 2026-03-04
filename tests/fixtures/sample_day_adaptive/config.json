@@ -6,7 +6,7 @@
   "adaptive_policy_enabled": true,
   "expected_regimes": ["RANGE"],
   "expected_digest": "eff22d500f13e542",
-  "canonical_digest": "1b8af993a8435ee6",
-  "expected_paper_digest": "1b8af993a8435ee6",
+  "canonical_digest": "b6cb58f4701ebbfa",
+  "expected_paper_digest": "b6cb58f4701ebbfa",
   "notes": "This fixture tests adaptive policy with feature engine. Expected to produce different GridPlans than static policy."
 }

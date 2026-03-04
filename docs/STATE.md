@@ -49,7 +49,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - TIGHTENUSDT: triggers TIGHTEN mode (low volatility)
     - BASEUSDT: triggers BASE mode (normal volatility)
   - `sample_day_topk_v1/`: 6 symbols to test Top-K v1 feature-based selection
-    - Paper digest (v1, topk_v1 enabled): `63d981b60a8e9b3a`
+    - Paper digest (v1, topk_v1 enabled): `5b73848493cf2cf9`
     - Selected: LOWUSDT (rank 1), HIGHUSDT (rank 2), MEDUSDT (rank 3)
     - Gate-excluded: THINUSDT (THIN_BOOK)
     - Not selected: TRENDUSDT, WIDEUSDT (lower scores)
@@ -154,7 +154,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - **Contract tests:** `tests/unit/test_paper_contracts.py` (27 tests) verify schema stability
   - Output format: `Paper trading completed. Events processed: N\nOutput digest: <16-char-hex>`
   - Deterministic digest for fixture-based runs
-  - **Canonical digests (v1.1):** `sample_day` = `66b29a4e92192f8f`, `sample_day_allowed` = `3ecf49cd03db1b07`, `sample_day_toxic` = `a31ead72fc1f197e`, `sample_day_multisymbol` = `22acba5cb8b81ab4`
+  - **Canonical digests (v1.2):** `sample_day` = `66b29a4e92192f8f`, `sample_day_allowed` = `887812017a697c8a`, `sample_day_toxic` = `97c8b0d37cae3ce3`, `sample_day_multisymbol` = `b605159aac9c0aac`
   - **Limitations:** no live feed, no real orders, no slippage, no partial fills
 - **Adaptive Controller v0** (`src/grinder/controller/`):
   - Rule-based controller that adjusts policy parameters based on recent market conditions
@@ -1294,6 +1294,20 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - Wired in `LiveEngineV0._plan_grid()`: enabled when FSM state != ACTIVE
   - Prevents risk accumulation in PAUSED/DEGRADED/THROTTLED/EMERGENCY
   - Doc-25 updated (§25.8 Suppress Increase Mode section)
+- **Live fill -> TP layer** (PR-INV-3):
+  - `LiveCycleLayerV1`: fill detection via AccountSync snapshot diff
+  - TP namespace: `grinder_tp_` clientOrderId (`strategy_id="tp"`, SSOT: `identity.py`)
+  - TP `reduce_only=True` (semantic invariant for Binance, prevents position increase)
+  - Planner filter: `is_tp_order()` from `reconcile.identity` excludes TPs from grid diff
+  - TP classified REDUCE_RISK -> passes Gate 5/6/7 even at cap/drawdown/paused
+  - TP goes through Gate 8 (fill-prob) -- documented invariant, may be skipped in future PR
+  - Contract: `ExecutionAction` gains `reduce_only` + `client_order_id` fields
+  - `ExchangePort.place_order()` extended: `reduce_only` + `client_order_id` params (5 impls)
+  - `IdempotentExchangePort`: includes `reduce_only` + `client_order_id` in idempotency key
+  - `GRINDER_LIVE_CYCLE_ENABLED=0` (safe-by-default)
+  - V1: single tick_size for all symbols. Multi-symbol tick mismatch -> cycle layer disabled.
+  - Contract: non-numeric `level_id` (e.g., "cleanup") -> TP `level_id=0`
+  - Contract: planner filters TPs by `is_tp_order()` -- essential because TP clientOrderIds parse as valid grinder orders
 
 ## Partially implemented
 - Package structure `src/grinder/*` (core, protocols/interfaces) -- scaffolding.
@@ -1427,8 +1441,8 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
 |------|----------|--------|--------------|
 | v1.0 | `docs/smart_grid/SPEC_V1_0.md` | [DONE] Implemented | `sample_day`, `sample_day_allowed` fixtures; ADR-019..021 |
 | v1.1 | `docs/smart_grid/SPEC_V1_1.md` | [DONE] Implemented | FeatureEngine in `sample_day_adaptive`; ADR-019 |
-| v1.2 | `docs/smart_grid/SPEC_V1_2.md` | [DONE] Implemented | `sample_day_adaptive` digest `1b8af993a8435ee6`; ADR-022 |
-| v1.3 | `docs/smart_grid/SPEC_V1_3.md` | [DONE] Implemented | `sample_day_topk_v1` digest `63d981b60a8e9b3a`; ADR-023 |
+| v1.2 | `docs/smart_grid/SPEC_V1_2.md` | [DONE] Implemented | `sample_day_adaptive` digest `b6cb58f4701ebbfa`; ADR-022 |
+| v1.3 | `docs/smart_grid/SPEC_V1_3.md` | [DONE] Implemented | `sample_day_topk_v1` digest `5b73848493cf2cf9`; ADR-023 |
 | v2.0 | `docs/smart_grid/SPEC_V2_0.md` | [DONE] Implemented | M7-03..M7-09 code+ADRs+fixtures (PR #137) |
 | v3.0 | `docs/smart_grid/SPEC_V3_0.md` | [PLANNED] Planned | -- |
 
@@ -1504,7 +1518,7 @@ Comprehensive adaptive grid system design:
       - Fallback chain: fresh cache -> API -> stale cache -> empty dict
       - No I/O at init (lazy loading preserves determinism)
       - See ADR-063
-    - **Fixture:** `sample_day_adaptive` -- paper digest `1b8af993a8435ee6`
+    - **Fixture:** `sample_day_adaptive` -- paper digest `b6cb58f4701ebbfa`
   - [DONE] **Top-K v1 (ASM-P1-06):** Feature-based symbol selection (see ADR-023)
     - **Opt-in:** `topk_v1_enabled=False` default (backward compat with existing digests)
     - **Requires:** `feature_engine_enabled=True` (needs FeatureEngine for range_score, spread_bps, thin_l1, net_return_bps)
@@ -1513,7 +1527,7 @@ Comprehensive adaptive grid system design:
     - **Tie-breaking:** Deterministic by `(-score, symbol)` for stable ordering
     - **Config:** `TopKConfigV1(k=3, spread_max_bps=100, thin_l1_min=1.0, warmup_min=10)`
     - **Output:** `topk_v1_selected_symbols`, `topk_v1_scores`, `topk_v1_gate_excluded`
-    - **Fixture:** `sample_day_topk_v1` -- 6 symbols, paper digest `63d981b60a8e9b3a`
+    - **Fixture:** `sample_day_topk_v1` -- 6 symbols, paper digest `5b73848493cf2cf9`
     - **NOT included:** real-time re-selection (selects once after warmup), adaptive scoring weights
 
 ### ML Integration (`docs/12_ML_SPEC.md`)
