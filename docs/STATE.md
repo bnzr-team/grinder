@@ -1339,6 +1339,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - CANCEL -2011 diagnostic log: order_id + parsed identity (before map_binance_error raises)
   - Pure helper `correlate_recent_places()` in `place_tracker.py` for testability
   - DRY: `_PORT_NAME = "futures"` class constant replaces hardcoded strings in BinanceFuturesPort
+  - Debug logs emitted at WARNING level to be visible without `logging.basicConfig()` (run_trading.py has no log config; Python defaults to WARNING)
   - Debug-only, default off, no behavioral changes
 
 ## Partially implemented
