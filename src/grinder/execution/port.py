@@ -107,6 +107,18 @@ class ExchangePort(Protocol):
         """
         ...
 
+    def debug_get_order_status(
+        self,
+        *,
+        symbol: str,
+        client_order_id: str,
+    ) -> dict[str, str] | None:
+        """Debug-only: query single order status by clientOrderId.
+
+        Returns dict with status fields, or None if not supported.
+        """
+        ...
+
 
 class NoOpExchangePort:
     """Stub exchange port that tracks orders in memory.
@@ -264,6 +276,15 @@ class NoOpExchangePort:
     def get_positions(self, symbol: str) -> list[PositionSnap]:  # noqa: ARG002
         """Get positions for symbol (stub - always empty)."""
         return []
+
+    def debug_get_order_status(
+        self,
+        *,
+        symbol: str,  # noqa: ARG002
+        client_order_id: str,  # noqa: ARG002
+    ) -> dict[str, str] | None:
+        """Stub: not supported."""
+        return None
 
     def reset(self) -> None:
         """Reset all state (for testing)."""

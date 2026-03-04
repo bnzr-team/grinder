@@ -656,6 +656,14 @@ class TestRetryIdempotencyIntegration:
             def fetch_account_snapshot(self) -> Any:
                 raise NotImplementedError
 
+            def debug_get_order_status(
+                self,
+                *,
+                symbol: str,  # noqa: ARG002
+                client_order_id: str,  # noqa: ARG002
+            ) -> dict[str, str] | None:
+                return None
+
         inner = CountingPort()
         port = IdempotentExchangePort(inner=inner, store=store)
 
@@ -723,6 +731,14 @@ class TestRetryIdempotencyIntegration:
 
             def fetch_account_snapshot(self) -> Any:
                 raise NotImplementedError
+
+            def debug_get_order_status(
+                self,
+                *,
+                symbol: str,  # noqa: ARG002
+                client_order_id: str,  # noqa: ARG002
+            ) -> dict[str, str] | None:
+                return None
 
         inner = FailOncePort()
         port = IdempotentExchangePort(inner=inner, store=store)
@@ -921,6 +937,14 @@ class TestIdempotentPortWithCircuitBreaker:
             def fetch_account_snapshot(self) -> Any:
                 raise NotImplementedError
 
+            def debug_get_order_status(
+                self,
+                *,
+                symbol: str,  # noqa: ARG002
+                client_order_id: str,  # noqa: ARG002
+            ) -> dict[str, str] | None:
+                return None
+
         config = CircuitBreakerConfig(failure_threshold=2, open_interval_s=30.0)
         breaker = CircuitBreaker(config=config, clock=clock)
 
@@ -988,6 +1012,14 @@ class TestIdempotentPortWithCircuitBreaker:
 
             def fetch_account_snapshot(self) -> Any:
                 raise NotImplementedError
+
+            def debug_get_order_status(
+                self,
+                *,
+                symbol: str,  # noqa: ARG002
+                client_order_id: str,  # noqa: ARG002
+            ) -> dict[str, str] | None:
+                return None
 
         config = CircuitBreakerConfig(
             failure_threshold=2, open_interval_s=30.0, trip_on=default_trip_on

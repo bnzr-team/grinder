@@ -722,6 +722,15 @@ class BinanceExchangePort:
         msg = "BinanceExchangePort.fetch_account_snapshot() not yet implemented (Launch-15 PR3+)"
         raise NotImplementedError(msg)
 
+    def debug_get_order_status(
+        self,
+        *,
+        symbol: str,  # noqa: ARG002
+        client_order_id: str,  # noqa: ARG002
+    ) -> dict[str, str] | None:
+        """Debug-only: not implemented for spot port."""
+        return None
+
     def reset(self) -> None:
         """Reset internal state (for testing and new runs)."""
         self._order_counter = 0

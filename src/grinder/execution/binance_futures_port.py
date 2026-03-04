@@ -57,7 +57,7 @@ from grinder.account.contracts import (
     PositionSnap,
     build_account_snapshot,
 )
-from grinder.connectors.errors import ConnectorNonRetryableError
+from grinder.connectors.errors import ConnectorNonRetryableError, ConnectorTransientError
 from grinder.connectors.live_connector import SafeMode
 from grinder.core import OrderSide, OrderState
 from grinder.env_parse import parse_bool
@@ -69,6 +69,7 @@ from grinder.net.retry_policy import (
     OP_CANCEL_ORDER,
     OP_GET_ACCOUNT,
     OP_GET_OPEN_ORDERS,
+    OP_GET_ORDER_STATUS,
     OP_GET_POSITIONS,
     OP_GET_USER_TRADES,
     OP_PLACE_ORDER,
@@ -1070,6 +1071,81 @@ class BinanceFuturesPort:
             map_binance_error(response.status_code, response.json_data)
 
         return response.json_data if isinstance(response.json_data, list) else []
+
+    def debug_get_order_status(
+        self,
+        *,
+        symbol: str,
+        client_order_id: str,
+    ) -> dict[str, str] | None:
+        """Debug-only: GET /fapi/v1/order by origClientOrderId (P0-2b)."""
+        if self.config.dry_run:
+            return None
+
+        params: dict[str, Any] = {
+            "symbol": symbol,
+            "origClientOrderId": client_order_id,
+        }
+        params = self._sign_request(params)
+        url = f"{self.config.base_url}/fapi/v1/order"
+
+        get_port_metrics().record_http_request(self._PORT_NAME, "GET", "/fapi/v1/order")
+
+        try:
+            response = self.http_client.request(
+                method="GET",
+                url=url,
+                params=params,
+                headers=self._get_headers(),
+                timeout_ms=self.config.timeout_ms,
+                op=OP_GET_ORDER_STATUS,
+            )
+        except (ConnectorTransientError, ConnectorNonRetryableError) as exc:
+            get_port_metrics().record_order_lookup(self._PORT_NAME, "error")
+            logger.warning(
+                "ORDER_LOOKUP_ERROR clientOrderId=%s err=%s",
+                client_order_id,
+                exc,
+            )
+            return None
+
+        if response.status_code != 200:
+            error_code = None
+            if isinstance(response.json_data, dict):
+                error_code = response.json_data.get("code")
+            # -2013 = "Order does not exist", -2011 = "Unknown order"
+            if error_code in (-2013, -2011):
+                get_port_metrics().record_order_lookup(self._PORT_NAME, "not_found")
+                logger.warning(
+                    "ORDER_LOOKUP_NOT_FOUND clientOrderId=%s code=%s msg=%s",
+                    client_order_id,
+                    error_code,
+                    response.json_data.get("msg") if isinstance(response.json_data, dict) else "?",
+                )
+            else:
+                get_port_metrics().record_order_lookup(self._PORT_NAME, "error")
+                logger.warning(
+                    "ORDER_LOOKUP_ERROR clientOrderId=%s status=%s code=%s data=%s",
+                    client_order_id,
+                    response.status_code,
+                    error_code,
+                    response.json_data,
+                )
+            return None
+
+        if isinstance(response.json_data, dict):
+            get_port_metrics().record_order_lookup(self._PORT_NAME, "found")
+            return {
+                "status": str(response.json_data.get("status", "?")),
+                "executedQty": str(response.json_data.get("executedQty", "?")),
+                "origQty": str(response.json_data.get("origQty", "?")),
+                "avgPrice": str(response.json_data.get("avgPrice", "?")),
+                "updateTime": str(response.json_data.get("updateTime", "?")),
+                "type": str(response.json_data.get("type", "?")),
+                "side": str(response.json_data.get("side", "?")),
+            }
+        get_port_metrics().record_order_lookup(self._PORT_NAME, "error")
+        return None
 
     def close_position(self, symbol: str) -> str | None:
         """Close any open position for symbol (safety cleanup).

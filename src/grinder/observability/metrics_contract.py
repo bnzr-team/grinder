@@ -281,6 +281,10 @@ REQUIRED_METRICS_PATTERNS = [
     "# HELP grinder_port_cancel_unknown_total",
     "# TYPE grinder_port_cancel_unknown_total",
     "grinder_port_cancel_unknown_total{port=",
+    # P0-2b: Order lookup counter
+    "# HELP grinder_port_order_lookup_total",
+    "# TYPE grinder_port_order_lookup_total",
+    "grinder_port_order_lookup_total{port=",
 ]
 
 # PR6: Concrete series patterns requiring fill ingest to be running.

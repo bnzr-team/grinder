@@ -271,7 +271,7 @@ class LiveEngineV0:
         retry_policy: Optional RetryPolicy for transient error retries
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0915
         self,
         paper_engine: PaperEngine,
         exchange_port: ExchangePort,
@@ -386,6 +386,17 @@ class LiveEngineV0:
             "GRINDER_ACCOUNT_SYNC_DEBUG_OPEN_ORDERS", default=False, strict=False
         )
         self._recent_places: deque[tuple[str, int, str]] = deque(maxlen=20)
+        # P0-2b: debug order lookup for missing openOrders
+        self._looked_up_ids: set[str] = set()
+        self._prev_open_orders_count: int = -1
+        self._debug_lookup_limit = (
+            parse_int(
+                "GRINDER_ACCOUNT_SYNC_DEBUG_LOOKUP_LIMIT",
+                default=5,
+                strict=False,
+            )
+            or 5
+        )
         if self._emergency_exit_enabled:
             # Duck-type check: port must have cancel_all_orders + place_market_order + get_positions
             port = self._exchange_port
@@ -813,7 +824,7 @@ class LiveEngineV0:
 
         return plan_result.actions
 
-    def _tick_account_sync(self) -> None:
+    def _tick_account_sync(self) -> None:  # noqa: PLR0912
         """Run one account sync cycle (read-only).
 
         Fetches snapshot, detects mismatches, records metrics.
@@ -867,6 +878,50 @@ class LiveEngineV0:
             )
             for entry in corr.missing_details[:5]:  # bounded
                 logger.warning("  MISSING: %s", entry)
+
+            # P0-2b: detect open_orders drop to 0
+            current_count = len(open_ids)
+            if self._prev_open_orders_count > 0 and current_count == 0 and corr.total > 0:
+                logger.warning(
+                    "OPEN_ORDERS_DROP prev_count=%d now_count=0 recent=%d",
+                    self._prev_open_orders_count,
+                    corr.total,
+                )
+            self._prev_open_orders_count = current_count
+
+            # P0-2b: lookup terminal status for missing orders
+            if corr.missing > 0:
+                looked_up = 0
+                for cid, _placed_ts, sym in self._recent_places:
+                    if looked_up >= self._debug_lookup_limit:
+                        break
+                    if cid in open_ids:
+                        continue
+                    if cid in self._looked_up_ids:
+                        continue
+                    self._looked_up_ids.add(cid)
+                    info = self._exchange_port.debug_get_order_status(
+                        symbol=sym,
+                        client_order_id=cid,
+                    )
+                    if info is not None:
+                        logger.warning(
+                            "ORDER_LOOKUP clientOrderId=%s status=%s "
+                            "executed=%s orig=%s avgPrice=%s side=%s "
+                            "updateTime=%s",
+                            cid,
+                            info.get("status"),
+                            info.get("executedQty"),
+                            info.get("origQty"),
+                            info.get("avgPrice"),
+                            info.get("side"),
+                            info.get("updateTime"),
+                        )
+                    looked_up += 1
+
+            # P0-2b: bound dedup set
+            if len(self._looked_up_ids) > 100:
+                self._looked_up_ids.clear()
 
     def _get_position_sign(self, symbol: str) -> int | None:
         """Determine net position direction for a symbol (PR-INV-1).
