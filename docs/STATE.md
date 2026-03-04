@@ -1341,6 +1341,11 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - DRY: `_PORT_NAME = "futures"` class constant replaces hardcoded strings in BinanceFuturesPort
   - Debug logs emitted at WARNING level to be visible without `logging.basicConfig()` (run_trading.py has no log config; Python defaults to WARNING)
   - Debug-only, default off, no behavioral changes
+  - P0-2b: on missing orders, `GET /fapi/v1/order` by origClientOrderId (bounded by `GRINDER_ACCOUNT_SYNC_DEBUG_LOOKUP_LIMIT`, default 5, dedup per clientOrderId, set cap 100)
+  - Logs: `ORDER_LOOKUP clientOrderId=... status=FILLED/CANCELED/...` or `ORDER_LOOKUP_NOT_FOUND clientOrderId=... code=-2013/-2011` or `ORDER_LOOKUP_ERROR clientOrderId=... status=429/...`
+  - `OPEN_ORDERS_DROP prev_count=X now_count=0 recent=N` log when orders disappear between polls
+  - Metric: `grinder_port_order_lookup_total{port,outcome}` (outcome: found/not_found/error)
+  - Outcome classification: `not_found` only for Binance code -2013/-2011; all other failures = `error`
 
 ## Partially implemented
 - Package structure `src/grinder/*` (core, protocols/interfaces) -- scaffolding.

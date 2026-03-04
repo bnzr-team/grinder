@@ -428,6 +428,18 @@ class IdempotentExchangePort:
         """Fetch account snapshot (passthrough, no idempotency needed for reads)."""
         return self.inner.fetch_account_snapshot()
 
+    def debug_get_order_status(
+        self,
+        *,
+        symbol: str,
+        client_order_id: str,
+    ) -> dict[str, str] | None:
+        """Passthrough to inner port (debug-only, no idempotency needed)."""
+        return self.inner.debug_get_order_status(
+            symbol=symbol,
+            client_order_id=client_order_id,
+        )
+
     def reset(self) -> None:
         """Reset inner port and stats (for testing)."""
         if hasattr(self.inner, "reset"):

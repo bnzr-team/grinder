@@ -68,6 +68,7 @@ OP_GET_ACCOUNT = "get_account"
 OP_EXCHANGE_INFO = "exchange_info"
 OP_PING_TIME = "ping_time"
 OP_GET_USER_TRADES = "get_user_trades"
+OP_GET_ORDER_STATUS = "get_order_status"
 
 WRITE_OPS: frozenset[str] = frozenset(
     {

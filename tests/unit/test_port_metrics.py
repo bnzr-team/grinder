@@ -17,6 +17,7 @@ from grinder.execution.port_metrics import (
     METRIC_PORT_CANCEL_UNKNOWN,
     METRIC_PORT_HTTP_REQUESTS,
     METRIC_PORT_ORDER_ATTEMPTS,
+    METRIC_PORT_ORDER_LOOKUP,
     PortMetrics,
     get_port_metrics,
     reset_port_metrics,
@@ -303,3 +304,46 @@ class TestMetricsBuilderIntegration:
             f"{METRIC_PORT_HTTP_REQUESTS}"
             f'{{port="futures",method="POST",route="/fapi/v1/order"}} 1' in output
         )
+
+
+class TestOrderLookup:
+    """Tests for order lookup counter (P0-2b)."""
+
+    def test_order_lookup_counter(self) -> None:
+        """P0-2b: order_lookup counter keyed by (port, outcome)."""
+        metrics = PortMetrics()
+        metrics.record_order_lookup("futures", "found")
+        metrics.record_order_lookup("futures", "found")
+        metrics.record_order_lookup("futures", "not_found")
+        assert metrics.order_lookup[("futures", "found")] == 2
+        assert metrics.order_lookup[("futures", "not_found")] == 1
+        lines = metrics.to_prometheus_lines()
+        text = "\n".join(lines)
+        assert f'{METRIC_PORT_ORDER_LOOKUP}{{port="futures",outcome="found"}} 2' in text
+        assert f'{METRIC_PORT_ORDER_LOOKUP}{{port="futures",outcome="not_found"}} 1' in text
+
+    def test_order_lookup_zero_series(self) -> None:
+        """P0-2b: zero-series init includes order_lookup outcomes."""
+        metrics = PortMetrics()
+        metrics.initialize_zero_series("futures")
+        lines = metrics.to_prometheus_lines()
+        text = "\n".join(lines)
+        assert f'{METRIC_PORT_ORDER_LOOKUP}{{port="futures",outcome="error"}} 0' in text
+        assert f'{METRIC_PORT_ORDER_LOOKUP}{{port="futures",outcome="found"}} 0' in text
+        assert f'{METRIC_PORT_ORDER_LOOKUP}{{port="futures",outcome="not_found"}} 0' in text
+
+    def test_order_lookup_empty_fallback(self) -> None:
+        """P0-2b: empty order_lookup shows none placeholder."""
+        metrics = PortMetrics()
+        lines = metrics.to_prometheus_lines()
+        text = "\n".join(lines)
+        assert f"# HELP {METRIC_PORT_ORDER_LOOKUP}" in text
+        assert f"# TYPE {METRIC_PORT_ORDER_LOOKUP}" in text
+        assert f'{METRIC_PORT_ORDER_LOOKUP}{{port="none",outcome="none"}} 0' in text
+
+    def test_order_lookup_reset(self) -> None:
+        """P0-2b: reset clears order_lookup."""
+        metrics = PortMetrics()
+        metrics.record_order_lookup("futures", "found")
+        metrics.reset()
+        assert len(metrics.order_lookup) == 0
