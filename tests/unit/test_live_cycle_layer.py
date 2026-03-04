@@ -596,3 +596,255 @@ class TestCycleMetrics:
 
         # Cleanup
         reset_cycle_metrics()
+
+
+# --- PR-INV-4: Replenish tests ---
+
+
+def _make_replenish_layer(max_levels: int = 10, enabled: bool = True) -> LiveCycleLayerV1:
+    """Create a cycle layer with replenish enabled."""
+    return LiveCycleLayerV1(
+        LiveCycleConfig(
+            spacing_bps=10.0,
+            tick_size=Decimal("0.10"),
+            replenish_enabled=enabled,
+            replenish_max_levels=max_levels,
+        )
+    )
+
+
+class TestFillGeneratesTpAndReplenish:
+    """Test 16: Fill generates both TP and replenish when enabled."""
+
+    def test_fill_generates_tp_and_replenish(self) -> None:
+        reset_cycle_metrics()
+        layer = _make_replenish_layer(max_levels=10)
+        grid_oid = "grinder_d_BTCUSDT_3_1000_1"
+        grid_order = _snap(grid_oid, side="BUY", price=Decimal("50000"))
+
+        # Call 1: establish prev
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(grid_order,),
+            mid_price=Decimal("50000"),
+            ts_ms=1_000_000,
+        )
+
+        # Call 2: order gone -> TP + replenish
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(),
+            mid_price=Decimal("50000"),
+            ts_ms=2_000_000,
+        )
+
+        tp_actions = [a for a in actions if a.reason == "TP_CLOSE"]
+        replenish_actions = [a for a in actions if a.reason == "REPLENISH"]
+
+        # TP: opposite side (SELL), reduce_only=True
+        assert len(tp_actions) == 1
+        tp = tp_actions[0]
+        assert tp.side is not None
+        assert tp.side.value == "SELL"
+        assert tp.reduce_only is True
+        assert tp.client_order_id is not None
+        assert tp.client_order_id.startswith("grinder_tp_")
+
+        # Replenish: same side (BUY), reduce_only=False, level_id=4
+        assert len(replenish_actions) == 1
+        rp = replenish_actions[0]
+        assert rp.action_type == ActionType.PLACE
+        assert rp.side is not None
+        assert rp.side.value == "BUY"
+        assert rp.reduce_only is False
+        assert rp.level_id == 4  # source was 3, replenish at 3+1=4
+        assert rp.reason == "REPLENISH"
+        assert rp.client_order_id is not None
+        assert rp.client_order_id.startswith("grinder_d_")
+        assert not rp.client_order_id.startswith("grinder_tp_")
+
+        # Replenish price: BUY level 4 = mid * (1 - 4*10/10000) = 50000 * 0.996 = 49800.0
+        assert rp.price == Decimal("49800.0")
+
+        # Metrics
+        m = layer._metrics
+        assert m.replenish_generated.get("BTCUSDT", 0) == 1
+        reset_cycle_metrics()
+
+
+class TestReplenishDisabledNoReplenish:
+    """Test 17: Replenish disabled -> only TP, no replenish."""
+
+    def test_replenish_disabled_only_tp(self) -> None:
+        layer = _make_replenish_layer(max_levels=10, enabled=False)
+        grid_oid = "grinder_d_BTCUSDT_3_1000_1"
+        grid_order = _snap(grid_oid, side="BUY", price=Decimal("50000"))
+
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(grid_order,),
+            mid_price=Decimal("50000"),
+            ts_ms=1_000_000,
+        )
+
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(),
+            mid_price=Decimal("50000"),
+            ts_ms=2_000_000,
+        )
+
+        tp_actions = [a for a in actions if a.reason == "TP_CLOSE"]
+        replenish_actions = [a for a in actions if a.reason == "REPLENISH"]
+        assert len(tp_actions) == 1
+        assert len(replenish_actions) == 0
+
+
+class TestNonNumericLevelIdSkipsReplenish:
+    """Test 18: Non-numeric level_id skips replenish (fail-closed)."""
+
+    def test_non_numeric_level_id_no_replenish(self) -> None:
+        layer = _make_replenish_layer(max_levels=10)
+        grid_oid = "grinder_d_BTCUSDT_cleanup_1000_1"
+        grid_order = _snap(grid_oid, side="BUY", price=Decimal("50000"))
+
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(grid_order,),
+            mid_price=Decimal("50000"),
+            ts_ms=1_000_000,
+        )
+
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(),
+            mid_price=Decimal("50000"),
+            ts_ms=2_000_000,
+        )
+
+        tp_actions = [a for a in actions if a.reason == "TP_CLOSE"]
+        replenish_actions = [a for a in actions if a.reason == "REPLENISH"]
+        # TP still generated (level_id=0 for non-numeric)
+        assert len(tp_actions) == 1
+        assert tp_actions[0].level_id == 0
+        # No replenish (non-numeric level_id = fail-closed)
+        assert len(replenish_actions) == 0
+
+
+class TestReplenishRespectsMaxLevels:
+    """Test 19: Replenish skipped when level+1 > max_levels."""
+
+    def test_at_max_level_no_replenish(self) -> None:
+        layer = _make_replenish_layer(max_levels=3)
+        # Level 3 = max_levels, so 3+1=4 > 3 -> no replenish
+        grid_oid = "grinder_d_BTCUSDT_3_1000_1"
+        grid_order = _snap(grid_oid, side="BUY", price=Decimal("50000"))
+
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(grid_order,),
+            mid_price=Decimal("50000"),
+            ts_ms=1_000_000,
+        )
+
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(),
+            mid_price=Decimal("50000"),
+            ts_ms=2_000_000,
+        )
+
+        tp_actions = [a for a in actions if a.reason == "TP_CLOSE"]
+        replenish_actions = [a for a in actions if a.reason == "REPLENISH"]
+        assert len(tp_actions) == 1
+        assert len(replenish_actions) == 0
+
+    def test_below_max_level_replenish_ok(self) -> None:
+        layer = _make_replenish_layer(max_levels=5)
+        # Level 3, 3+1=4 <= 5 -> replenish ok
+        grid_oid = "grinder_d_BTCUSDT_3_1000_1"
+        grid_order = _snap(grid_oid, side="BUY", price=Decimal("50000"))
+
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(grid_order,),
+            mid_price=Decimal("50000"),
+            ts_ms=1_000_000,
+        )
+
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(),
+            mid_price=Decimal("50000"),
+            ts_ms=2_000_000,
+        )
+
+        replenish_actions = [a for a in actions if a.reason == "REPLENISH"]
+        assert len(replenish_actions) == 1
+        assert replenish_actions[0].level_id == 4
+
+
+class TestReplenishSellSide:
+    """Test 20: SELL fill generates SELL replenish at correct price."""
+
+    def test_sell_fill_sell_replenish(self) -> None:
+        layer = _make_replenish_layer(max_levels=10)
+        grid_oid = "grinder_d_BTCUSDT_2_1000_1"
+        grid_order = _snap(grid_oid, side="SELL", price=Decimal("51000"))
+
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(grid_order,),
+            mid_price=Decimal("50000"),
+            ts_ms=1_000_000,
+        )
+
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(),
+            mid_price=Decimal("50000"),
+            ts_ms=2_000_000,
+        )
+
+        tp_actions = [a for a in actions if a.reason == "TP_CLOSE"]
+        replenish_actions = [a for a in actions if a.reason == "REPLENISH"]
+
+        # TP: opposite side (BUY)
+        assert len(tp_actions) == 1
+        assert tp_actions[0].side is not None
+        assert tp_actions[0].side.value == "BUY"
+
+        # Replenish: same side (SELL), level 3
+        assert len(replenish_actions) == 1
+        rp = replenish_actions[0]
+        assert rp.side is not None
+        assert rp.side.value == "SELL"
+        assert rp.level_id == 3
+        # SELL level 3 = mid * (1 + 3*10/10000) = 50000 * 1.003 = 50150.0
+        assert rp.price == Decimal("50150.0")
+
+
+class TestReplenishZeroMaxLevels:
+    """Test 21: max_levels=0 disables replenish (fail-closed)."""
+
+    def test_zero_max_levels_no_replenish(self) -> None:
+        layer = _make_replenish_layer(max_levels=0, enabled=True)
+        grid_oid = "grinder_d_BTCUSDT_3_1000_1"
+        grid_order = _snap(grid_oid, side="BUY", price=Decimal("50000"))
+
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(grid_order,),
+            mid_price=Decimal("50000"),
+            ts_ms=1_000_000,
+        )
+
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(),
+            mid_price=Decimal("50000"),
+            ts_ms=2_000_000,
+        )
+
+        replenish_actions = [a for a in actions if a.reason == "REPLENISH"]
+        assert len(replenish_actions) == 0
