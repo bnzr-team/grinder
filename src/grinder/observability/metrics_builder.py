@@ -26,6 +26,7 @@ from grinder.execution.port_metrics import get_port_metrics
 from grinder.execution.sor_metrics import get_sor_metrics
 from grinder.gating import get_gating_metrics
 from grinder.ha.role import HARole, get_ha_state
+from grinder.live.cycle_metrics import get_cycle_metrics
 from grinder.live.fsm_metrics import get_fsm_metrics
 from grinder.ml.fill_model_loader import fill_model_metrics_to_prometheus_lines
 from grinder.ml.metrics import ml_metrics_to_prometheus_lines
@@ -173,6 +174,9 @@ class MetricsBuilder:
 
         # Emergency exit metrics (RISK-EE-1)
         lines.extend(self._build_emergency_exit_metrics())
+
+        # Cycle layer metrics (PR-INV-3b)
+        lines.extend(self._build_cycle_metrics())
 
         return "\n".join(lines)
 
@@ -361,6 +365,10 @@ class MetricsBuilder:
         """Build emergency exit metrics (RISK-EE-1)."""
         ee_metrics = get_emergency_exit_metrics()
         return ee_metrics.to_prometheus_lines()
+
+    def _build_cycle_metrics(self) -> list[str]:
+        """Build cycle layer metrics (PR-INV-3b)."""
+        return get_cycle_metrics().format_metrics()
 
 
 class _BuilderHolder:

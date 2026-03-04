@@ -1,4 +1,4 @@
-"""Tests for LiveCycleLayerV1 (PR-INV-3).
+"""Tests for LiveCycleLayerV1 (PR-INV-3 + PR-INV-3b).
 
 Tests cover:
 - Fill detection (order disappears -> TP generated)
@@ -8,6 +8,10 @@ Tests cover:
 - Deterministic LRU dedup (OrderedDict)
 - TTL expiry for pending cancels
 - Non-numeric level_id -> TP level_id=0
+- PR-INV-3b: TP expiry (CANCEL after TTL)
+- PR-INV-3b: TP expiry disabled (ttl=None/0)
+- PR-INV-3b: tp_created_ts cleanup on TP disappearance
+- PR-INV-3b: CycleMetrics counters
 """
 
 from collections import OrderedDict
@@ -16,6 +20,7 @@ from decimal import Decimal
 from grinder.account.contracts import OpenOrderSnap
 from grinder.execution.types import ActionType, ExecutionAction
 from grinder.live.cycle_layer import LiveCycleConfig, LiveCycleLayerV1
+from grinder.live.cycle_metrics import reset_cycle_metrics
 
 
 def _snap(
@@ -271,3 +276,323 @@ class TestNonNumericLevelIdMapsToZero:
         assert tp.client_order_id is not None
         # Client order ID should contain _0_ for level_id=0
         assert "_0_" in tp.client_order_id
+
+
+# --- PR-INV-3b: TP expiry tests ---
+
+
+class TestTpExpiryEmitsCancel:
+    """Test 8: TP older than TTL emits CANCEL."""
+
+    def test_tp_expiry_emits_cancel(self) -> None:
+        layer = LiveCycleLayerV1(
+            LiveCycleConfig(spacing_bps=10.0, tick_size=Decimal("0.10"), tp_ttl_ms=60_000)
+        )
+        grid_oid = "grinder_d_BTCUSDT_3_1000_1"
+        grid_order = _snap(grid_oid)
+
+        # Call 1: establish prev with grid order
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(grid_order,),
+            mid_price=Decimal("50000"),
+            ts_ms=1_000_000,
+        )
+
+        # Call 2: grid order gone -> TP generated
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(),
+            mid_price=Decimal("50000"),
+            ts_ms=2_000_000,
+        )
+        assert len(actions) == 1
+        tp = actions[0]
+        assert tp.action_type == ActionType.PLACE
+        tp_oid = tp.client_order_id
+        assert tp_oid is not None
+
+        # Call 3: TP now visible in open_orders, NOT expired yet (age=30s < 60s TTL)
+        tp_snap = _snap(tp_oid, side="SELL", price=Decimal("50050"))
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(tp_snap,),
+            mid_price=Decimal("50000"),
+            ts_ms=2_030_000,  # 30s after TP created
+        )
+        # No cancels (TP not yet expired)
+        cancel_actions = [a for a in actions if a.action_type == ActionType.CANCEL]
+        assert cancel_actions == []
+
+        # Call 4: TP still open, now expired (age=61s > 60s TTL)
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(tp_snap,),
+            mid_price=Decimal("50000"),
+            ts_ms=2_061_000,  # 61s after TP created
+        )
+        cancel_actions = [a for a in actions if a.action_type == ActionType.CANCEL]
+        assert len(cancel_actions) == 1
+        assert cancel_actions[0].order_id == tp_oid
+        assert cancel_actions[0].reason == "TP_EXPIRED"
+
+
+class TestTpNotExpiredNoCancel:
+    """Test 9: TP within TTL does not emit CANCEL."""
+
+    def test_tp_not_expired_no_cancel(self) -> None:
+        layer = LiveCycleLayerV1(
+            LiveCycleConfig(spacing_bps=10.0, tick_size=Decimal("0.10"), tp_ttl_ms=300_000)
+        )
+        tp_oid = "grinder_tp_BTCUSDT_3_2000_1"
+
+        # Manually seed tp_created_ts (simulating TP was generated earlier)
+        layer._tp_created_ts[tp_oid] = 1_000_000
+
+        tp_snap = _snap(tp_oid, side="SELL", price=Decimal("50050"))
+
+        # Call: TP in open_orders at ts=1_200_000 (200s < 300s TTL)
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(tp_snap,),
+            mid_price=Decimal("50000"),
+            ts_ms=1_200_000,
+        )
+        cancel_actions = [a for a in actions if a.action_type == ActionType.CANCEL]
+        assert cancel_actions == []
+        # tp_created_ts still tracked
+        assert tp_oid in layer._tp_created_ts
+
+
+class TestTpRemovedClearsState:
+    """Test 10: TP removed from open_orders clears tp_created_ts."""
+
+    def test_tp_removed_from_open_orders_clears_state(self) -> None:
+        layer = _make_layer()
+        tp_oid = "grinder_tp_BTCUSDT_3_2000_1"
+
+        # Seed tp_created_ts
+        layer._tp_created_ts[tp_oid] = 1_000_000
+
+        tp_snap = _snap(tp_oid, side="SELL", price=Decimal("50050"))
+
+        # Call 1: TP present
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(tp_snap,),
+            mid_price=Decimal("50000"),
+            ts_ms=1_100_000,
+        )
+        assert tp_oid in layer._tp_created_ts
+
+        # Call 2: TP gone (filled by exchange) -> tp_created_ts cleaned up
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(),
+            mid_price=Decimal("50000"),
+            ts_ms=1_200_000,
+        )
+        assert tp_oid not in layer._tp_created_ts
+
+
+class TestExpiryDisabledNoCancel:
+    """Test 11: TTL=None disables expiry."""
+
+    def test_expiry_disabled_no_cancel(self) -> None:
+        layer = LiveCycleLayerV1(
+            LiveCycleConfig(spacing_bps=10.0, tick_size=Decimal("0.10"), tp_ttl_ms=None)
+        )
+        tp_oid = "grinder_tp_BTCUSDT_3_2000_1"
+        layer._tp_created_ts[tp_oid] = 1_000_000
+
+        tp_snap = _snap(tp_oid, side="SELL", price=Decimal("50050"))
+
+        # Call: TP in open_orders at ts=9_000_000 (extremely old, but TTL disabled)
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(tp_snap,),
+            mid_price=Decimal("50000"),
+            ts_ms=9_000_000,
+        )
+        cancel_actions = [a for a in actions if a.action_type == ActionType.CANCEL]
+        assert cancel_actions == []
+
+    def test_expiry_disabled_zero_ttl(self) -> None:
+        layer = LiveCycleLayerV1(
+            LiveCycleConfig(spacing_bps=10.0, tick_size=Decimal("0.10"), tp_ttl_ms=0)
+        )
+        tp_oid = "grinder_tp_BTCUSDT_3_2000_1"
+        layer._tp_created_ts[tp_oid] = 1_000_000
+
+        tp_snap = _snap(tp_oid, side="SELL", price=Decimal("50050"))
+
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(tp_snap,),
+            mid_price=Decimal("50000"),
+            ts_ms=9_000_000,
+        )
+        cancel_actions = [a for a in actions if a.action_type == ActionType.CANCEL]
+        assert cancel_actions == []
+
+
+class TestStaleRejectedTpCleanup:
+    """Test 12: Rejected TP (never in open_orders) cleaned up by stale TTL."""
+
+    def test_rejected_tp_cleaned_up_by_stale_ttl(self) -> None:
+        # TTL=60s -> stale TTL = max(2*60_000, 60_000) = 120_000
+        layer = LiveCycleLayerV1(
+            LiveCycleConfig(spacing_bps=10.0, tick_size=Decimal("0.10"), tp_ttl_ms=60_000)
+        )
+        grid_oid = "grinder_d_BTCUSDT_3_1000_1"
+        grid_order = _snap(grid_oid)
+
+        # Call 1: establish prev with grid order
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(grid_order,),
+            mid_price=Decimal("50000"),
+            ts_ms=1_000_000,
+        )
+
+        # Call 2: grid order gone -> TP generated (but exchange will reject it)
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(),
+            mid_price=Decimal("50000"),
+            ts_ms=2_000_000,
+        )
+        assert len(actions) == 1
+        tp_oid = actions[0].client_order_id
+        assert tp_oid is not None
+
+        # Verify: tp_created_ts is tracking the TP
+        assert tp_oid in layer._tp_created_ts
+
+        # Call 3: TP never appears in open_orders (rejected by exchange).
+        # Time within stale TTL (50s < 120s stale TTL) -> entry survives
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(),
+            mid_price=Decimal("50000"),
+            ts_ms=2_050_000,
+        )
+        assert tp_oid in layer._tp_created_ts
+
+        # Call 4: Time exceeds stale TTL (121s > 120s) -> entry cleaned up
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(),
+            mid_price=Decimal("50000"),
+            ts_ms=2_121_000,
+        )
+        assert tp_oid not in layer._tp_created_ts
+
+    def test_stale_ttl_with_disabled_tp_ttl(self) -> None:
+        # tp_ttl_ms=None -> stale TTL = 600_000 (10 min fallback)
+        layer = LiveCycleLayerV1(
+            LiveCycleConfig(spacing_bps=10.0, tick_size=Decimal("0.10"), tp_ttl_ms=None)
+        )
+        tp_oid = "grinder_tp_BTCUSDT_3_2000_1"
+        layer._tp_created_ts[tp_oid] = 1_000_000
+
+        # Call 1: no open orders, time within fallback (500s < 600s)
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(),
+            mid_price=Decimal("50000"),
+            ts_ms=1_500_000,
+        )
+        assert tp_oid in layer._tp_created_ts
+
+        # Call 2: time exceeds fallback (601s > 600s) -> cleaned up
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(),
+            mid_price=Decimal("50000"),
+            ts_ms=1_601_000,
+        )
+        assert tp_oid not in layer._tp_created_ts
+
+    def test_stale_ttl_floor_at_60s(self) -> None:
+        # tp_ttl_ms=10_000 (10s) -> stale TTL = max(2*10_000, 60_000) = 60_000
+        layer = LiveCycleLayerV1(
+            LiveCycleConfig(spacing_bps=10.0, tick_size=Decimal("0.10"), tp_ttl_ms=10_000)
+        )
+        tp_oid = "grinder_tp_BTCUSDT_3_2000_1"
+        layer._tp_created_ts[tp_oid] = 1_000_000
+
+        # Within floor (50s < 60s) -> survives
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(),
+            mid_price=Decimal("50000"),
+            ts_ms=1_050_000,
+        )
+        assert tp_oid in layer._tp_created_ts
+
+        # Exceeds floor (61s > 60s) -> cleaned up
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(),
+            mid_price=Decimal("50000"),
+            ts_ms=1_061_000,
+        )
+        assert tp_oid not in layer._tp_created_ts
+
+
+class TestCycleMetrics:
+    """Test 15: CycleMetrics counters (PR-INV-3b)."""
+
+    def test_metrics_recorded_on_fill_and_expiry(self) -> None:
+        reset_cycle_metrics()
+        layer = LiveCycleLayerV1(
+            LiveCycleConfig(spacing_bps=10.0, tick_size=Decimal("0.10"), tp_ttl_ms=60_000)
+        )
+        grid_oid = "grinder_d_BTCUSDT_3_1000_1"
+        grid_order = _snap(grid_oid)
+
+        # Call 1: establish prev
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(grid_order,),
+            mid_price=Decimal("50000"),
+            ts_ms=1_000_000,
+        )
+
+        # Call 2: fill -> TP generated
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(),
+            mid_price=Decimal("50000"),
+            ts_ms=2_000_000,
+        )
+        assert len(actions) == 1
+        tp_oid = actions[0].client_order_id
+        assert tp_oid is not None
+
+        # Verify metrics: 1 tp_generated, 1 fill_candidate(tp_generated)
+        m = layer._metrics
+        assert m.tp_generated.get("BTCUSDT", 0) == 1
+        assert m.fill_candidates.get(("BTCUSDT", "tp_generated"), 0) == 1
+
+        # Call 3: TP visible, then expired
+        tp_snap = _snap(tp_oid, side="SELL", price=Decimal("50050"))
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(tp_snap,),
+            mid_price=Decimal("50000"),
+            ts_ms=2_061_000,
+        )
+        cancel_actions = [a for a in actions if a.action_type == ActionType.CANCEL]
+        assert len(cancel_actions) == 1
+        assert m.tp_expired.get("BTCUSDT", 0) == 1
+
+        # Verify format_metrics produces lines
+        lines = m.format_metrics()
+        assert any("grinder_cycle_tp_generated_total" in line for line in lines)
+        assert any("grinder_cycle_tp_expired_total" in line for line in lines)
+        assert any("grinder_cycle_fill_candidates_total" in line for line in lines)
+
+        # Cleanup
+        reset_cycle_metrics()
