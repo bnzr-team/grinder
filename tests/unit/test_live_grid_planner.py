@@ -401,3 +401,115 @@ class TestSuppressIncrease:
         assert result.desired_count == 6
         assert result.diff_missing == 6
         assert len(result.actions) == 0
+
+
+# --- PR-VERIF-KNOBS-1: Verification knobs ---
+
+
+class TestAdaptiveDisabled:
+    """T1: adaptive_enabled=False ignores NATR, uses base_spacing_bps."""
+
+    def test_adaptive_disabled_tight_spacing(self) -> None:
+        """adaptive_enabled=False + high natr_bps → spacing stays at base."""
+        config = _make_config(levels=3, spacing_bps=10.0, adaptive_enabled=False)
+        planner = LiveGridPlannerV1(config)
+
+        result = planner.plan(
+            symbol="BTCUSDT",
+            mid_price=Decimal("50000"),
+            ts_ms=1000,
+            open_orders=(),
+            natr_bps=3000,  # Would produce ~900 bps if adaptive were on
+            natr_last_ts=900,
+        )
+
+        # Spacing must be base (10 bps), not NATR-driven
+        assert result.effective_spacing_bps == 10.0
+        assert result.natr_fallback is True
+        assert result.desired_count == 6  # 3 buy + 3 sell, all within range
+        # All levels near mid (within ~0.3% = 30 bps for 3 levels * 10 bps)
+        place_actions = [a for a in result.actions if a.action_type == ActionType.PLACE]
+        assert len(place_actions) == 6
+        for a in place_actions:
+            assert a.price is not None
+            dist_bps = float(abs(a.price - Decimal("50000")) / Decimal("50000")) * 10000
+            assert dist_bps < 40, (
+                f"Level at {a.price} is {dist_bps:.1f} bps from mid (expected <40)"
+            )
+
+
+class TestMaxLevelDistanceCap:
+    """T2: max_level_distance_bps skips levels beyond cap."""
+
+    def test_cap_skips_far_levels(self) -> None:
+        """levels=5, spacing=200bps, cap=500bps → only levels 1-2 survive (3-5 skipped)."""
+        config = LiveGridConfig(
+            base_spacing_bps=200.0,  # 2% per level
+            levels=5,
+            size_per_level=Decimal("0.01"),
+            tick_size=Decimal("1"),
+            max_level_distance_bps=500,  # 5% cap
+        )
+        planner = LiveGridPlannerV1(config)
+
+        result = planner.plan(
+            symbol="BTCUSDT",
+            mid_price=Decimal("100"),
+            ts_ms=1000,
+            open_orders=(),
+        )
+
+        # L1=2%, L2=4% within cap; L3=6%, L4=8%, L5=10% beyond cap
+        assert result.desired_count == 4  # 2 buy + 2 sell
+        assert result.diff_missing == 4
+        place_actions = [a for a in result.actions if a.action_type == ActionType.PLACE]
+        assert len(place_actions) == 4
+        # All placed levels within 5% of mid
+        for a in place_actions:
+            assert a.price is not None
+            assert Decimal("95") <= a.price <= Decimal("105"), f"Price {a.price} outside 5% cap"
+
+    def test_cap_none_all_levels_placed(self) -> None:
+        """max_level_distance_bps=None → all levels placed (default behavior)."""
+        config = LiveGridConfig(
+            base_spacing_bps=200.0,
+            levels=5,
+            size_per_level=Decimal("0.01"),
+            tick_size=Decimal("1"),
+            max_level_distance_bps=None,  # No cap
+        )
+        planner = LiveGridPlannerV1(config)
+
+        result = planner.plan(
+            symbol="BTCUSDT",
+            mid_price=Decimal("100"),
+            ts_ms=1000,
+            open_orders=(),
+        )
+
+        assert result.desired_count == 10  # All 5 buy + 5 sell
+        assert result.diff_missing == 10
+
+
+class TestDefaultUnchanged:
+    """T3: Default config (no new fields) preserves existing behavior."""
+
+    def test_default_config_matches_existing(self) -> None:
+        """Default LiveGridConfig with no new fields → same as before VERIF-KNOBS-1."""
+        config = _make_config(levels=5, spacing_bps=10.0)
+        planner = LiveGridPlannerV1(config)
+
+        result = planner.plan(
+            symbol="BTCUSDT",
+            mid_price=Decimal("50000"),
+            ts_ms=1000,
+            open_orders=(),
+        )
+
+        # Existing behavior: 10 levels, all placed, no cap applied
+        assert result.desired_count == 10
+        assert result.diff_missing == 10
+        assert result.effective_spacing_bps == 10.0
+        assert result.natr_fallback is True
+        place_actions = [a for a in result.actions if a.action_type == ActionType.PLACE]
+        assert len(place_actions) == 10

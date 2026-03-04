@@ -52,6 +52,8 @@ class LiveGridConfig:
         qty_epsilon_pct: Qty match tolerance (%).
         tick_size: Price rounding increment (from exchange constraints).
             None = no constraints available (fail-safe: zero actions).
+        max_level_distance_bps: Cap on max distance from mid for any level (PR-VERIF-KNOBS-1).
+            None = no cap (default). If set, levels beyond this distance are skipped.
     """
 
     base_spacing_bps: float = 10.0
@@ -65,6 +67,7 @@ class LiveGridConfig:
     price_epsilon_bps: float = 0.5
     qty_epsilon_pct: float = 1.0
     tick_size: Decimal | None = None
+    max_level_distance_bps: int | None = None
 
 
 @dataclass(frozen=True)
@@ -374,11 +377,27 @@ class LiveGridPlannerV1:
         spacing_bps: float,
         tick_size: Decimal,
     ) -> list[_DesiredLevel]:
-        """Build symmetric bilateral grid centered on mid_price (doc-25 SS 25.5 Step 2)."""
+        """Build symmetric bilateral grid centered on mid_price (doc-25 SS 25.5 Step 2).
+
+        PR-VERIF-KNOBS-1: If max_level_distance_bps is set, levels beyond the cap
+        are skipped (not clamped). This reduces desired_count, which is reflected
+        in GridPlanResult.desired_count and diff_missing.
+        """
+        cfg = self._config
         levels: list[_DesiredLevel] = []
         spacing_factor = Decimal(str(spacing_bps)) / Decimal("10000")
 
-        for i in range(1, self._config.levels + 1):
+        # PR-VERIF-KNOBS-1: compute cap boundaries if configured
+        cap_bps = cfg.max_level_distance_bps
+        if cap_bps is not None and cap_bps > 0:
+            cap_factor = Decimal(str(cap_bps)) / Decimal("10000")
+            cap_low = mid_price * (Decimal("1") - cap_factor)
+            cap_high = mid_price * (Decimal("1") + cap_factor)
+        else:
+            cap_low = None
+            cap_high = None
+
+        for i in range(1, cfg.levels + 1):
             buy_price = _round_to_tick(
                 mid_price * (Decimal("1") - spacing_factor * i),
                 tick_size,
@@ -387,6 +406,13 @@ class LiveGridPlannerV1:
                 mid_price * (Decimal("1") + spacing_factor * i),
                 tick_size,
             )
+
+            # Skip levels outside cap (PR-VERIF-KNOBS-1)
+            if cap_low is not None and buy_price < cap_low:
+                continue
+            if cap_high is not None and sell_price > cap_high:
+                continue
+
             levels.append(
                 _DesiredLevel(key=f"BUY:L{i}", side=OrderSide.BUY, level_id=i, price=buy_price)
             )
