@@ -464,6 +464,11 @@ def _build_grid_planners(
 
     from grinder.live.grid_planner import LiveGridConfig, LiveGridPlannerV1  # noqa: PLC0415
 
+    # PR-VERIF-KNOBS-1: verification knobs for live planner
+    adaptive_enabled = parse_bool("GRINDER_LIVE_ADAPTIVE_SPACING_ENABLED", default=True)
+    max_level_dist_raw = int(os.environ.get("GRINDER_LIVE_MAX_LEVEL_DISTANCE_BPS", "0"))
+    max_level_distance_bps: int | None = max_level_dist_raw if max_level_dist_raw > 0 else None
+
     planners: dict[str, LiveGridPlannerV1] = {}
     for sym in symbols:
         tick = None
@@ -474,11 +479,15 @@ def _build_grid_planners(
             levels=paper_kwargs.get("levels", 5),
             size_per_level=paper_kwargs.get("size_per_level", Decimal("0.01")),
             tick_size=tick,
-            adaptive_enabled=True,
+            adaptive_enabled=adaptive_enabled,
+            max_level_distance_bps=max_level_distance_bps,
         )
         planners[sym] = LiveGridPlannerV1(cfg)
     syms_str = ", ".join(f"{s}(tick={planners[s]._config.tick_size})" for s in symbols)
-    print(f"  LiveGridPlanner enabled: {syms_str}")
+    print(
+        f"  LiveGridPlanner enabled: {syms_str}"
+        f" adaptive={adaptive_enabled} max_level_dist_bps={max_level_distance_bps}"
+    )
     return planners
 
 

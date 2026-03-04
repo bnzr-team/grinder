@@ -1324,6 +1324,12 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - Price: `mid_price * (1 +/- level * spacing_bps/10000)`, tick-rounded
   - Replenish uses grid identity (`strategy_id="d"`), not TP namespace
   - Metric: `grinder_cycle_replenish_generated_total{symbol}`
+- **Verification knobs** (PR-VERIF-KNOBS-1):
+  - `GRINDER_LIVE_ADAPTIVE_SPACING_ENABLED` (bool, default True): disables NATR-driven spacing when False
+  - `GRINDER_LIVE_MAX_LEVEL_DISTANCE_BPS` (int, default 0=None): cap max distance from mid; levels beyond are skipped (not clamped)
+  - Wired into `LiveGridConfig.adaptive_enabled` and `LiveGridConfig.max_level_distance_bps`
+  - Cap logic in `_build_desired_grid()`: reduces `desired_count` naturally
+  - Backward-compatible: defaults preserve existing behavior
 
 ## Partially implemented
 - Package structure `src/grinder/*` (core, protocols/interfaces) -- scaffolding.
