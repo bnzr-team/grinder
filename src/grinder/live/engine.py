@@ -71,6 +71,7 @@ from grinder.ml.threshold_resolver import (
     resolve_threshold_result,
     write_threshold_resolution_evidence,
 )
+from grinder.reconcile.identity import is_tp_order
 from grinder.risk.drawdown_guard_v1 import DrawdownGuardV1
 from grinder.risk.drawdown_guard_v1 import OrderIntent as RiskIntent
 from grinder.risk.emergency_exit import EmergencyExitExecutor
@@ -84,6 +85,7 @@ if TYPE_CHECKING:
     from grinder.features.types import FeatureSnapshot
     from grinder.gating.toxicity_gate import ToxicityGate
     from grinder.live.config import LiveEngineConfig
+    from grinder.live.cycle_layer import LiveCycleLayerV1
     from grinder.live.fsm_driver import FsmDriver
     from grinder.live.grid_planner import LiveGridPlannerV1
     from grinder.ml.fill_model_v0 import FillModelV0
@@ -281,6 +283,7 @@ class LiveEngineV0:
         toxicity_gate: ToxicityGate | None = None,
         feature_engine: FeatureEngine | None = None,
         grid_planners: dict[str, LiveGridPlannerV1] | None = None,
+        cycle_layer: LiveCycleLayerV1 | None = None,
     ) -> None:
         """Initialize LiveEngineV0.
 
@@ -297,6 +300,7 @@ class LiveEngineV0:
             toxicity_gate: Optional ToxicityGate for toxicity signal (PR-A1)
             feature_engine: Optional FeatureEngine for NATR/volatility features (PR-L0)
             grid_planners: Per-symbol grid planners for live mode (PR-L2). None = disabled.
+            cycle_layer: Optional LiveCycleLayerV1 for TP generation (PR-INV-3). None = disabled.
         """
         self._paper_engine = paper_engine
         self._exchange_port = exchange_port
@@ -312,12 +316,17 @@ class LiveEngineV0:
         self._last_feature_snapshot: FeatureSnapshot | None = None
         self._last_snapshot: Snapshot | None = None
         self._grid_planners = grid_planners
+        self._cycle_layer = cycle_layer
         self._last_account_snapshot: AccountSnapshot | None = None
         # Read GRINDER_LIVE_PLANNER_ENABLED once at init (PR-L2)
         self._live_planner_env_override = parse_bool(
             "GRINDER_LIVE_PLANNER_ENABLED", default=False, strict=False
         )
         self._warned_live_planner_no_sync = False
+        # Read GRINDER_LIVE_CYCLE_ENABLED once at init (PR-INV-3)
+        self._live_cycle_env_override = parse_bool(
+            "GRINDER_LIVE_CYCLE_ENABLED", default=False, strict=False
+        )
         # Per-symbol feed staleness tracking (ms timestamps, PR-A1)
         self._prev_snapshot_ts: dict[str, int] = {}
         # Read GRINDER_SOR_ENABLED once at init (via env_parse SSOT)
@@ -470,7 +479,7 @@ class LiveEngineV0:
         """Update configuration (e.g., arm/disarm, change mode)."""
         self._config = config
 
-    def process_snapshot(self, snapshot: Snapshot) -> LiveEngineOutput:
+    def process_snapshot(self, snapshot: Snapshot) -> LiveEngineOutput:  # noqa: PLR0912
         """Process snapshot through paper engine and execute on live exchange.
 
         Flow:
@@ -523,6 +532,25 @@ class LiveEngineV0:
             )
         else:
             paper_output = self._paper_engine.process_snapshot(snapshot)
+
+        # PR-INV-3: Cycle layer — detect fills, generate TP actions
+        if self._is_cycle_layer_enabled() and self._last_account_snapshot is not None:
+            symbol_orders = tuple(
+                o for o in self._last_account_snapshot.open_orders if o.symbol == snapshot.symbol
+            )
+            self._cycle_layer.register_cancels(raw_actions, ts_ms=snapshot.ts)  # type: ignore[union-attr]
+            cycle_actions = self._cycle_layer.on_snapshot(  # type: ignore[union-attr]
+                symbol=snapshot.symbol,
+                open_orders=symbol_orders,
+                mid_price=snapshot.mid_price,
+                ts_ms=snapshot.ts,
+            )
+            if cycle_actions:
+                logger.info("Cycle layer %s: %d TP actions", snapshot.symbol, len(cycle_actions))
+                raw_actions = raw_actions + cycle_actions
+                paper_output = _DeferredPaperOutput(
+                    ts=snapshot.ts, symbol=snapshot.symbol, actions=raw_actions
+                )
 
         # FSM tick: update state before action processing (Launch-13 PR3)
         if self._fsm_driver is not None:
@@ -698,6 +726,17 @@ class LiveEngineV0:
             return False
         return True
 
+    def _is_cycle_layer_enabled(self) -> bool:
+        """Check if live cycle layer is active (PR-INV-3).
+
+        Requires: env flag AND cycle_layer instance AND live planner enabled.
+        """
+        if not self._live_cycle_env_override:
+            return False
+        if self._cycle_layer is None:
+            return False
+        return self._is_live_planner_enabled()
+
     def _plan_grid(self, snapshot: Snapshot) -> list[ExecutionAction]:
         """Generate grid actions from LiveGridPlannerV1 (PR-L2).
 
@@ -715,9 +754,14 @@ class LiveEngineV0:
             logger.debug("No account snapshot yet, planner returns 0 actions (safe startup)")
             return []
 
-        # Filter open orders for this symbol only
+        # Filter open orders for this symbol only.
+        # PR-INV-3: Exclude TP orders from planner diff (managed by cycle layer).
+        # TP orders (grinder_tp_...) parse as valid grinder orders and would be
+        # matched/cancelled by the planner without this filter.
         open_orders = tuple(
-            o for o in self._last_account_snapshot.open_orders if o.symbol == snapshot.symbol
+            o
+            for o in self._last_account_snapshot.open_orders
+            if o.symbol == snapshot.symbol and not is_tp_order(o.order_id)
         )
 
         # Extract NATR from FeatureEngine (PR-L0)
@@ -1264,6 +1308,8 @@ class LiveEngineV0:
                 quantity=action.quantity,
                 level_id=action.level_id,
                 ts=ts,
+                reduce_only=action.reduce_only,
+                client_order_id=action.client_order_id,
             )
         elif action.action_type == ActionType.CANCEL:
             assert action.order_id is not None, "CANCEL requires order_id"

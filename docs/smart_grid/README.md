@@ -9,7 +9,7 @@ This folder contains **versioned, full-text specifications** for the Smart Grid 
 | v1.0 | `SPEC_V1_0.md` | ✅ Implemented | `sample_day`, `sample_day_allowed`; ADR-019..021 |
 | v1.1 | `SPEC_V1_1.md` | ✅ Implemented | FeatureEngine in `sample_day_adaptive`; ADR-019 |
 | v1.2 | `SPEC_V1_2.md` | ✅ Implemented | `sample_day_adaptive` digest `1b8af993a8435ee6`; ADR-022 |
-| v1.3 | `SPEC_V1_3.md` | ✅ Implemented | `sample_day_topk_v1` digest `63d981b60a8e9b3a`; ADR-023 |
+| v1.3 | `SPEC_V1_3.md` | ✅ Implemented | `sample_day_topk_v1` digest `5b73848493cf2cf9`; ADR-023 |
 | v2.0 | `SPEC_V2_0.md` | 🔜 Planned | L2-aware, DD allocator — see ROADMAP M7 |
 | v3.0 | `SPEC_V3_0.md` | 🔜 Planned | Multi-venue — see ROADMAP M9 |
 

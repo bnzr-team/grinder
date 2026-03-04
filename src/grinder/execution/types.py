@@ -94,6 +94,8 @@ class ExecutionAction:
     quantity: Decimal | None = None
     level_id: int = 0
     reason: str = ""
+    reduce_only: bool = False
+    client_order_id: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to JSON-serializable dict."""
@@ -106,6 +108,8 @@ class ExecutionAction:
             "quantity": str(self.quantity) if self.quantity else None,
             "level_id": self.level_id,
             "reason": self.reason,
+            "reduce_only": self.reduce_only,
+            "client_order_id": self.client_order_id,
         }
 
     @classmethod
@@ -120,6 +124,8 @@ class ExecutionAction:
             quantity=Decimal(d["quantity"]) if d.get("quantity") else None,
             level_id=d.get("level_id", 0),
             reason=d.get("reason", ""),
+            reduce_only=d.get("reduce_only", False),
+            client_order_id=d.get("client_order_id"),
         )
 
 

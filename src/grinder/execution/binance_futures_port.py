@@ -593,6 +593,7 @@ class BinanceFuturesPort:
         level_id: int,
         ts: int,
         reduce_only: bool = False,
+        client_order_id: str | None = None,
     ) -> str:
         """Place a limit order on Binance Futures.
 
@@ -604,6 +605,7 @@ class BinanceFuturesPort:
             level_id: Grid level identifier
             ts: Current timestamp
             reduce_only: If True, only reduce position (for cleanup)
+            client_order_id: Pre-generated clientOrderId override (PR-INV-3)
 
         Returns:
             order_id: Binance order ID as string
@@ -615,15 +617,17 @@ class BinanceFuturesPort:
         self._validate_order_count()
 
         # Generate deterministic client order ID (LC-12: configurable identity)
+        # If client_order_id override provided (e.g., TP orders), skip generation.
         self._order_counter += 1
-        identity = self.config.identity_config or get_default_identity_config()
-        client_order_id = generate_client_order_id(
-            config=identity,
-            symbol=symbol,
-            level_id=level_id,
-            ts=ts,
-            seq=self._order_counter,
-        )
+        if client_order_id is None:
+            identity = self.config.identity_config or get_default_identity_config()
+            client_order_id = generate_client_order_id(
+                config=identity,
+                symbol=symbol,
+                level_id=level_id,
+                ts=ts,
+                seq=self._order_counter,
+            )
 
         # Track order count
         object.__setattr__(self.config, "_orders_this_run", self.config._orders_this_run + 1)

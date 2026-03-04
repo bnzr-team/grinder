@@ -210,6 +210,16 @@ Kill switch triggers FSM PAUSED, emergency exit triggers EMERGENCY.
 Both cause FSM != ACTIVE, so planner runs in cancel-only mode (PR-INV-2)
 and existing emergency exit logic in LiveEngineV0 handles cleanup.
 
+### TP Orders and Cycle Layer (PR-INV-3)
+
+TP orders (`strategy_id="tp"`, clientOrderId format: `grinder_tp_BTCUSDT_3_ts_seq`)
+are managed by `LiveCycleLayerV1`, not the grid planner. The planner explicitly
+filters TP orders via `is_tp_order()` before computing grid diffs. This is essential
+because TP clientOrderIds parse as valid grinder orders (same prefix, valid format)
+and the planner would otherwise try to match/cancel them as grid levels.
+
+See PR-INV-3 in STATE.md for full contract details.
+
 ## 25.9 Observability
 
 ### Metrics

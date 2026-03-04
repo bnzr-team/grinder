@@ -2,8 +2,8 @@
   "description": "Fixture with low-priced assets to test allowed orders path (passes prefilter + gating)",
   "symbols": ["TESTUSDT", "TEST2USDT"],
   "duration_ms": 5000,
-  "expected_digest": "03253d84cd2604e7",
-  "expected_paper_digest": "3ecf49cd03db1b07",
+  "expected_digest": "808820491cefb710",
+  "expected_paper_digest": "887812017a697c8a",
   "notes": "Uses prices ~$1 so 100 units = ~$100 notional, within $5000 limit. Spread ~1 bps, within 15 bps limit.",
   "schema_version": "v1"
 }
