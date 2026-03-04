@@ -31,10 +31,10 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
 - `python3 -m scripts.run_soak` generates synthetic soak metrics JSON.
 - **Test fixtures** (`tests/fixtures/`):
   - `sample_day/`: BTC/ETH prices, orders blocked by gating (notional too high)
-    - Replay digest: `453ebd0f655e4920`
+    - Replay digest: `1119be13d7a22e8a`
     - Paper digest (v1): `66b29a4e92192f8f`
   - `sample_day_allowed/`: Low-price assets (~$1), orders pass prefilter + gating
-    - Replay digest: `03253d84cd2604e7`
+    - Replay digest: `808820491cefb710`
     - Paper digest (v1): `ec223bce78d7926f`
   - `sample_day_toxic/`: Low-price assets with 6% price jump triggering toxicity gate
     - Paper digest (v1): `66d57776b7be4797`
@@ -1441,7 +1441,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
 |------|----------|--------|--------------|
 | v1.0 | `docs/smart_grid/SPEC_V1_0.md` | [DONE] Implemented | `sample_day`, `sample_day_allowed` fixtures; ADR-019..021 |
 | v1.1 | `docs/smart_grid/SPEC_V1_1.md` | [DONE] Implemented | FeatureEngine in `sample_day_adaptive`; ADR-019 |
-| v1.2 | `docs/smart_grid/SPEC_V1_2.md` | [DONE] Implemented | `sample_day_adaptive` digest `b6cb58f4701ebbfa`; ADR-022 |
+| v1.2 | `docs/smart_grid/SPEC_V1_2.md` | [DONE] Implemented | `sample_day_adaptive` digest `1b8af993a8435ee6`; ADR-022 |
 | v1.3 | `docs/smart_grid/SPEC_V1_3.md` | [DONE] Implemented | `sample_day_topk_v1` digest `5b73848493cf2cf9`; ADR-023 |
 | v2.0 | `docs/smart_grid/SPEC_V2_0.md` | [DONE] Implemented | M7-03..M7-09 code+ADRs+fixtures (PR #137) |
 | v3.0 | `docs/smart_grid/SPEC_V3_0.md` | [PLANNED] Planned | -- |
@@ -1518,7 +1518,7 @@ Comprehensive adaptive grid system design:
       - Fallback chain: fresh cache -> API -> stale cache -> empty dict
       - No I/O at init (lazy loading preserves determinism)
       - See ADR-063
-    - **Fixture:** `sample_day_adaptive` -- paper digest `b6cb58f4701ebbfa`
+    - **Fixture:** `sample_day_adaptive` -- paper digest `1b8af993a8435ee6`
   - [DONE] **Top-K v1 (ASM-P1-06):** Feature-based symbol selection (see ADR-023)
     - **Opt-in:** `topk_v1_enabled=False` default (backward compat with existing digests)
     - **Requires:** `feature_engine_enabled=True` (needs FeatureEngine for range_score, spread_bps, thin_l1, net_return_bps)

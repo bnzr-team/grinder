@@ -182,18 +182,18 @@ Current locked digests (must not change without ADR):
 
 | Fixture | Digest |
 |---------|--------|
-| sample_day | `453ebd0f655e4920` |
-| sample_day_allowed | `03253d84cd2604e7` |
-| sample_day_controller | `d10809d9587bee21` |
+| sample_day | `1119be13d7a22e8a` |
+| sample_day_allowed | `808820491cefb710` |
+| sample_day_controller | `3196e85b872413c8` |
 
 ### Paper Digests (schema v1)
 
 | Fixture | Digest | Controller |
 |---------|--------|------------|
 | sample_day | `66b29a4e92192f8f` | off |
-| sample_day_allowed | `ec223bce78d7926f` | off |
-| sample_day_toxic | `66d57776b7be4797` | off |
-| sample_day_multisymbol | `7c4f4b07ec7b391f` | off |
+| sample_day_allowed | `887812017a697c8a` | off |
+| sample_day_toxic | `97c8b0d37cae3ce3` | off |
+| sample_day_multisymbol | `b605159aac9c0aac` | off |
 | sample_day_controller | `f3a0a321c39cc411` | on |
 
 ### Backtest Report Digest
