@@ -1316,6 +1316,14 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - `CycleMetrics` singleton (`cycle_metrics.py`): `grinder_cycle_tp_generated_total`, `grinder_cycle_tp_expired_total`, `grinder_cycle_fill_candidates_total`
   - Fill candidate outcomes: `tp_generated`, `skipped_pending_cancel`, `skipped_tp_order`, `skipped_dedup`
   - Wired into `MetricsBuilder` for Prometheus `/metrics` endpoint
+- **Replenish after fill** (PR-INV-4):
+  - After grid order fill, restores grid level at next level further from center
+  - Replenish = INCREASE_RISK: blocked by Gate 5 max-position + INV-2 suppress_increase
+  - Safe-by-default: `GRINDER_LIVE_REPLENISH_ENABLED=0`, `GRINDER_REPLENISH_MAX_LEVELS=0`
+  - Fail-closed: non-numeric `level_id` -> skip replenish; `level+1 > max_levels` -> skip; `mid_price <= 0` -> skip
+  - Price: `mid_price * (1 +/- level * spacing_bps/10000)`, tick-rounded
+  - Replenish uses grid identity (`strategy_id="d"`), not TP namespace
+  - Metric: `grinder_cycle_replenish_generated_total{symbol}`
 
 ## Partially implemented
 - Package structure `src/grinder/*` (core, protocols/interfaces) -- scaffolding.

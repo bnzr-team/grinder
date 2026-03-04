@@ -522,15 +522,29 @@ def _build_cycle_layer(
         except ValueError:
             print(f"  WARNING: invalid GRINDER_TP_TTL_MS={raw_ttl!r}, using default 300000ms")
 
+    # PR-INV-4: Replenish after fill (safe-by-default)
+    replenish_enabled = parse_bool("GRINDER_LIVE_REPLENISH_ENABLED", default=False)
+    replenish_max_levels = 0
+    raw_max = os.environ.get("GRINDER_REPLENISH_MAX_LEVELS", "").strip()
+    if raw_max:
+        try:
+            replenish_max_levels = int(raw_max)
+        except ValueError:
+            print(f"  WARNING: invalid GRINDER_REPLENISH_MAX_LEVELS={raw_max!r}, using 0")
+
     cfg = LiveCycleConfig(
         spacing_bps=paper_kwargs.get("spacing_bps", 10.0),
         tick_size=first_tick,
         tp_ttl_ms=tp_ttl_ms,
+        replenish_enabled=replenish_enabled,
+        replenish_max_levels=replenish_max_levels,
     )
     layer = LiveCycleLayerV1(cfg)
     ttl_str = f"{cfg.tp_ttl_ms}ms" if cfg.tp_ttl_ms else "disabled"
+    replenish_str = f"max_levels={replenish_max_levels}" if replenish_enabled else "disabled"
     print(
-        f"  LiveCycleLayer enabled: spacing={cfg.spacing_bps}bps tick={first_tick} tp_ttl={ttl_str}"
+        f"  LiveCycleLayer enabled: spacing={cfg.spacing_bps}bps tick={first_tick}"
+        f" tp_ttl={ttl_str} replenish={replenish_str}"
     )
     return layer
 
