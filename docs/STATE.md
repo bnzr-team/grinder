@@ -1358,6 +1358,17 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - Log: `GRID_FREEZE_IN_POSITION symbol=X — skipping planner + replenish`
   - When position returns to zero, planner resumes normal grid actions
   - Root cause fix for order churn: diagnostic proved planner GRID_SHIFT cancels all orders within seconds of placement
+- **Grid shift anti-churn** (`GRINDER_LIVE_GRID_SHIFT_MIN_MOVE_BPS`, default `0` = disabled):
+  - Suppresses GRID_SHIFT (cancel+replace) actions when mid hasn't moved enough from anchor
+  - Anchor = mid at last allowed GRID_SHIFT (or first grid placement)
+  - GRID_FILL (missing orders) and GRID_TRIM (extra orders) always pass through
+  - Log: `GRID_SHIFT_SUPPRESSED symbol=X move=Y bps < threshold=Z bps`
+  - Recommended: `50` bps for mainnet (prevents sub-cent noise from triggering full grid rebuild)
+- **Order budget exhaustion latch** (automatic, no env var):
+  - When port returns "Order count limit reached", latch activates: `ORDER_BUDGET_LATCH`
+  - Planner suppressed for remaining run (no new PLACE/CANCEL generation)
+  - Eliminates 80k+ spam lines when budget exhausted
+  - Log: `ORDER_BUDGET_EXHAUSTED symbol=X — planner suppressed`
 
 ## Partially implemented
 - Package structure `src/grinder/*` (core, protocols/interfaces) -- scaffolding.
