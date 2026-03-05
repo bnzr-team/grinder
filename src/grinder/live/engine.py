@@ -397,6 +397,10 @@ class LiveEngineV0:
             )
             or 5
         )
+        # Freeze grid when in position (pos != 0) — prevents GRID_SHIFT churn
+        self._freeze_grid_in_position = parse_bool(
+            "GRINDER_LIVE_FREEZE_GRID_WHEN_IN_POSITION", default=False, strict=False
+        )
         if self._emergency_exit_enabled:
             # Duck-type check: port must have cancel_all_orders + place_market_order + get_positions
             port = self._exchange_port
@@ -540,12 +544,26 @@ class LiveEngineV0:
                 kill_switch_active=self._config.kill_switch_active,
             )
 
+        # Freeze check: skip grid planner when position open (prevents GRID_SHIFT churn)
+        grid_frozen = self._freeze_grid_in_position and self._has_open_position(snapshot.symbol)
+        if grid_frozen:
+            logger.warning(
+                "GRID_FREEZE_IN_POSITION symbol=%s — skipping planner + replenish",
+                snapshot.symbol,
+            )
+
         # Step 1: Get actions -- either from LiveGridPlannerV1 or PaperEngine
-        if self._is_live_planner_enabled():
+        if grid_frozen:
+            # Frozen: no planner actions (TP reduce-only + safety cancels still allowed)
+            raw_actions: list[ExecutionAction] = []
+            paper_output: Any = _DeferredPaperOutput(
+                ts=snapshot.ts, symbol=snapshot.symbol, actions=raw_actions
+            )
+        elif self._is_live_planner_enabled():
             # PR-L2: Exchange-truth grid planner replaces PaperEngine for action generation.
             # PaperEngine is NOT called (avoids ghost state mutation, doc-25 I1).
             raw_actions = self._plan_grid(snapshot)
-            paper_output: Any = _DeferredPaperOutput(
+            paper_output = _DeferredPaperOutput(
                 ts=snapshot.ts, symbol=snapshot.symbol, actions=raw_actions
             )
         else:
@@ -563,6 +581,9 @@ class LiveEngineV0:
                 mid_price=snapshot.mid_price,
                 ts_ms=snapshot.ts,
             )
+            # Filter out replenish when grid frozen (TP reduce-only still allowed)
+            if grid_frozen and cycle_actions:
+                cycle_actions = [a for a in cycle_actions if a.reason != "REPLENISH"]
             if cycle_actions:
                 logger.info("Cycle layer %s: %d TP actions", snapshot.symbol, len(cycle_actions))
                 raw_actions = raw_actions + cycle_actions
@@ -959,6 +980,17 @@ class LiveEngineV0:
         if has_short:
             return -1
         return None  # flat or no position
+
+    def _has_open_position(self, symbol: str) -> bool:
+        """Check if symbol has any non-zero position (cycle open).
+
+        Returns True if any position entry for symbol has qty > 0.
+        Returns False if no snapshot, no positions, or all qty == 0.
+        """
+        snap = self._last_account_snapshot
+        if snap is None:
+            return False
+        return any(p.qty > 0 for p in snap.positions if p.symbol == symbol)
 
     def _process_action(self, action: ExecutionAction, ts: int) -> LiveAction:  # noqa: PLR0911
         """Process single action through safety gates and execute.
