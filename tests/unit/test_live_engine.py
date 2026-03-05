@@ -29,7 +29,7 @@ from __future__ import annotations
 import logging
 from decimal import Decimal
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -2108,3 +2108,263 @@ class TestGridFreezeInPosition:
             la for la in out2.live_actions if la.action.reason not in ("TP_CLOSE", "TP_EXPIRY")
         ]
         assert len(grid2) > 0, "Planner should resume when position is zero"
+
+
+class TestGridShiftAntiChurn:
+    """Tests for GRID_SHIFT suppression via min-move threshold."""
+
+    @staticmethod
+    def _make_engine(
+        mock_paper_engine: MagicMock,
+        port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        min_move_bps: int = 50,
+    ) -> LiveEngineV0:
+        monkeypatch.setenv("GRINDER_LIVE_PLANNER_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_ACCOUNT_SYNC_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_LIVE_GRID_SHIFT_MIN_MOVE_BPS", str(min_move_bps))
+
+        planner = LiveGridPlannerV1(
+            LiveGridConfig(tick_size=Decimal("0.10"), levels=2, size_per_level=Decimal("0.01"))
+        )
+        mock_syncer = MagicMock()
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        return LiveEngineV0(
+            mock_paper_engine,
+            port,
+            config,
+            account_syncer=mock_syncer,
+            grid_planners={"BTCUSDT": planner},
+        )
+
+    def test_small_move_suppresses_grid_shift(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Mid moves < threshold → GRID_SHIFT actions suppressed."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch, min_move_bps=50)
+
+        # Initial: place grid at mid=50000
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(), open_orders=(), ts=1000000, source="test"
+        )
+        snap1 = Snapshot(
+            ts=1000000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50001"),
+            bid_qty=Decimal("1"),
+            ask_qty=Decimal("1"),
+            last_price=Decimal("50000.5"),
+            last_qty=Decimal("0.5"),
+        )
+        out1 = engine.process_snapshot(snap1)
+        # First tick: grid placed (GRID_FILL), anchor set
+        grid_fill_1 = [la for la in out1.live_actions if la.action.reason == "GRID_FILL"]
+        assert len(grid_fill_1) > 0, "Should place initial grid"
+
+        # Simulate: orders exist on exchange at old prices, mid shifts by ~10bps (small)
+        # 50000 * 10/10000 = 50 — so 50025 is only 5bps move
+        old_orders = tuple(
+            OpenOrderSnap(
+                order_id=f"grinder_d_BTCUSDT_{i}_1000000_{i}",
+                symbol="BTCUSDT",
+                side="BUY" if i <= 2 else "SELL",
+                order_type="LIMIT",
+                price=Decimal("49960") if i <= 2 else Decimal("50040"),
+                qty=Decimal("0.01"),
+                filled_qty=Decimal("0"),
+                reduce_only=False,
+                status="NEW",
+                ts=1000000,
+            )
+            for i in range(1, 5)
+        )
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(), open_orders=old_orders, ts=2000000, source="test"
+        )
+        # Move mid by 5bps (50000 → 50025): below 50bps threshold
+        snap2 = Snapshot(
+            ts=2000000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50025"),
+            ask_price=Decimal("50026"),
+            bid_qty=Decimal("1"),
+            ask_qty=Decimal("1"),
+            last_price=Decimal("50025.5"),
+            last_qty=Decimal("0.5"),
+        )
+        out2 = engine.process_snapshot(snap2)
+        shift_actions = [la for la in out2.live_actions if la.action.reason == "GRID_SHIFT"]
+        assert shift_actions == [], "GRID_SHIFT should be suppressed for small move"
+
+    def test_large_move_allows_grid_shift(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Mid moves >= threshold → GRID_SHIFT actions pass through."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch, min_move_bps=50)
+
+        # Initial grid placement
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(), open_orders=(), ts=1000000, source="test"
+        )
+        snap1 = Snapshot(
+            ts=1000000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50001"),
+            bid_qty=Decimal("1"),
+            ask_qty=Decimal("1"),
+            last_price=Decimal("50000.5"),
+            last_qty=Decimal("0.5"),
+        )
+        engine.process_snapshot(snap1)
+
+        # Orders at old prices, mid shifts by 100bps (50000 → 50500)
+        old_orders = tuple(
+            OpenOrderSnap(
+                order_id=f"grinder_d_BTCUSDT_{i}_1000000_{i}",
+                symbol="BTCUSDT",
+                side="BUY" if i <= 2 else "SELL",
+                order_type="LIMIT",
+                price=Decimal("49960") if i <= 2 else Decimal("50040"),
+                qty=Decimal("0.01"),
+                filled_qty=Decimal("0"),
+                reduce_only=False,
+                status="NEW",
+                ts=1000000,
+            )
+            for i in range(1, 5)
+        )
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(), open_orders=old_orders, ts=2000000, source="test"
+        )
+        snap2 = Snapshot(
+            ts=2000000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50500"),
+            ask_price=Decimal("50501"),
+            bid_qty=Decimal("1"),
+            ask_qty=Decimal("1"),
+            last_price=Decimal("50500.5"),
+            last_qty=Decimal("0.5"),
+        )
+        out2 = engine.process_snapshot(snap2)
+        shift_actions = [la for la in out2.live_actions if la.action.reason == "GRID_SHIFT"]
+        assert len(shift_actions) > 0, "GRID_SHIFT should pass for large move"
+
+    def test_grid_fill_always_allowed(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """GRID_FILL (missing orders) always pass through regardless of threshold."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch, min_move_bps=50)
+
+        # Empty exchange: all orders are GRID_FILL (missing)
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(), open_orders=(), ts=1000000, source="test"
+        )
+        snap = Snapshot(
+            ts=1000000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50001"),
+            bid_qty=Decimal("1"),
+            ask_qty=Decimal("1"),
+            last_price=Decimal("50000.5"),
+            last_qty=Decimal("0.5"),
+        )
+        out = engine.process_snapshot(snap)
+        fill_actions = [la for la in out.live_actions if la.action.reason == "GRID_FILL"]
+        assert len(fill_actions) > 0, "GRID_FILL always allowed"
+
+
+class TestOrderBudgetLatch:
+    """Tests for order budget exhaustion latch."""
+
+    @staticmethod
+    def _make_engine(
+        mock_paper_engine: MagicMock,
+        port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> LiveEngineV0:
+        monkeypatch.setenv("GRINDER_LIVE_PLANNER_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_ACCOUNT_SYNC_ENABLED", "1")
+
+        planner = LiveGridPlannerV1(
+            LiveGridConfig(tick_size=Decimal("0.10"), levels=2, size_per_level=Decimal("0.01"))
+        )
+        mock_syncer = MagicMock()
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        return LiveEngineV0(
+            mock_paper_engine,
+            port,
+            config,
+            account_syncer=mock_syncer,
+            grid_planners={"BTCUSDT": planner},
+        )
+
+    def test_budget_exhausted_suppresses_planner(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        sample_snapshot: Snapshot,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """After budget latch → planner suppressed, no new actions."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(), open_orders=(), ts=1000000, source="test"
+        )
+
+        # Manually set the latch (simulates port returning "Order count limit")
+        engine._order_budget_exhausted = True
+
+        out = engine.process_snapshot(sample_snapshot)
+        assert out.live_actions == [], "Planner should be suppressed when budget exhausted"
+
+    def test_budget_latch_from_error(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """ConnectorNonRetryableError with 'Order count limit' sets latch."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(), open_orders=(), ts=1000000, source="test"
+        )
+
+        assert engine._order_budget_exhausted is False
+
+        # Simulate the error via _process_action with a PLACE that would trigger it
+        place = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.BUY,
+            price=Decimal("50000"),
+            quantity=Decimal("0.01"),
+            reason="GRID_FILL",
+        )
+
+        # Patch _execute_single to raise the budget error
+        with patch.object(
+            engine,
+            "_execute_single",
+            side_effect=ConnectorNonRetryableError(
+                "Order count limit reached: 30 orders per run. "
+                "Reset port or create new instance to place more orders."
+            ),
+        ):
+            result = engine._process_action(place, ts=1000000)
+
+        assert result.status == LiveActionStatus.FAILED
+        assert engine._order_budget_exhausted is True

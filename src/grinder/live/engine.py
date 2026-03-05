@@ -80,6 +80,8 @@ from grinder.risk.emergency_exit import EmergencyExitExecutor
 from grinder.risk.emergency_exit_metrics import get_emergency_exit_metrics
 
 if TYPE_CHECKING:
+    from decimal import Decimal
+
     from grinder.account.contracts import AccountSnapshot
     from grinder.contracts import Snapshot
     from grinder.execution.port import ExchangePort
@@ -401,6 +403,18 @@ class LiveEngineV0:
         self._freeze_grid_in_position = parse_bool(
             "GRINDER_LIVE_FREEZE_GRID_WHEN_IN_POSITION", default=False, strict=False
         )
+        # Anti-churn: min mid move (bps) before GRID_SHIFT allowed
+        self._grid_shift_min_move_bps = (
+            parse_int(
+                "GRINDER_LIVE_GRID_SHIFT_MIN_MOVE_BPS",
+                default=0,
+                strict=False,
+            )
+            or 0
+        )
+        self._grid_anchor_mid: dict[str, Decimal] = {}  # per-symbol anchor
+        # Order budget exhaustion latch: suppress planner when port is dead
+        self._order_budget_exhausted = False
         if self._emergency_exit_enabled:
             # Duck-type check: port must have cancel_all_orders + place_market_order + get_positions
             port = self._exchange_port
@@ -552,9 +566,17 @@ class LiveEngineV0:
                 snapshot.symbol,
             )
 
+        # Budget exhaustion latch: skip planner when order budget is dead
+        budget_dead = self._order_budget_exhausted
+        if budget_dead and not grid_frozen:
+            logger.warning(
+                "ORDER_BUDGET_EXHAUSTED symbol=%s — planner suppressed",
+                snapshot.symbol,
+            )
+
         # Step 1: Get actions -- either from LiveGridPlannerV1 or PaperEngine
-        if grid_frozen:
-            # Frozen: no planner actions (TP reduce-only + safety cancels still allowed)
+        if grid_frozen or budget_dead:
+            # Frozen/budget dead: no planner actions (TP reduce-only still allowed)
             raw_actions: list[ExecutionAction] = []
             paper_output: Any = _DeferredPaperOutput(
                 ts=snapshot.ts, symbol=snapshot.symbol, actions=raw_actions
@@ -563,6 +585,8 @@ class LiveEngineV0:
             # PR-L2: Exchange-truth grid planner replaces PaperEngine for action generation.
             # PaperEngine is NOT called (avoids ghost state mutation, doc-25 I1).
             raw_actions = self._plan_grid(snapshot)
+            # Anti-churn: suppress GRID_SHIFT if mid hasn't moved enough from anchor
+            raw_actions = self._filter_grid_shift(snapshot.symbol, snapshot.mid_price, raw_actions)
             paper_output = _DeferredPaperOutput(
                 ts=snapshot.ts, symbol=snapshot.symbol, actions=raw_actions
             )
@@ -992,6 +1016,63 @@ class LiveEngineV0:
             return False
         return any(p.qty > 0 for p in snap.positions if p.symbol == symbol)
 
+    def _filter_grid_shift(
+        self,
+        symbol: str,
+        mid_price: Decimal,
+        actions: list[ExecutionAction],
+    ) -> list[ExecutionAction]:
+        """Anti-churn: suppress GRID_SHIFT actions if mid hasn't moved enough.
+
+        Keeps GRID_FILL, GRID_TRIM, and other non-GRID_SHIFT reasons.
+        Only suppresses GRID_SHIFT (price mismatch) when min_move_bps is set
+        and mid hasn't moved beyond threshold from anchor.
+
+        On first call (no anchor), sets anchor and passes through.
+        When GRID_SHIFT passes through, anchor is updated.
+        """
+        min_bps = self._grid_shift_min_move_bps
+        if min_bps <= 0:
+            return actions
+
+        has_grid_shift = any(a.reason == "GRID_SHIFT" for a in actions)
+        if not has_grid_shift:
+            # No GRID_SHIFT actions — nothing to suppress, set anchor if missing
+            if symbol not in self._grid_anchor_mid:
+                self._grid_anchor_mid[symbol] = mid_price
+            return actions
+
+        anchor = self._grid_anchor_mid.get(symbol)
+        if anchor is None:
+            # First time: set anchor and allow
+            self._grid_anchor_mid[symbol] = mid_price
+            return actions
+
+        # Compute move from anchor in bps
+        move_bps = float(abs(mid_price - anchor) / anchor) * 10_000 if anchor > 0 else 0.0
+
+        if move_bps < min_bps:
+            # Suppress GRID_SHIFT — keep everything else (GRID_FILL, GRID_TRIM, etc.)
+            filtered = [a for a in actions if a.reason != "GRID_SHIFT"]
+            suppressed = len(actions) - len(filtered)
+            if suppressed > 0:
+                logger.warning(
+                    "GRID_SHIFT_SUPPRESSED symbol=%s move=%.1f bps < threshold=%d bps "
+                    "suppressed=%d kept=%d anchor=%.2f mid=%.2f",
+                    symbol,
+                    move_bps,
+                    min_bps,
+                    suppressed,
+                    len(filtered),
+                    float(anchor),
+                    float(mid_price),
+                )
+            return filtered
+
+        # Move exceeds threshold — allow GRID_SHIFT and update anchor
+        self._grid_anchor_mid[symbol] = mid_price
+        return actions
+
     def _process_action(self, action: ExecutionAction, ts: int) -> LiveAction:  # noqa: PLR0911
         """Process single action through safety gates and execute.
 
@@ -1294,7 +1375,7 @@ class LiveEngineV0:
         # ALLOW or SHADOW: continue normal processing
         return None
 
-    def _execute_action(self, action: ExecutionAction, ts: int, intent: RiskIntent) -> LiveAction:
+    def _execute_action(self, action: ExecutionAction, ts: int, intent: RiskIntent) -> LiveAction:  # noqa: PLR0912
         """Execute action on exchange port with retries.
 
         Args:
@@ -1341,16 +1422,23 @@ class LiveEngineV0:
                 return live_action
             except ConnectorNonRetryableError as e:
                 # Non-retryable: fail immediately
+                error_msg = str(e)
                 logger.error(
                     "Non-retryable error on %s: %s",
                     action.action_type.value,
-                    str(e),
+                    error_msg,
                 )
+                # Latch: order budget exhausted → suppress planner on future ticks
+                if "Order count limit reached" in error_msg and not self._order_budget_exhausted:
+                    self._order_budget_exhausted = True
+                    logger.warning(
+                        "ORDER_BUDGET_LATCH activated — planner suppressed for remaining run"
+                    )
                 return LiveAction(
                     action=action,
                     status=LiveActionStatus.FAILED,
                     block_reason=BlockReason.NON_RETRYABLE_ERROR,
-                    error=str(e),
+                    error=error_msg,
                     attempts=attempt,
                     intent=intent,
                 )
