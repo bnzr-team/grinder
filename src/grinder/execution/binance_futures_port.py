@@ -834,7 +834,12 @@ class BinanceFuturesPort:
             map_binance_error(response.status_code, response.json_data)
 
         if isinstance(response.json_data, dict):
-            return response.json_data.get("status") == "CANCELED"
+            canceled = response.json_data.get("status") == "CANCELED"
+            if canceled:
+                get_port_metrics().record_cancel_ok(self._PORT_NAME)
+                if self._debug_open_orders:
+                    logger.warning("CANCEL_OK order_id=%s", order_id)
+            return canceled
         return False
 
     def cancel_order_by_binance_id(self, symbol: str, order_id: int) -> bool:

@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 METRIC_PORT_ORDER_ATTEMPTS = "grinder_port_order_attempts_total"
 METRIC_PORT_HTTP_REQUESTS = "grinder_port_http_requests_total"
 METRIC_PORT_CANCEL_UNKNOWN = "grinder_port_cancel_unknown_total"
+METRIC_PORT_CANCEL_OK = "grinder_port_cancel_ok_total"
 METRIC_PORT_ORDER_LOOKUP = "grinder_port_order_lookup_total"
 
 # Label keys
@@ -43,6 +44,9 @@ class PortMetrics:
     cancel_unknown: dict[str, int] = field(default_factory=dict)
     """Cancel -2011 counter by port name."""
 
+    cancel_ok: dict[str, int] = field(default_factory=dict)
+    """Successful cancel counter by port name."""
+
     order_lookup: dict[tuple[str, str], int] = field(default_factory=dict)
     """Order lookup counter by (port_name, outcome) tuple."""
 
@@ -59,6 +63,10 @@ class PortMetrics:
     def record_cancel_unknown(self, port: str) -> None:
         """Record a -2011 (Unknown order) cancel error."""
         self.cancel_unknown[port] = self.cancel_unknown.get(port, 0) + 1
+
+    def record_cancel_ok(self, port: str) -> None:
+        """Record a successful cancel (status=CANCELED from Binance)."""
+        self.cancel_ok[port] = self.cancel_ok.get(port, 0) + 1
 
     def record_order_lookup(self, port: str, outcome: str) -> None:
         """Record an order lookup attempt.
@@ -95,12 +103,13 @@ class PortMetrics:
             if key not in self.order_attempts:
                 self.order_attempts[key] = 0
         self.cancel_unknown.setdefault(port, 0)
+        self.cancel_ok.setdefault(port, 0)
         for outcome in ("found", "not_found", "error"):
             key = (port, outcome)
             if key not in self.order_lookup:
                 self.order_lookup[key] = 0
 
-    def to_prometheus_lines(self) -> list[str]:
+    def to_prometheus_lines(self) -> list[str]:  # noqa: PLR0912
         """Export metrics in Prometheus text format."""
         lines: list[str] = []
 
@@ -152,6 +161,19 @@ class PortMetrics:
         else:
             lines.append(f'{METRIC_PORT_CANCEL_UNKNOWN}{{port="none"}} 0')
 
+        # --- cancel ok (P0-2d) ---
+        lines.append(
+            f"# HELP {METRIC_PORT_CANCEL_OK} Successful cancel operations (status=CANCELED)"
+        )
+        lines.append(f"# TYPE {METRIC_PORT_CANCEL_OK} counter")
+        if self.cancel_ok:
+            for port_name in sorted(self.cancel_ok):
+                lines.append(
+                    f'{METRIC_PORT_CANCEL_OK}{{port="{port_name}"}} {self.cancel_ok[port_name]}'
+                )
+        else:
+            lines.append(f'{METRIC_PORT_CANCEL_OK}{{port="none"}} 0')
+
         # --- order lookup (P0-2b) ---
         lines.append(
             f"# HELP {METRIC_PORT_ORDER_LOOKUP} Total order lookup attempts by port and outcome"
@@ -176,6 +198,7 @@ class PortMetrics:
         self.order_attempts.clear()
         self.http_requests.clear()
         self.cancel_unknown.clear()
+        self.cancel_ok.clear()
         self.order_lookup.clear()
 
 

@@ -14,6 +14,7 @@ from __future__ import annotations
 import pytest
 
 from grinder.execution.port_metrics import (
+    METRIC_PORT_CANCEL_OK,
     METRIC_PORT_CANCEL_UNKNOWN,
     METRIC_PORT_HTTP_REQUESTS,
     METRIC_PORT_ORDER_ATTEMPTS,
@@ -347,3 +348,36 @@ class TestOrderLookup:
         metrics.record_order_lookup("futures", "found")
         metrics.reset()
         assert len(metrics.order_lookup) == 0
+
+
+class TestCancelOk:
+    """Tests for cancel_ok metric (P0-2d)."""
+
+    def test_cancel_ok_counter(self) -> None:
+        """Record cancel_ok increments counter."""
+        metrics = PortMetrics()
+        metrics.record_cancel_ok("futures")
+        metrics.record_cancel_ok("futures")
+        assert metrics.cancel_ok["futures"] == 2
+
+    def test_cancel_ok_zero_series(self) -> None:
+        """Zero-series initializes cancel_ok for port."""
+        metrics = PortMetrics()
+        metrics.initialize_zero_series("futures")
+        assert metrics.cancel_ok["futures"] == 0
+
+    def test_cancel_ok_prometheus(self) -> None:
+        """Prometheus export includes cancel_ok lines."""
+        metrics = PortMetrics()
+        metrics.record_cancel_ok("futures")
+        lines = "\n".join(metrics.to_prometheus_lines())
+        assert f"# HELP {METRIC_PORT_CANCEL_OK}" in lines
+        assert f"# TYPE {METRIC_PORT_CANCEL_OK}" in lines
+        assert f'{METRIC_PORT_CANCEL_OK}{{port="futures"}} 1' in lines
+
+    def test_cancel_ok_reset(self) -> None:
+        """Reset clears cancel_ok."""
+        metrics = PortMetrics()
+        metrics.record_cancel_ok("futures")
+        metrics.reset()
+        assert len(metrics.cancel_ok) == 0

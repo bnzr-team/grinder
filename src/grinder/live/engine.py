@@ -808,9 +808,11 @@ class LiveEngineV0:
         )
 
         if plan_result.actions:
-            logger.info(
-                "Grid plan %s: desired=%d actual=%d missing=%d extra=%d mismatch=%d "
-                "spacing=%.1f bps natr_fallback=%s actions=%d",
+            # P0-2d: promote to WARNING when debug active (visible without logging.basicConfig)
+            log_fn = logger.warning if self._debug_open_orders else logger.info
+            log_fn(
+                "PLANNER_ACTIONS_SUMMARY %s: desired=%d actual=%d missing=%d extra=%d "
+                "mismatch=%d spacing=%.1f bps natr_fallback=%s actions=%d mid=%.2f",
                 snapshot.symbol,
                 plan_result.desired_count,
                 plan_result.actual_count,
@@ -820,6 +822,7 @@ class LiveEngineV0:
                 plan_result.effective_spacing_bps,
                 plan_result.natr_fallback,
                 len(plan_result.actions),
+                float(snapshot.mid_price),
             )
 
         return plan_result.actions
@@ -1275,6 +1278,15 @@ class LiveEngineV0:
                 action=action,
                 status=LiveActionStatus.SKIPPED,
                 intent=intent,
+            )
+
+        # P0-2d: log cancel intent before execution (env-gated)
+        if action.action_type == ActionType.CANCEL and self._debug_open_orders:
+            logger.warning(
+                "CANCEL_INTENT order_id=%s symbol=%s reason=%s",
+                action.order_id,
+                action.symbol,
+                action.reason or "planner",
             )
 
         max_attempts = self._retry_policy.max_attempts
