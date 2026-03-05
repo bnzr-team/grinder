@@ -1815,3 +1815,296 @@ class TestCycleLayerIntegration:
         )
         intent = classify_intent(tp_buy, pos_sign=-1)
         assert intent == RiskIntent.REDUCE_RISK
+
+
+class TestGridFreezeInPosition:
+    """Tests for grid freeze when position is open (pos != 0).
+
+    When GRINDER_LIVE_FREEZE_GRID_WHEN_IN_POSITION=1 and the symbol
+    has a non-zero position, the planner is skipped (no GRID_SHIFT)
+    and replenish actions are filtered out. TP reduce-only actions
+    from the cycle layer are still allowed.
+    """
+
+    @staticmethod
+    def _make_engine(
+        mock_paper_engine: MagicMock,
+        port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        freeze_enabled: bool = True,
+        cycle_enabled: bool = True,
+    ) -> LiveEngineV0:
+        monkeypatch.setenv("GRINDER_LIVE_PLANNER_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_ACCOUNT_SYNC_ENABLED", "1")
+        if freeze_enabled:
+            monkeypatch.setenv("GRINDER_LIVE_FREEZE_GRID_WHEN_IN_POSITION", "1")
+        if cycle_enabled:
+            monkeypatch.setenv("GRINDER_LIVE_CYCLE_ENABLED", "1")
+
+        planner = LiveGridPlannerV1(
+            LiveGridConfig(tick_size=Decimal("0.10"), levels=2, size_per_level=Decimal("0.01"))
+        )
+        cycle_layer = LiveCycleLayerV1(LiveCycleConfig(spacing_bps=10.0, tick_size=Decimal("0.10")))
+        mock_syncer = MagicMock()
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        return LiveEngineV0(
+            mock_paper_engine,
+            port,
+            config,
+            account_syncer=mock_syncer,
+            grid_planners={"BTCUSDT": planner},
+            cycle_layer=cycle_layer if cycle_enabled else None,
+        )
+
+    @staticmethod
+    def _position_snapshot(qty: str = "0.01") -> AccountSnapshot:
+        """AccountSnapshot with a LONG position of given qty."""
+        return AccountSnapshot(
+            positions=(
+                PositionSnap(
+                    symbol="BTCUSDT",
+                    side="LONG",
+                    qty=Decimal(qty),
+                    entry_price=Decimal("50000"),
+                    mark_price=Decimal("50000"),
+                    unrealized_pnl=Decimal("0"),
+                    leverage=1,
+                    ts=1000000,
+                ),
+            ),
+            open_orders=(
+                OpenOrderSnap(
+                    order_id="grinder_d_BTCUSDT_3_1000_1",
+                    symbol="BTCUSDT",
+                    side="BUY",
+                    order_type="LIMIT",
+                    price=Decimal("49990"),
+                    qty=Decimal("0.01"),
+                    filled_qty=Decimal("0"),
+                    reduce_only=False,
+                    status="NEW",
+                    ts=1000000,
+                ),
+            ),
+            ts=1000000,
+            source="test",
+        )
+
+    @staticmethod
+    def _empty_position_snapshot() -> AccountSnapshot:
+        """AccountSnapshot with zero position (cycle closed)."""
+        return AccountSnapshot(
+            positions=(
+                PositionSnap(
+                    symbol="BTCUSDT",
+                    side="BOTH",
+                    qty=Decimal("0"),
+                    entry_price=Decimal("0"),
+                    mark_price=Decimal("50000"),
+                    unrealized_pnl=Decimal("0"),
+                    leverage=1,
+                    ts=3000000,
+                ),
+            ),
+            open_orders=(),
+            ts=3000000,
+            source="test",
+        )
+
+    def test_position_open_no_grid_shift(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        sample_snapshot: Snapshot,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """pos != 0 → planner skipped, no CANCEL/PLACE grid actions."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._last_account_snapshot = self._position_snapshot()
+
+        output = engine.process_snapshot(sample_snapshot)
+
+        # No planner-generated actions (all GRID_SHIFT cancelled)
+        grid_actions = [
+            la for la in output.live_actions if la.action.reason not in ("TP_CLOSE", "TP_EXPIRY")
+        ]
+        assert grid_actions == [], f"Expected no grid actions, got {grid_actions}"
+
+    def test_position_open_no_replenish(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        sample_snapshot: Snapshot,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """pos != 0 → replenish actions filtered out."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+
+        # Snap 1: grid order present (seed cycle layer)
+        grid_order = OpenOrderSnap(
+            order_id="grinder_d_BTCUSDT_3_1000_1",
+            symbol="BTCUSDT",
+            side="BUY",
+            order_type="LIMIT",
+            price=Decimal("49990"),
+            qty=Decimal("0.01"),
+            filled_qty=Decimal("0"),
+            reduce_only=False,
+            status="NEW",
+            ts=1000000,
+        )
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(
+                PositionSnap(
+                    symbol="BTCUSDT",
+                    side="LONG",
+                    qty=Decimal("0"),
+                    entry_price=Decimal("0"),
+                    mark_price=Decimal("50000"),
+                    unrealized_pnl=Decimal("0"),
+                    leverage=1,
+                    ts=1000000,
+                ),
+            ),
+            open_orders=(grid_order,),
+            ts=1000000,
+            source="test",
+        )
+        engine.process_snapshot(sample_snapshot)
+
+        # Snap 2: order filled → position opened → freeze active
+        monkeypatch.setenv("GRINDER_LIVE_REPLENISH_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_REPLENISH_MAX_LEVELS", "5")
+        engine._last_account_snapshot = self._position_snapshot(qty="0.01")
+        # Remove the grid order from open_orders to simulate fill
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=self._position_snapshot().positions,
+            open_orders=(),
+            ts=2000000,
+            source="test",
+        )
+        snap2 = Snapshot(
+            ts=2000000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50001"),
+            bid_qty=Decimal("1.0"),
+            ask_qty=Decimal("1.0"),
+            last_price=Decimal("50000.5"),
+            last_qty=Decimal("0.5"),
+        )
+        output = engine.process_snapshot(snap2)
+
+        replenish = [la for la in output.live_actions if la.action.reason == "REPLENISH"]
+        assert replenish == [], f"Expected no replenish, got {replenish}"
+
+    def test_position_open_tp_still_allowed(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        sample_snapshot: Snapshot,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """pos != 0 → TP reduce-only actions still generated by cycle layer."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+
+        # Snap 1: grid order present (seed cycle layer with known order)
+        grid_order = OpenOrderSnap(
+            order_id="grinder_d_BTCUSDT_3_1000_1",
+            symbol="BTCUSDT",
+            side="BUY",
+            order_type="LIMIT",
+            price=Decimal("50000"),
+            qty=Decimal("0.01"),
+            filled_qty=Decimal("0"),
+            reduce_only=False,
+            status="NEW",
+            ts=1000000,
+        )
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(),
+            open_orders=(grid_order,),
+            ts=1000000,
+            source="test",
+        )
+        engine.process_snapshot(sample_snapshot)
+
+        # Snap 2: order gone (filled) + position open → freeze active + TP generated
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(
+                PositionSnap(
+                    symbol="BTCUSDT",
+                    side="LONG",
+                    qty=Decimal("0.01"),
+                    entry_price=Decimal("50000"),
+                    mark_price=Decimal("50000"),
+                    unrealized_pnl=Decimal("0"),
+                    leverage=1,
+                    ts=2000000,
+                ),
+            ),
+            open_orders=(),
+            ts=2000000,
+            source="test",
+        )
+        snap2 = Snapshot(
+            ts=2000000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50001"),
+            bid_qty=Decimal("1.0"),
+            ask_qty=Decimal("1.0"),
+            last_price=Decimal("50000.5"),
+            last_qty=Decimal("0.5"),
+        )
+        output = engine.process_snapshot(snap2)
+
+        tp_actions = [la for la in output.live_actions if la.action.reason == "TP_CLOSE"]
+        assert len(tp_actions) >= 1, "TP reduce-only should pass through freeze"
+        assert tp_actions[0].action.reduce_only is True
+
+    def test_position_zero_planner_resumes(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """pos → 0 → planner resumes normal grid actions."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+
+        # With position: frozen
+        engine._last_account_snapshot = self._position_snapshot()
+        snap1 = Snapshot(
+            ts=1000000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50001"),
+            bid_qty=Decimal("1.0"),
+            ask_qty=Decimal("1.0"),
+            last_price=Decimal("50000.5"),
+            last_qty=Decimal("0.5"),
+        )
+        out1 = engine.process_snapshot(snap1)
+        grid1 = [
+            la for la in out1.live_actions if la.action.reason not in ("TP_CLOSE", "TP_EXPIRY")
+        ]
+        assert grid1 == [], "Should be frozen when position open"
+
+        # Position closed: planner should produce grid actions
+        engine._last_account_snapshot = self._empty_position_snapshot()
+        snap2 = Snapshot(
+            ts=3000000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50001"),
+            bid_qty=Decimal("1.0"),
+            ask_qty=Decimal("1.0"),
+            last_price=Decimal("50000.5"),
+            last_qty=Decimal("0.5"),
+        )
+        out2 = engine.process_snapshot(snap2)
+        grid2 = [
+            la for la in out2.live_actions if la.action.reason not in ("TP_CLOSE", "TP_EXPIRY")
+        ]
+        assert len(grid2) > 0, "Planner should resume when position is zero"

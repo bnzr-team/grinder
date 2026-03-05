@@ -1351,6 +1351,13 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - `CANCEL_OK order_id=...` log on successful cancel from Binance (env-gated)
   - Metric: `grinder_port_cancel_ok_total{port}` - successful cancel counter
   - `PLANNER_ACTIONS_SUMMARY` promoted to WARNING when debug active (visible without logging.basicConfig)
+- **Grid freeze in position** (`GRINDER_LIVE_FREEZE_GRID_WHEN_IN_POSITION`, default `false`):
+  - When symbol has non-zero position (`abs(qty) > 0`), grid planner is skipped — no GRID_SHIFT cancel/replace churn
+  - Replenish actions from cycle layer are also filtered out when frozen
+  - TP reduce-only actions (`TP_CLOSE`, `TP_EXPIRY`) still pass through — cycle layer stays alive
+  - Log: `GRID_FREEZE_IN_POSITION symbol=X — skipping planner + replenish`
+  - When position returns to zero, planner resumes normal grid actions
+  - Root cause fix for order churn: diagnostic proved planner GRID_SHIFT cancels all orders within seconds of placement
 
 ## Partially implemented
 - Package structure `src/grinder/*` (core, protocols/interfaces) -- scaffolding.
