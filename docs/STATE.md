@@ -1346,6 +1346,11 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - `OPEN_ORDERS_DROP prev_count=X now_count=0 recent=N` log when orders disappear between polls
   - Metric: `grinder_port_order_lookup_total{port,outcome}` (outcome: found/not_found/error)
   - Outcome classification: `not_found` only for Binance code -2013/-2011; all other failures = `error`
+  - P0-2d: cancel source tagging - determine WHO cancels orders
+  - `CANCEL_INTENT order_id=... symbol=... reason=...` log before each cancel execution (env-gated)
+  - `CANCEL_OK order_id=...` log on successful cancel from Binance (env-gated)
+  - Metric: `grinder_port_cancel_ok_total{port}` - successful cancel counter
+  - `PLANNER_ACTIONS_SUMMARY` promoted to WARNING when debug active (visible without logging.basicConfig)
 
 ## Partially implemented
 - Package structure `src/grinder/*` (core, protocols/interfaces) -- scaffolding.
