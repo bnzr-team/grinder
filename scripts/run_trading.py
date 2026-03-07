@@ -491,7 +491,7 @@ def _build_grid_planners(
     return planners
 
 
-def _build_cycle_layer(  # noqa: PLR0912
+def _build_cycle_layer(  # noqa: PLR0912, PLR0915
     symbols: list[str],
     symbol_constraints: dict[str, SymbolConstraints] | None,
     paper_kwargs: dict[str, Any],
@@ -558,6 +558,28 @@ def _build_cycle_layer(  # noqa: PLR0912
         except ValueError:
             print(f"  WARNING: invalid GRINDER_TP_RENEW_MAX_ATTEMPTS={raw_attempts!r}, using 3")
 
+    # PR-TP-PARTIAL: TP qty mode
+    tp_qty_mode = os.environ.get("GRINDER_TP_QTY_MODE", "full").strip().lower()
+    if tp_qty_mode not in ("full", "one_level", "pct"):
+        print(f"  WARNING: invalid GRINDER_TP_QTY_MODE={tp_qty_mode!r}, using 'full'")
+        tp_qty_mode = "full"
+    tp_qty_pct = 100
+    raw_pct = os.environ.get("GRINDER_TP_QTY_PCT", "").strip()
+    if raw_pct:
+        try:
+            tp_qty_pct = max(1, min(100, int(raw_pct)))
+        except ValueError:
+            print(f"  WARNING: invalid GRINDER_TP_QTY_PCT={raw_pct!r}, using 100")
+
+    # Extract per_level_qty and step_size from paper_kwargs and symbol_constraints
+    raw_plq = paper_kwargs.get("size_per_level")
+    per_level_qty: Decimal | None = Decimal(str(raw_plq)) if raw_plq is not None else None
+    first_step: Decimal | None = None
+    for sym in symbols:
+        if symbol_constraints and sym in symbol_constraints:
+            first_step = symbol_constraints[sym].step_size
+            break
+
     cfg = LiveCycleConfig(
         spacing_bps=paper_kwargs.get("spacing_bps", 10.0),
         tick_size=first_tick,
@@ -567,6 +589,10 @@ def _build_cycle_layer(  # noqa: PLR0912
         tp_renew_enabled=tp_renew_enabled,
         tp_renew_cooldown_ms=tp_renew_cooldown_ms,
         tp_renew_max_attempts=tp_renew_max_attempts,
+        tp_qty_mode=tp_qty_mode,
+        tp_qty_pct=tp_qty_pct,
+        per_level_qty=per_level_qty,
+        step_size=first_step,
     )
     layer = LiveCycleLayerV1(cfg)
     ttl_str = f"{cfg.tp_ttl_ms}ms" if cfg.tp_ttl_ms else "disabled"
@@ -576,9 +602,13 @@ def _build_cycle_layer(  # noqa: PLR0912
         if tp_renew_enabled
         else "disabled"
     )
+    qty_str = tp_qty_mode
+    if tp_qty_mode == "pct":
+        qty_str = f"pct={tp_qty_pct}%"
     print(
         f"  LiveCycleLayer enabled: spacing={cfg.spacing_bps}bps tick={first_tick}"
         f" tp_ttl={ttl_str} replenish={replenish_str} tp_renew={renew_str}"
+        f" tp_qty={qty_str}"
     )
     return layer
 

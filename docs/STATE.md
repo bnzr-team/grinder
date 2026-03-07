@@ -1383,6 +1383,14 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - Safe-by-default: disabled unless explicitly enabled
   - No replenish when position fully closed (pos_qty == 0) or when no anchors available
   - Log: `TP_FILL_REPLENISH symbol=X pos_qty=Y buy=Z sell=W`
+- **Partial TP qty mode** (`GRINDER_TP_QTY_MODE`, default `full`):
+  - Modes: `full` (fill qty, existing behavior), `one_level` (per_level_qty), `pct` (pos_qty * pct / 100)
+  - `GRINDER_TP_QTY_PCT=50` — percentage of position for pct mode (int 1-100, default 100)
+  - Invariants: tp_qty <= abs(pos_qty), tp_qty >= step_size, rounded to step_size (ROUND_DOWN)
+  - When partial qty < step_size: tp_qty=0, TP skipped (metric: `tp_qty_too_small`, log: `TP_SKIPPED_QTY_TOO_SMALL`)
+  - Fallback to full only for missing config (per_level_qty=None, pos_qty=None)
+  - TP renew preserves original qty from exchange order (no recalculation)
+  - All arithmetic Decimal-only (no floats)
 - **Order budget exhaustion latch** (automatic, no env var):
   - When port returns "Order count limit reached", latch activates: `ORDER_BUDGET_LATCH`
   - Planner suppressed for remaining run (no new PLACE/CANCEL generation)
