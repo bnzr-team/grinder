@@ -1503,3 +1503,190 @@ class TestPartialTpSkipTooSmall:
         tp_actions = [a for a in actions if a.reason == "TP_CLOSE"]
         assert len(tp_actions) == 1
         assert tp_actions[0].quantity == Decimal("0.003")  # capped at pos_qty
+
+
+# --- PR-ROLL-2: TP slot takeover tests ---
+
+
+class TestTPSlotTakeover:
+    """Tests for TP_SLOT_TAKEOVER (PR-ROLL-2).
+
+    When a TP is created, cancel the farthest same-side grid order
+    to keep total opposite-side order count constant.
+    """
+
+    def test_long_tp_sell_cancels_farthest_sell(self) -> None:
+        """LONG fill: TP SELL + CANCEL farthest (max-price) SELL grid."""
+        layer = _make_layer()
+        buy_grid = _snap("grinder_d_BTCUSDT_1_1000_1", side="BUY", price=Decimal("49900"))
+        sell1 = _snap("grinder_d_BTCUSDT_1_1000_2", side="SELL", price=Decimal("50100"))
+        sell2 = _snap("grinder_d_BTCUSDT_2_1000_2", side="SELL", price=Decimal("50200"))
+        sell3 = _snap("grinder_d_BTCUSDT_3_1000_2", side="SELL", price=Decimal("50300"))
+
+        # Call 1: establish prev
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(buy_grid, sell1, sell2, sell3),
+            mid_price=Decimal("50000"),
+            ts_ms=1_000_000,
+        )
+
+        # Call 2: BUY gone (fill) -> TP SELL + CANCEL farthest SELL
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(sell1, sell2, sell3),
+            mid_price=Decimal("50000"),
+            ts_ms=2_000_000,
+        )
+
+        tp_actions = [a for a in actions if a.reason == "TP_CLOSE"]
+        takeover_actions = [a for a in actions if a.reason == "TP_SLOT_TAKEOVER"]
+        assert len(tp_actions) == 1
+        assert tp_actions[0].side is not None
+        assert tp_actions[0].side.value == "SELL"
+        assert len(takeover_actions) == 1
+        assert takeover_actions[0].action_type == ActionType.CANCEL
+        assert takeover_actions[0].order_id == "grinder_d_BTCUSDT_3_1000_2"  # max price
+
+    def test_short_tp_buy_cancels_farthest_buy(self) -> None:
+        """SHORT fill: TP BUY + CANCEL farthest (min-price) BUY grid."""
+        layer = _make_layer()
+        sell_grid = _snap("grinder_d_BTCUSDT_1_1000_1", side="SELL", price=Decimal("50100"))
+        buy1 = _snap("grinder_d_BTCUSDT_1_1000_2", side="BUY", price=Decimal("49900"))
+        buy2 = _snap("grinder_d_BTCUSDT_2_1000_2", side="BUY", price=Decimal("49800"))
+        buy3 = _snap("grinder_d_BTCUSDT_3_1000_2", side="BUY", price=Decimal("49700"))
+
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(sell_grid, buy1, buy2, buy3),
+            mid_price=Decimal("50000"),
+            ts_ms=1_000_000,
+        )
+
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(buy1, buy2, buy3),
+            mid_price=Decimal("50000"),
+            ts_ms=2_000_000,
+        )
+
+        tp_actions = [a for a in actions if a.reason == "TP_CLOSE"]
+        takeover_actions = [a for a in actions if a.reason == "TP_SLOT_TAKEOVER"]
+        assert len(tp_actions) == 1
+        assert tp_actions[0].side is not None
+        assert tp_actions[0].side.value == "BUY"
+        assert len(takeover_actions) == 1
+        assert takeover_actions[0].action_type == ActionType.CANCEL
+        assert takeover_actions[0].order_id == "grinder_d_BTCUSDT_3_1000_2"  # min price
+
+    def test_no_same_side_grid_skip(self) -> None:
+        """No same-side grid orders: TP placed, no CANCEL."""
+        layer = _make_layer()
+        buy_grid = _snap("grinder_d_BTCUSDT_1_1000_1", side="BUY", price=Decimal("49900"))
+
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(buy_grid,),
+            mid_price=Decimal("50000"),
+            ts_ms=1_000_000,
+        )
+
+        # BUY gone, no SELL grid orders available
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(),
+            mid_price=Decimal("50000"),
+            ts_ms=2_000_000,
+        )
+
+        tp_actions = [a for a in actions if a.reason == "TP_CLOSE"]
+        takeover_actions = [a for a in actions if a.reason == "TP_SLOT_TAKEOVER"]
+        assert len(tp_actions) == 1
+        assert len(takeover_actions) == 0
+
+    def test_tp_not_cancelled(self) -> None:
+        """TP orders on same side are NOT eligible for slot takeover."""
+        layer = _make_layer()
+        buy_grid = _snap("grinder_d_BTCUSDT_1_1000_1", side="BUY", price=Decimal("49900"))
+        tp_sell = _snap("grinder_tp_BTCUSDT_1_1000_1", side="SELL", price=Decimal("50050"))
+        grid_sell = _snap("grinder_d_BTCUSDT_2_1000_2", side="SELL", price=Decimal("50100"))
+
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(buy_grid, tp_sell, grid_sell),
+            mid_price=Decimal("50000"),
+            ts_ms=1_000_000,
+        )
+
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(tp_sell, grid_sell),
+            mid_price=Decimal("50000"),
+            ts_ms=2_000_000,
+        )
+
+        takeover_actions = [a for a in actions if a.reason == "TP_SLOT_TAKEOVER"]
+        assert len(takeover_actions) == 1
+        # Must cancel grid_sell, NOT tp_sell
+        assert takeover_actions[0].order_id == "grinder_d_BTCUSDT_2_1000_2"
+
+    def test_multi_fill_claims_different_orders(self) -> None:
+        """2 BUY fills in same tick: 2 TP SELLs + 2 different SELL grid CANCELs."""
+        layer = _make_layer()
+        buy1 = _snap("grinder_d_BTCUSDT_1_1000_1", side="BUY", price=Decimal("49900"))
+        buy2 = _snap("grinder_d_BTCUSDT_2_1000_1", side="BUY", price=Decimal("49800"))
+        sell1 = _snap("grinder_d_BTCUSDT_1_1000_2", side="SELL", price=Decimal("50100"))
+        sell2 = _snap("grinder_d_BTCUSDT_2_1000_2", side="SELL", price=Decimal("50200"))
+        sell3 = _snap("grinder_d_BTCUSDT_3_1000_2", side="SELL", price=Decimal("50300"))
+
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(buy1, buy2, sell1, sell2, sell3),
+            mid_price=Decimal("50000"),
+            ts_ms=1_000_000,
+        )
+
+        # Both BUYs gone: 2 fills in same tick
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(sell1, sell2, sell3),
+            mid_price=Decimal("50000"),
+            ts_ms=2_000_000,
+        )
+
+        tp_actions = [a for a in actions if a.reason == "TP_CLOSE"]
+        takeover_actions = [a for a in actions if a.reason == "TP_SLOT_TAKEOVER"]
+        assert len(tp_actions) == 2
+        assert len(takeover_actions) == 2
+        # Two different SELL grid orders cancelled (not the same one twice)
+        cancelled_ids = {a.order_id for a in takeover_actions}
+        assert len(cancelled_ids) == 2
+        assert "grinder_d_BTCUSDT_3_1000_2" in cancelled_ids  # farthest first
+        assert "grinder_d_BTCUSDT_2_1000_2" in cancelled_ids  # next farthest
+
+    def test_cancelled_order_registered_as_pending(self) -> None:
+        """Cancelled grid order is in _pending_cancels (prevents false fill)."""
+        layer = _make_layer()
+        buy_grid = _snap("grinder_d_BTCUSDT_1_1000_1", side="BUY", price=Decimal("49900"))
+        sell_grid = _snap("grinder_d_BTCUSDT_1_1000_2", side="SELL", price=Decimal("50100"))
+
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(buy_grid, sell_grid),
+            mid_price=Decimal("50000"),
+            ts_ms=1_000_000,
+        )
+
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(sell_grid,),
+            mid_price=Decimal("50000"),
+            ts_ms=2_000_000,
+        )
+
+        takeover_actions = [a for a in actions if a.reason == "TP_SLOT_TAKEOVER"]
+        assert len(takeover_actions) == 1
+        cancelled_id = takeover_actions[0].order_id
+        # Verify _pending_cancels registration
+        assert cancelled_id in layer._pending_cancels
+        assert layer._pending_cancels[cancelled_id] == 2_000_000

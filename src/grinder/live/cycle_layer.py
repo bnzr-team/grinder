@@ -160,7 +160,7 @@ class LiveCycleLayerV1:
         while len(self._generated_tp_ids) > _MAX_DEDUP_ENTRIES:
             self._generated_tp_ids.popitem(last=False)  # FIFO eviction
 
-    def on_snapshot(  # noqa: PLR0915
+    def on_snapshot(  # noqa: PLR0912, PLR0915
         self,
         *,
         symbol: str,
@@ -199,6 +199,8 @@ class LiveCycleLayerV1:
         actions: list[ExecutionAction] = []
         # Collect fill info for Phase 4 (replenish)
         fills: list[tuple[str, OpenOrderSnap, int]] = []  # (oid, snap, source_level_id)
+        # PR-ROLL-2: Track grid orders claimed for slot takeover (multi-fill dedup)
+        claimed_for_takeover: set[str] = set()
 
         # --- Phase 1: Fill detection → TP generation ---
         for oid, snap in self._prev_orders.items():
@@ -285,6 +287,48 @@ class LiveCycleLayerV1:
                 tp_qty,
                 tp_client_id,
             )
+
+            # PR-ROLL-2: TP_SLOT_TAKEOVER — cancel farthest same-side grid order
+            tp_side_str = tp_side.value
+            same_side_grid: list[OpenOrderSnap] = []
+            for o in open_orders:
+                if o.symbol != symbol or o.side.upper() != tp_side_str:
+                    continue
+                if o.order_id in claimed_for_takeover:
+                    continue
+                po = parse_client_order_id(o.order_id)
+                if po is None or po.strategy_id != DEFAULT_STRATEGY_ID:
+                    continue
+                same_side_grid.append(o)
+            if same_side_grid:
+                if tp_side == OrderSide.SELL:
+                    farthest = max(same_side_grid, key=lambda x: x.price)
+                else:
+                    farthest = min(same_side_grid, key=lambda x: x.price)
+                actions.append(
+                    ExecutionAction(
+                        action_type=ActionType.CANCEL,
+                        order_id=farthest.order_id,
+                        symbol=symbol,
+                        reason="TP_SLOT_TAKEOVER",
+                    )
+                )
+                self._pending_cancels[farthest.order_id] = ts_ms
+                claimed_for_takeover.add(farthest.order_id)
+                logger.info(
+                    "TP_SLOT_TAKEOVER symbol=%s side=%s tp_id=%s removed_grid_id=%s removed_price=%s",
+                    symbol,
+                    tp_side_str,
+                    tp_client_id,
+                    farthest.order_id,
+                    farthest.price,
+                )
+            else:
+                logger.info(
+                    "TP_SLOT_TAKEOVER_SKIP reason=no_same_side_grid symbol=%s side=%s",
+                    symbol,
+                    tp_side_str,
+                )
 
             # Collect fill for replenish (Phase 4)
             # Only numeric level_id qualifies for replenish (fail-closed)
