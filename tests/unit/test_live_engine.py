@@ -2368,3 +2368,999 @@ class TestOrderBudgetLatch:
 
         assert result.status == LiveActionStatus.FAILED
         assert engine._order_budget_exhausted is True
+
+
+class TestDetectTpFillEvent:
+    """Tests for _detect_tp_fill_event (position magnitude decrease detection)."""
+
+    @staticmethod
+    def _make_engine(
+        mock_paper_engine: MagicMock,
+        port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> LiveEngineV0:
+        monkeypatch.setenv("GRINDER_LIVE_PLANNER_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_ACCOUNT_SYNC_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_LIVE_CYCLE_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_LIVE_REPLENISH_ON_TP_FILL", "1")
+
+        planner = LiveGridPlannerV1(
+            LiveGridConfig(
+                tick_size=Decimal("0.10"),
+                levels=2,
+                size_per_level=Decimal("0.01"),
+                base_spacing_bps=10.0,
+            )
+        )
+        cycle_layer = LiveCycleLayerV1(LiveCycleConfig(spacing_bps=10.0, tick_size=Decimal("0.10")))
+        mock_syncer = MagicMock()
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        return LiveEngineV0(
+            mock_paper_engine,
+            port,
+            config,
+            account_syncer=mock_syncer,
+            grid_planners={"BTCUSDT": planner},
+            cycle_layer=cycle_layer,
+        )
+
+    def test_long_position_decreases(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """prev > 0 and cur >= 0 and cur < prev → True (TP filled some)."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._prev_pos_qty["BTCUSDT"] = Decimal("0.05")
+        assert engine._detect_tp_fill_event("BTCUSDT", Decimal("0.03")) is True
+
+    def test_long_position_increases(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """prev > 0 and cur > prev → False (position grew, not a TP fill)."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._prev_pos_qty["BTCUSDT"] = Decimal("0.03")
+        assert engine._detect_tp_fill_event("BTCUSDT", Decimal("0.05")) is False
+
+    def test_long_closes_to_zero(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """prev > 0 and cur == 0 → True (TP closed entire position)."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._prev_pos_qty["BTCUSDT"] = Decimal("0.05")
+        assert engine._detect_tp_fill_event("BTCUSDT", Decimal("0")) is True
+
+    def test_short_position_decreases(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """prev < 0 and cur <= 0 and abs(cur) < abs(prev) → True."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._prev_pos_qty["BTCUSDT"] = Decimal("-0.05")
+        assert engine._detect_tp_fill_event("BTCUSDT", Decimal("-0.03")) is True
+
+    def test_short_closes_to_zero(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """prev < 0 and cur == 0 → True (TP closed entire short)."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._prev_pos_qty["BTCUSDT"] = Decimal("-0.05")
+        assert engine._detect_tp_fill_event("BTCUSDT", Decimal("0")) is True
+
+    def test_no_previous_position(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No previous pos (defaults to 0), entering position → False."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        assert engine._detect_tp_fill_event("BTCUSDT", Decimal("0.01")) is False
+
+    def test_none_pos_qty(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """pos_qty=None → False (unknown position, skip)."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._prev_pos_qty["BTCUSDT"] = Decimal("0.05")
+        assert engine._detect_tp_fill_event("BTCUSDT", None) is False
+
+    def test_flat_stays_flat(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """prev == 0 and cur == 0 → False."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._prev_pos_qty["BTCUSDT"] = Decimal("0")
+        assert engine._detect_tp_fill_event("BTCUSDT", Decimal("0")) is False
+
+
+class TestUpdateGridAnchors:
+    """Tests for _update_grid_anchors (anchor management when flat)."""
+
+    @staticmethod
+    def _make_engine(
+        mock_paper_engine: MagicMock,
+        port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> LiveEngineV0:
+        monkeypatch.setenv("GRINDER_LIVE_PLANNER_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_ACCOUNT_SYNC_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_LIVE_CYCLE_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_LIVE_REPLENISH_ON_TP_FILL", "1")
+
+        planner = LiveGridPlannerV1(
+            LiveGridConfig(
+                tick_size=Decimal("0.10"),
+                levels=2,
+                size_per_level=Decimal("0.01"),
+                base_spacing_bps=10.0,
+            )
+        )
+        cycle_layer = LiveCycleLayerV1(LiveCycleConfig(spacing_bps=10.0, tick_size=Decimal("0.10")))
+        mock_syncer = MagicMock()
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        return LiveEngineV0(
+            mock_paper_engine,
+            port,
+            config,
+            account_syncer=mock_syncer,
+            grid_planners={"BTCUSDT": planner},
+            cycle_layer=cycle_layer,
+        )
+
+    def test_anchors_set_when_flat(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """pos_qty == 0 with BUY/SELL orders → anchors stored."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(),
+            open_orders=(
+                OpenOrderSnap(
+                    order_id="grinder_d_BTCUSDT_1_1000_1",
+                    symbol="BTCUSDT",
+                    side="BUY",
+                    order_type="LIMIT",
+                    price=Decimal("49900"),
+                    qty=Decimal("0.01"),
+                    filled_qty=Decimal("0"),
+                    reduce_only=False,
+                    status="NEW",
+                    ts=1000000,
+                ),
+                OpenOrderSnap(
+                    order_id="grinder_d_BTCUSDT_2_1000_1",
+                    symbol="BTCUSDT",
+                    side="BUY",
+                    order_type="LIMIT",
+                    price=Decimal("49800"),
+                    qty=Decimal("0.01"),
+                    filled_qty=Decimal("0"),
+                    reduce_only=False,
+                    status="NEW",
+                    ts=1000000,
+                ),
+                OpenOrderSnap(
+                    order_id="grinder_d_BTCUSDT_3_1000_1",
+                    symbol="BTCUSDT",
+                    side="SELL",
+                    order_type="LIMIT",
+                    price=Decimal("50100"),
+                    qty=Decimal("0.01"),
+                    filled_qty=Decimal("0"),
+                    reduce_only=False,
+                    status="NEW",
+                    ts=1000000,
+                ),
+                OpenOrderSnap(
+                    order_id="grinder_d_BTCUSDT_4_1000_1",
+                    symbol="BTCUSDT",
+                    side="SELL",
+                    order_type="LIMIT",
+                    price=Decimal("50200"),
+                    qty=Decimal("0.01"),
+                    filled_qty=Decimal("0"),
+                    reduce_only=False,
+                    status="NEW",
+                    ts=1000000,
+                ),
+            ),
+            ts=1000000,
+            source="test",
+        )
+
+        engine._update_grid_anchors("BTCUSDT", Decimal("0"))
+
+        assert engine._grid_anchor_low_buy["BTCUSDT"] == Decimal("49800")
+        assert engine._grid_anchor_high_sell["BTCUSDT"] == Decimal("50200")
+
+    def test_anchors_not_updated_when_position_open(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """pos_qty != 0 → anchors NOT updated."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(),
+            open_orders=(
+                OpenOrderSnap(
+                    order_id="grinder_d_BTCUSDT_1_1000_1",
+                    symbol="BTCUSDT",
+                    side="BUY",
+                    order_type="LIMIT",
+                    price=Decimal("49900"),
+                    qty=Decimal("0.01"),
+                    filled_qty=Decimal("0"),
+                    reduce_only=False,
+                    status="NEW",
+                    ts=1000000,
+                ),
+            ),
+            ts=1000000,
+            source="test",
+        )
+
+        engine._update_grid_anchors("BTCUSDT", Decimal("0.01"))
+
+        assert "BTCUSDT" not in engine._grid_anchor_low_buy
+
+    def test_tp_orders_excluded_from_anchors(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """TP orders (strategy_id='tp') excluded from anchor calculation."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(),
+            open_orders=(
+                OpenOrderSnap(
+                    order_id="grinder_d_BTCUSDT_1_1000_1",
+                    symbol="BTCUSDT",
+                    side="BUY",
+                    order_type="LIMIT",
+                    price=Decimal("49900"),
+                    qty=Decimal("0.01"),
+                    filled_qty=Decimal("0"),
+                    reduce_only=False,
+                    status="NEW",
+                    ts=1000000,
+                ),
+                OpenOrderSnap(
+                    order_id="grinder_tp_BTCUSDT_0_2000_1",
+                    symbol="BTCUSDT",
+                    side="SELL",
+                    order_type="LIMIT",
+                    price=Decimal("50300"),
+                    qty=Decimal("0.01"),
+                    filled_qty=Decimal("0"),
+                    reduce_only=True,
+                    status="NEW",
+                    ts=1000000,
+                ),
+                OpenOrderSnap(
+                    order_id="grinder_d_BTCUSDT_2_1000_1",
+                    symbol="BTCUSDT",
+                    side="SELL",
+                    order_type="LIMIT",
+                    price=Decimal("50100"),
+                    qty=Decimal("0.01"),
+                    filled_qty=Decimal("0"),
+                    reduce_only=False,
+                    status="NEW",
+                    ts=1000000,
+                ),
+            ),
+            ts=1000000,
+            source="test",
+        )
+
+        engine._update_grid_anchors("BTCUSDT", Decimal("0"))
+
+        # TP SELL at 50300 excluded; grid SELL at 50100 used
+        assert engine._grid_anchor_high_sell["BTCUSDT"] == Decimal("50100")
+        assert engine._grid_anchor_low_buy["BTCUSDT"] == Decimal("49900")
+
+
+class TestGenerateTpFillReplenish:
+    """Tests for _generate_tp_fill_replenish (BUY below + SELL above on TP fill)."""
+
+    @staticmethod
+    def _make_engine(
+        mock_paper_engine: MagicMock,
+        port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        replenish_enabled: bool = True,
+        base_spacing_bps: float = 10.0,
+    ) -> LiveEngineV0:
+        monkeypatch.setenv("GRINDER_LIVE_PLANNER_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_ACCOUNT_SYNC_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_LIVE_CYCLE_ENABLED", "1")
+        if replenish_enabled:
+            monkeypatch.setenv("GRINDER_LIVE_REPLENISH_ON_TP_FILL", "1")
+
+        planner = LiveGridPlannerV1(
+            LiveGridConfig(
+                tick_size=Decimal("0.10"),
+                levels=2,
+                size_per_level=Decimal("0.01"),
+                base_spacing_bps=base_spacing_bps,
+            )
+        )
+        cycle_layer = LiveCycleLayerV1(LiveCycleConfig(spacing_bps=10.0, tick_size=Decimal("0.10")))
+        mock_syncer = MagicMock()
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        return LiveEngineV0(
+            mock_paper_engine,
+            port,
+            config,
+            account_syncer=mock_syncer,
+            grid_planners={"BTCUSDT": planner},
+            cycle_layer=cycle_layer,
+        )
+
+    @staticmethod
+    def _snapshot_with_orders(
+        *,
+        buy_prices: tuple[str, ...] = (),
+        sell_prices: tuple[str, ...] = (),
+        pos_qty: str = "0.01",
+    ) -> AccountSnapshot:
+        orders: list[OpenOrderSnap] = []
+        for i, p in enumerate(buy_prices, 1):
+            orders.append(
+                OpenOrderSnap(
+                    order_id=f"grinder_d_BTCUSDT_{i}_1000_1",
+                    symbol="BTCUSDT",
+                    side="BUY",
+                    order_type="LIMIT",
+                    price=Decimal(p),
+                    qty=Decimal("0.01"),
+                    filled_qty=Decimal("0"),
+                    reduce_only=False,
+                    status="NEW",
+                    ts=1000000,
+                )
+            )
+        for i, p in enumerate(sell_prices, len(buy_prices) + 1):
+            orders.append(
+                OpenOrderSnap(
+                    order_id=f"grinder_d_BTCUSDT_{i}_1000_1",
+                    symbol="BTCUSDT",
+                    side="SELL",
+                    order_type="LIMIT",
+                    price=Decimal(p),
+                    qty=Decimal("0.01"),
+                    filled_qty=Decimal("0"),
+                    reduce_only=False,
+                    status="NEW",
+                    ts=1000000,
+                )
+            )
+        positions: tuple[PositionSnap, ...] = ()
+        if Decimal(pos_qty) != 0:
+            positions = (
+                PositionSnap(
+                    symbol="BTCUSDT",
+                    side="LONG" if Decimal(pos_qty) > 0 else "SHORT",
+                    qty=Decimal(pos_qty),
+                    entry_price=Decimal("50000"),
+                    mark_price=Decimal("50000"),
+                    unrealized_pnl=Decimal("0"),
+                    leverage=1,
+                    ts=1000000,
+                ),
+            )
+        return AccountSnapshot(
+            positions=positions,
+            open_orders=tuple(orders),
+            ts=1000000,
+            source="test",
+        )
+
+    def test_tp_fill_generates_buy_and_sell(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """TP fills → BUY below lowest BUY + SELL above highest SELL."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._last_account_snapshot = self._snapshot_with_orders(
+            buy_prices=("49900.0", "49800.0"),
+            sell_prices=("50100.0", "50200.0"),
+            pos_qty="0.01",
+        )
+
+        actions = engine._generate_tp_fill_replenish("BTCUSDT", Decimal("0.01"), 1000000)
+
+        assert len(actions) == 2
+        buy_action = next(a for a in actions if a.side == OrderSide.BUY)
+        sell_action = next(a for a in actions if a.side == OrderSide.SELL)
+        assert buy_action.action_type == ActionType.PLACE
+        assert sell_action.action_type == ActionType.PLACE
+        assert buy_action.reason == "TP_FILL_REPLENISH"
+        assert sell_action.reason == "TP_FILL_REPLENISH"
+        assert buy_action.reduce_only is False
+        assert sell_action.reduce_only is False
+        # BUY below lowest: 49800 * (1 - 10/10000) = 49800 * 0.999 = 49750.2 → 49750.2
+        assert buy_action.price == Decimal("49750.2")
+        # SELL above highest: 50200 * (1 + 10/10000) = 50200 * 1.001 = 50250.2 → 50250.2
+        assert sell_action.price == Decimal("50250.2")
+
+    def test_disabled_returns_empty(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """GRINDER_LIVE_REPLENISH_ON_TP_FILL=0 → no actions."""
+        engine = self._make_engine(
+            mock_paper_engine,
+            noop_port,
+            monkeypatch,
+            replenish_enabled=False,
+        )
+        engine._last_account_snapshot = self._snapshot_with_orders(
+            buy_prices=("49900.0",),
+            sell_prices=("50100.0",),
+            pos_qty="0.01",
+        )
+
+        actions = engine._generate_tp_fill_replenish("BTCUSDT", Decimal("0.01"), 1000000)
+        assert actions == []
+
+    def test_flat_position_returns_empty(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """pos_qty == 0 → no replenish (no open cycle)."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._last_account_snapshot = self._snapshot_with_orders(
+            buy_prices=("49900.0",),
+            sell_prices=("50100.0",),
+            pos_qty="0",
+        )
+
+        actions = engine._generate_tp_fill_replenish("BTCUSDT", Decimal("0"), 1000000)
+        assert actions == []
+
+    def test_no_anchor_no_orders_returns_empty(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No open orders + no anchors → no replenish (can't determine grid edges)."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._last_account_snapshot = self._snapshot_with_orders(
+            buy_prices=(),
+            sell_prices=(),
+            pos_qty="0.01",
+        )
+
+        actions = engine._generate_tp_fill_replenish("BTCUSDT", Decimal("0.01"), 1000000)
+        assert actions == []
+
+    def test_uses_anchors_when_no_orders(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No current orders → falls back to stored anchors."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        # Pre-set anchors from when position was flat
+        engine._grid_anchor_low_buy["BTCUSDT"] = Decimal("49800.0")
+        engine._grid_anchor_high_sell["BTCUSDT"] = Decimal("50200.0")
+        engine._last_account_snapshot = self._snapshot_with_orders(
+            buy_prices=(),
+            sell_prices=(),
+            pos_qty="0.01",
+        )
+
+        actions = engine._generate_tp_fill_replenish("BTCUSDT", Decimal("0.01"), 1000000)
+
+        assert len(actions) == 2
+        buy_action = next(a for a in actions if a.side == OrderSide.BUY)
+        sell_action = next(a for a in actions if a.side == OrderSide.SELL)
+        assert buy_action.price == Decimal("49750.2")
+        assert sell_action.price == Decimal("50250.2")
+
+    def test_client_order_id_generated(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Replenish actions have valid client_order_id (grinder_d_ prefix)."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._last_account_snapshot = self._snapshot_with_orders(
+            buy_prices=("49900.0",),
+            sell_prices=("50100.0",),
+            pos_qty="0.01",
+        )
+
+        actions = engine._generate_tp_fill_replenish("BTCUSDT", Decimal("0.01"), 1000000)
+
+        assert len(actions) == 2
+        for a in actions:
+            assert a.client_order_id is not None
+            assert a.client_order_id.startswith("grinder_d_")
+
+
+class TestTpFillReplenishE2e:
+    """End-to-end wiring tests: process_snapshot detects TP fill and generates replenish."""
+
+    @staticmethod
+    def _make_engine(
+        mock_paper_engine: MagicMock,
+        port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        replenish_enabled: bool = True,
+        freeze_enabled: bool = False,
+    ) -> LiveEngineV0:
+        monkeypatch.setenv("GRINDER_LIVE_PLANNER_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_ACCOUNT_SYNC_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_LIVE_CYCLE_ENABLED", "1")
+        if replenish_enabled:
+            monkeypatch.setenv("GRINDER_LIVE_REPLENISH_ON_TP_FILL", "1")
+        if freeze_enabled:
+            monkeypatch.setenv("GRINDER_LIVE_FREEZE_GRID_WHEN_IN_POSITION", "1")
+
+        planner = LiveGridPlannerV1(
+            LiveGridConfig(
+                tick_size=Decimal("0.10"),
+                levels=2,
+                size_per_level=Decimal("0.01"),
+                base_spacing_bps=10.0,
+            )
+        )
+        cycle_layer = LiveCycleLayerV1(LiveCycleConfig(spacing_bps=10.0, tick_size=Decimal("0.10")))
+        mock_syncer = MagicMock()
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        return LiveEngineV0(
+            mock_paper_engine,
+            port,
+            config,
+            account_syncer=mock_syncer,
+            grid_planners={"BTCUSDT": planner},
+            cycle_layer=cycle_layer,
+        )
+
+    def test_full_cycle_tp_fill_replenish(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Full cycle: flat → fill → TP fill → replenish actions generated."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+
+        # Tick 1: Flat with grid orders → anchors set
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(
+                PositionSnap(
+                    symbol="BTCUSDT",
+                    side="BOTH",
+                    qty=Decimal("0"),
+                    entry_price=Decimal("0"),
+                    mark_price=Decimal("50000"),
+                    unrealized_pnl=Decimal("0"),
+                    leverage=1,
+                    ts=1000000,
+                ),
+            ),
+            open_orders=(
+                OpenOrderSnap(
+                    order_id="grinder_d_BTCUSDT_1_1000_1",
+                    symbol="BTCUSDT",
+                    side="BUY",
+                    order_type="LIMIT",
+                    price=Decimal("49900"),
+                    qty=Decimal("0.01"),
+                    filled_qty=Decimal("0"),
+                    reduce_only=False,
+                    status="NEW",
+                    ts=1000000,
+                ),
+                OpenOrderSnap(
+                    order_id="grinder_d_BTCUSDT_2_1000_1",
+                    symbol="BTCUSDT",
+                    side="SELL",
+                    order_type="LIMIT",
+                    price=Decimal("50100"),
+                    qty=Decimal("0.01"),
+                    filled_qty=Decimal("0"),
+                    reduce_only=False,
+                    status="NEW",
+                    ts=1000000,
+                ),
+            ),
+            ts=1000000,
+            source="test",
+        )
+        snap1 = Snapshot(
+            ts=1000000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50001"),
+            bid_qty=Decimal("1"),
+            ask_qty=Decimal("1"),
+            last_price=Decimal("50000.5"),
+            last_qty=Decimal("0.5"),
+        )
+        engine.process_snapshot(snap1)
+        # Verify anchors set
+        assert engine._grid_anchor_low_buy.get("BTCUSDT") is not None
+
+        # Tick 2: Position opens (BUY filled) → prev_pos_qty set
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(
+                PositionSnap(
+                    symbol="BTCUSDT",
+                    side="LONG",
+                    qty=Decimal("0.01"),
+                    entry_price=Decimal("49900"),
+                    mark_price=Decimal("50000"),
+                    unrealized_pnl=Decimal("1"),
+                    leverage=1,
+                    ts=2000000,
+                ),
+            ),
+            open_orders=(
+                OpenOrderSnap(
+                    order_id="grinder_d_BTCUSDT_2_1000_1",
+                    symbol="BTCUSDT",
+                    side="SELL",
+                    order_type="LIMIT",
+                    price=Decimal("50100"),
+                    qty=Decimal("0.01"),
+                    filled_qty=Decimal("0"),
+                    reduce_only=False,
+                    status="NEW",
+                    ts=2000000,
+                ),
+            ),
+            ts=2000000,
+            source="test",
+        )
+        snap2 = Snapshot(
+            ts=2000000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50001"),
+            bid_qty=Decimal("1"),
+            ask_qty=Decimal("1"),
+            last_price=Decimal("50000.5"),
+            last_qty=Decimal("0.5"),
+        )
+        engine.process_snapshot(snap2)
+        assert engine._prev_pos_qty["BTCUSDT"] == Decimal("0.01")
+
+        # Tick 3: TP fills → position decreases → replenish generated
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(
+                PositionSnap(
+                    symbol="BTCUSDT",
+                    side="BOTH",
+                    qty=Decimal("0"),
+                    entry_price=Decimal("0"),
+                    mark_price=Decimal("50000"),
+                    unrealized_pnl=Decimal("0"),
+                    leverage=1,
+                    ts=3000000,
+                ),
+            ),
+            open_orders=(),
+            ts=3000000,
+            source="test",
+        )
+        snap3 = Snapshot(
+            ts=3000000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50001"),
+            bid_qty=Decimal("1"),
+            ask_qty=Decimal("1"),
+            last_price=Decimal("50000.5"),
+            last_qty=Decimal("0.5"),
+        )
+        out3 = engine.process_snapshot(snap3)
+
+        # Position went to 0 → _detect_tp_fill_event fires → BUT pos_qty=0
+        # means _generate_tp_fill_replenish returns [] (no open cycle)
+        # This is correct: fully closed position = no replenish needed
+        replenish_actions = [
+            la for la in out3.live_actions if la.action.reason == "TP_FILL_REPLENISH"
+        ]
+        assert replenish_actions == [], "No replenish when position fully closed"
+
+    def test_partial_tp_fill_generates_replenish(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Partial TP fill (pos decreases but > 0) → replenish generated."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+
+        # Tick 1: Position open with orders
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(
+                PositionSnap(
+                    symbol="BTCUSDT",
+                    side="LONG",
+                    qty=Decimal("0.02"),
+                    entry_price=Decimal("49900"),
+                    mark_price=Decimal("50000"),
+                    unrealized_pnl=Decimal("2"),
+                    leverage=1,
+                    ts=1000000,
+                ),
+            ),
+            open_orders=(
+                OpenOrderSnap(
+                    order_id="grinder_d_BTCUSDT_1_1000_1",
+                    symbol="BTCUSDT",
+                    side="BUY",
+                    order_type="LIMIT",
+                    price=Decimal("49800"),
+                    qty=Decimal("0.01"),
+                    filled_qty=Decimal("0"),
+                    reduce_only=False,
+                    status="NEW",
+                    ts=1000000,
+                ),
+                OpenOrderSnap(
+                    order_id="grinder_d_BTCUSDT_2_1000_1",
+                    symbol="BTCUSDT",
+                    side="SELL",
+                    order_type="LIMIT",
+                    price=Decimal("50200"),
+                    qty=Decimal("0.01"),
+                    filled_qty=Decimal("0"),
+                    reduce_only=False,
+                    status="NEW",
+                    ts=1000000,
+                ),
+            ),
+            ts=1000000,
+            source="test",
+        )
+        snap1 = Snapshot(
+            ts=1000000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50001"),
+            bid_qty=Decimal("1"),
+            ask_qty=Decimal("1"),
+            last_price=Decimal("50000.5"),
+            last_qty=Decimal("0.5"),
+        )
+        engine.process_snapshot(snap1)
+
+        # Tick 2: TP partially fills → position decreases to 0.01
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(
+                PositionSnap(
+                    symbol="BTCUSDT",
+                    side="LONG",
+                    qty=Decimal("0.01"),
+                    entry_price=Decimal("49900"),
+                    mark_price=Decimal("50000"),
+                    unrealized_pnl=Decimal("1"),
+                    leverage=1,
+                    ts=2000000,
+                ),
+            ),
+            open_orders=(
+                OpenOrderSnap(
+                    order_id="grinder_d_BTCUSDT_1_1000_1",
+                    symbol="BTCUSDT",
+                    side="BUY",
+                    order_type="LIMIT",
+                    price=Decimal("49800"),
+                    qty=Decimal("0.01"),
+                    filled_qty=Decimal("0"),
+                    reduce_only=False,
+                    status="NEW",
+                    ts=2000000,
+                ),
+                OpenOrderSnap(
+                    order_id="grinder_d_BTCUSDT_2_1000_1",
+                    symbol="BTCUSDT",
+                    side="SELL",
+                    order_type="LIMIT",
+                    price=Decimal("50200"),
+                    qty=Decimal("0.01"),
+                    filled_qty=Decimal("0"),
+                    reduce_only=False,
+                    status="NEW",
+                    ts=2000000,
+                ),
+            ),
+            ts=2000000,
+            source="test",
+        )
+        snap2 = Snapshot(
+            ts=2000000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50001"),
+            bid_qty=Decimal("1"),
+            ask_qty=Decimal("1"),
+            last_price=Decimal("50000.5"),
+            last_qty=Decimal("0.5"),
+        )
+        out2 = engine.process_snapshot(snap2)
+
+        replenish_actions = [
+            la for la in out2.live_actions if la.action.reason == "TP_FILL_REPLENISH"
+        ]
+        assert len(replenish_actions) == 2, (
+            f"Expected 2 replenish actions, got {len(replenish_actions)}"
+        )
+        sides = {la.action.side for la in replenish_actions}
+        assert OrderSide.BUY in sides
+        assert OrderSide.SELL in sides
+
+    def test_tp_fill_replenish_not_blocked_by_freeze(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """TP_FILL_REPLENISH reason is NOT filtered by grid freeze (only REPLENISH is)."""
+        engine = self._make_engine(
+            mock_paper_engine,
+            noop_port,
+            monkeypatch,
+            freeze_enabled=True,
+        )
+
+        # Tick 1: pos=0.02 with orders
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(
+                PositionSnap(
+                    symbol="BTCUSDT",
+                    side="LONG",
+                    qty=Decimal("0.02"),
+                    entry_price=Decimal("49900"),
+                    mark_price=Decimal("50000"),
+                    unrealized_pnl=Decimal("2"),
+                    leverage=1,
+                    ts=1000000,
+                ),
+            ),
+            open_orders=(
+                OpenOrderSnap(
+                    order_id="grinder_d_BTCUSDT_1_1000_1",
+                    symbol="BTCUSDT",
+                    side="BUY",
+                    order_type="LIMIT",
+                    price=Decimal("49800"),
+                    qty=Decimal("0.01"),
+                    filled_qty=Decimal("0"),
+                    reduce_only=False,
+                    status="NEW",
+                    ts=1000000,
+                ),
+                OpenOrderSnap(
+                    order_id="grinder_d_BTCUSDT_2_1000_1",
+                    symbol="BTCUSDT",
+                    side="SELL",
+                    order_type="LIMIT",
+                    price=Decimal("50200"),
+                    qty=Decimal("0.01"),
+                    filled_qty=Decimal("0"),
+                    reduce_only=False,
+                    status="NEW",
+                    ts=1000000,
+                ),
+            ),
+            ts=1000000,
+            source="test",
+        )
+        snap1 = Snapshot(
+            ts=1000000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50001"),
+            bid_qty=Decimal("1"),
+            ask_qty=Decimal("1"),
+            last_price=Decimal("50000.5"),
+            last_qty=Decimal("0.5"),
+        )
+        engine.process_snapshot(snap1)
+
+        # Tick 2: TP partially fills → pos=0.01, freeze ON
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(
+                PositionSnap(
+                    symbol="BTCUSDT",
+                    side="LONG",
+                    qty=Decimal("0.01"),
+                    entry_price=Decimal("49900"),
+                    mark_price=Decimal("50000"),
+                    unrealized_pnl=Decimal("1"),
+                    leverage=1,
+                    ts=2000000,
+                ),
+            ),
+            open_orders=(
+                OpenOrderSnap(
+                    order_id="grinder_d_BTCUSDT_1_1000_1",
+                    symbol="BTCUSDT",
+                    side="BUY",
+                    order_type="LIMIT",
+                    price=Decimal("49800"),
+                    qty=Decimal("0.01"),
+                    filled_qty=Decimal("0"),
+                    reduce_only=False,
+                    status="NEW",
+                    ts=2000000,
+                ),
+                OpenOrderSnap(
+                    order_id="grinder_d_BTCUSDT_2_1000_1",
+                    symbol="BTCUSDT",
+                    side="SELL",
+                    order_type="LIMIT",
+                    price=Decimal("50200"),
+                    qty=Decimal("0.01"),
+                    filled_qty=Decimal("0"),
+                    reduce_only=False,
+                    status="NEW",
+                    ts=2000000,
+                ),
+            ),
+            ts=2000000,
+            source="test",
+        )
+        snap2 = Snapshot(
+            ts=2000000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50001"),
+            bid_qty=Decimal("1"),
+            ask_qty=Decimal("1"),
+            last_price=Decimal("50000.5"),
+            last_qty=Decimal("0.5"),
+        )
+        out2 = engine.process_snapshot(snap2)
+
+        # TP_FILL_REPLENISH has different reason from "REPLENISH" — not filtered by freeze
+        replenish_actions = [
+            la for la in out2.live_actions if la.action.reason == "TP_FILL_REPLENISH"
+        ]
+        assert len(replenish_actions) == 2, (
+            f"TP_FILL_REPLENISH should pass through freeze, got {len(replenish_actions)}"
+        )
