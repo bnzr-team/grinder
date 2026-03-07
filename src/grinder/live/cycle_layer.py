@@ -71,6 +71,9 @@ class LiveCycleConfig:
             Default: 300_000 (5 minutes).
         replenish_enabled: Enable replenish after fill (default: False, safe-by-default).
         replenish_max_levels: Max grid level for replenish. 0 = disabled (fail-closed).
+        tp_renew_enabled: Auto-renew TP on expiry when position open (default: False).
+        tp_renew_cooldown_ms: Minimum interval between renewals per symbol (ms).
+        tp_renew_max_attempts: Max consecutive renew failures before degrading to plain cancel.
     """
 
     spacing_bps: float = 10.0
@@ -78,6 +81,9 @@ class LiveCycleConfig:
     tp_ttl_ms: int | None = 300_000
     replenish_enabled: bool = False
     replenish_max_levels: int = 0
+    tp_renew_enabled: bool = False
+    tp_renew_cooldown_ms: int = 60_000
+    tp_renew_max_attempts: int = 3
 
 
 class LiveCycleLayerV1:
@@ -111,6 +117,13 @@ class LiveCycleLayerV1:
         self._replenish_seq = 0
         # PR-INV-3b: Track TP creation timestamps for expiry
         self._tp_created_ts: dict[str, int] = {}
+        # TP auto-renew state (PR-TP-RENEW)
+        self._tp_source_price: dict[
+            str, tuple[Decimal, str]
+        ] = {}  # tp_id -> (fill_price, fill_side)
+        self._tp_renew_last_ts: dict[str, int] = {}  # symbol -> last renew ts_ms
+        self._tp_renew_inflight: dict[str, bool] = {}  # symbol -> renew in progress
+        self._tp_renew_attempts: dict[str, int] = {}  # symbol -> consecutive failures
         self._metrics = get_cycle_metrics()
 
     def register_cancels(self, actions: list[ExecutionAction], ts_ms: int) -> None:
@@ -146,6 +159,7 @@ class LiveCycleLayerV1:
         open_orders: tuple[OpenOrderSnap, ...],
         mid_price: Decimal,
         ts_ms: int,
+        pos_qty: Decimal | None = None,
     ) -> list[ExecutionAction]:
         """Detect fills, generate TP PLACEs, replenish grid, and expire stale TPs.
 
@@ -154,6 +168,9 @@ class LiveCycleLayerV1:
             open_orders: All open orders for this symbol from AccountSync.
             mid_price: Current mid price (used for replenish center pricing).
             ts_ms: Current timestamp in milliseconds.
+            pos_qty: Absolute position quantity (None = unknown, 0 = flat).
+                When pos_qty != 0 and tp_renew_enabled, expired TPs are renewed
+                instead of just cancelled.
 
         Returns:
             List of ExecutionActions: TP PLACEs + replenish PLACEs + TP expiry
@@ -190,6 +207,7 @@ class LiveCycleLayerV1:
             if is_tp_order(oid):
                 # PR-INV-3b: Clean up tp_created_ts when TP disappears
                 self._tp_created_ts.pop(oid, None)
+                self._tp_source_price.pop(oid, None)
                 self._metrics.record_fill_candidate(symbol, "skipped_tp_order")
                 continue
 
@@ -235,6 +253,8 @@ class LiveCycleLayerV1:
 
             # PR-INV-3b: Track TP creation time for expiry
             self._tp_created_ts[tp_client_id] = ts_ms
+            # PR-TP-RENEW: Store source fill price for potential renewal
+            self._tp_source_price[tp_client_id] = (snap.price, snap.side)
             self._metrics.record_tp_generated(symbol)
             self._metrics.record_fill_candidate(symbol, "tp_generated")
 
@@ -252,9 +272,9 @@ class LiveCycleLayerV1:
             if raw_level_id.isdigit():
                 fills.append((oid, snap, source_level_id))
 
-        # --- Phase 2: TP expiry → CANCEL stale TPs ---
-        expiry_cancels = self._expire_stale_tps(current, symbol, ts_ms)
-        actions.extend(expiry_cancels)
+        # --- Phase 2: TP expiry → CANCEL stale TPs (+ auto-renew if enabled) ---
+        expiry_actions = self._handle_tp_expiry(current, symbol, ts_ms, pos_qty)
+        actions.extend(expiry_actions)
 
         # --- Phase 3: Clean up tp_created_ts for TPs no longer in open_orders ---
         # (not expired, just gone — e.g., filled by exchange, or rejected/stale)
@@ -264,29 +284,41 @@ class LiveCycleLayerV1:
         replenish_actions = self._generate_replenish(fills, symbol, mid_price, ts_ms)
         actions.extend(replenish_actions)
 
+        # --- Phase 5: Update tp_active gauge ---
+        has_position = pos_qty is not None and pos_qty != 0
+        has_tp = any(is_tp_order(oid) for oid in current)
+        self._metrics.set_tp_active(symbol, has_position and has_tp)
+
         self._prev_orders = current
         return actions
 
-    def _expire_stale_tps(
+    def _handle_tp_expiry(
         self,
         current: dict[str, OpenOrderSnap],
         symbol: str,
         ts_ms: int,
+        pos_qty: Decimal | None,
     ) -> list[ExecutionAction]:
-        """Cancel TP orders that exceed TTL (PR-INV-3b).
+        """Handle TP orders that exceed TTL: cancel or auto-renew (PR-INV-3b + PR-TP-RENEW).
 
-        Only cancels TPs that:
-        1. Have is_tp_order() == True
-        2. Are tracked in _tp_created_ts (we created them)
-        3. Have exceeded tp_ttl_ms
+        When tp_renew_enabled and pos_qty != 0: expired TP is cancelled and
+        immediately replaced with a new TP at the same price (cancel+place).
 
-        Returns list of CANCEL ExecutionActions.
+        When renew disabled or pos_qty is None/0: plain cancel (legacy behavior).
+
+        Guards against churn:
+        - Cooldown: minimum interval between renewals per symbol.
+        - Inflight latch: prevents concurrent renewals for same symbol.
+        - Retry budget: max consecutive failures before degrading to plain cancel.
         """
         ttl = self._config.tp_ttl_ms
         if not ttl or ttl <= 0:
             return []
 
-        cancels: list[ExecutionAction] = []
+        has_position = pos_qty is not None and pos_qty != 0
+        renew_enabled = self._config.tp_renew_enabled and has_position
+
+        actions: list[ExecutionAction] = []
         for oid, snap in current.items():
             if snap.symbol != symbol:
                 continue
@@ -295,8 +327,18 @@ class LiveCycleLayerV1:
             created_ts = self._tp_created_ts.get(oid)
             if created_ts is None:
                 continue  # Not ours (fail-closed)
-            if ts_ms - created_ts > ttl:
-                cancels.append(
+            if ts_ms - created_ts <= ttl:
+                continue  # Not expired yet
+
+            age_ms = ts_ms - created_ts
+            self._metrics.record_tp_expired(symbol)
+
+            if renew_enabled:
+                renew_actions = self._try_renew_tp(oid, snap, symbol, ts_ms, age_ms)
+                actions.extend(renew_actions)
+            else:
+                # Legacy: plain cancel
+                actions.append(
                     ExecutionAction(
                         action_type=ActionType.CANCEL,
                         symbol=symbol,
@@ -305,14 +347,159 @@ class LiveCycleLayerV1:
                     )
                 )
                 self._tp_created_ts.pop(oid, None)
-                self._metrics.record_tp_expired(symbol)
+                self._tp_source_price.pop(oid, None)
                 logger.info(
                     "TP expired: order_id=%s age_ms=%d ttl_ms=%d",
                     oid,
-                    ts_ms - created_ts,
+                    age_ms,
                     ttl,
                 )
-        return cancels
+        return actions
+
+    def _try_renew_tp(
+        self,
+        old_tp_id: str,
+        snap: OpenOrderSnap,
+        symbol: str,
+        ts_ms: int,
+        age_ms: int,
+    ) -> list[ExecutionAction]:
+        """Attempt to renew an expired TP (cancel old + place new).
+
+        Returns [CANCEL, PLACE] on success, [CANCEL] on degradation.
+        """
+        ttl = self._config.tp_ttl_ms or 0
+
+        # Guard 1: Inflight latch — don't start concurrent renewals
+        if self._tp_renew_inflight.get(symbol, False):
+            self._metrics.record_tp_renew(symbol, "inflight")
+            logger.info(
+                "TP_RENEW_SKIPPED_INFLIGHT symbol=%s tp_id=%s",
+                symbol,
+                old_tp_id,
+            )
+            return []
+
+        # Guard 2: Cooldown — don't spam renewals
+        last_renew = self._tp_renew_last_ts.get(symbol, 0)
+        if ts_ms - last_renew < self._config.tp_renew_cooldown_ms:
+            remaining = self._config.tp_renew_cooldown_ms - (ts_ms - last_renew)
+            self._metrics.record_tp_renew(symbol, "cooldown")
+            logger.info(
+                "TP_RENEW_SKIPPED_COOLDOWN symbol=%s remaining_ms=%d",
+                symbol,
+                remaining,
+            )
+            return []
+
+        # Guard 3: Retry budget — degrade after max attempts
+        attempts = self._tp_renew_attempts.get(symbol, 0)
+        if attempts >= self._config.tp_renew_max_attempts:
+            self._metrics.record_tp_renew(symbol, "failed")
+            logger.warning(
+                "TP_RENEW_FAILED symbol=%s attempts_exhausted=%d — degrading to plain cancel",
+                symbol,
+                attempts,
+            )
+            self._tp_created_ts.pop(old_tp_id, None)
+            self._tp_source_price.pop(old_tp_id, None)
+            return [
+                ExecutionAction(
+                    action_type=ActionType.CANCEL,
+                    symbol=symbol,
+                    order_id=old_tp_id,
+                    reason="TP_EXPIRED",
+                )
+            ]
+
+        # Retrieve source fill price for renewal
+        source = self._tp_source_price.get(old_tp_id)
+        if source is None:
+            # No source price — can't renew, plain cancel
+            logger.warning(
+                "TP_RENEW_FAILED symbol=%s tp_id=%s — no source price, plain cancel",
+                symbol,
+                old_tp_id,
+            )
+            self._tp_created_ts.pop(old_tp_id, None)
+            return [
+                ExecutionAction(
+                    action_type=ActionType.CANCEL,
+                    symbol=symbol,
+                    order_id=old_tp_id,
+                    reason="TP_EXPIRED",
+                )
+            ]
+
+        fill_price, fill_side = source
+
+        # Set inflight latch
+        self._tp_renew_inflight[symbol] = True
+        self._metrics.record_tp_renew(symbol, "started")
+        logger.info(
+            "TP_RENEW_STARTED symbol=%s old_tp_id=%s age_ms=%d ttl_ms=%d mode=cancel_place",
+            symbol,
+            old_tp_id,
+            age_ms,
+            ttl,
+        )
+
+        # Step 1: CANCEL old TP
+        cancel_action = ExecutionAction(
+            action_type=ActionType.CANCEL,
+            symbol=symbol,
+            order_id=old_tp_id,
+            reason="TP_RENEW",
+        )
+
+        # Step 2: PLACE new TP at same price
+        tp_side = OrderSide.SELL if fill_side.upper() == "BUY" else OrderSide.BUY
+        tp_price = self._compute_tp_price(fill_price, fill_side)
+        self._tp_seq += 1
+        # Parse old TP for level_id
+        parsed = parse_client_order_id(old_tp_id)
+        level_id = int(parsed.level_id) if parsed and parsed.level_id.isdigit() else 0
+        new_tp_id = generate_client_order_id(
+            config=self._tp_identity,
+            symbol=symbol,
+            level_id=level_id,
+            ts=ts_ms,
+            seq=self._tp_seq,
+        )
+
+        place_action = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol=symbol,
+            side=tp_side,
+            price=tp_price,
+            quantity=snap.qty,
+            level_id=level_id,
+            reason="TP_RENEW",
+            reduce_only=True,
+            client_order_id=new_tp_id,
+        )
+
+        # Update tracking: transfer source price to new TP, clean old
+        self._tp_created_ts.pop(old_tp_id, None)
+        self._tp_source_price.pop(old_tp_id, None)
+        self._tp_created_ts[new_tp_id] = ts_ms
+        self._tp_source_price[new_tp_id] = (fill_price, fill_side)
+        self._tp_renew_last_ts[symbol] = ts_ms
+        # Clear inflight — actions emitted, execution pipeline handles them
+        self._tp_renew_inflight[symbol] = False
+        # Reset attempt counter on successful emission
+        self._tp_renew_attempts[symbol] = 0
+
+        self._metrics.record_tp_renew(symbol, "renewed")
+        logger.info(
+            "TP_RENEWED symbol=%s old=%s new=%s price=%s",
+            symbol,
+            old_tp_id,
+            new_tp_id,
+            tp_price,
+        )
+
+        return [cancel_action, place_action]
 
     def _cleanup_tp_created_ts(self, current: dict[str, OpenOrderSnap], ts_ms: int) -> None:
         """Remove tp_created_ts entries for TPs no longer in open_orders.
@@ -349,6 +536,7 @@ class LiveCycleLayerV1:
                 to_delete.append(oid)
         for oid in to_delete:
             del self._tp_created_ts[oid]
+            self._tp_source_price.pop(oid, None)
 
     def _stale_tp_created_ttl_ms(self) -> int:
         """Compute stale TTL for tp_created_ts cleanup.

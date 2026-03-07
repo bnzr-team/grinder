@@ -20,7 +20,7 @@ from decimal import Decimal
 from grinder.account.contracts import OpenOrderSnap
 from grinder.execution.types import ActionType, ExecutionAction
 from grinder.live.cycle_layer import LiveCycleConfig, LiveCycleLayerV1
-from grinder.live.cycle_metrics import reset_cycle_metrics
+from grinder.live.cycle_metrics import get_cycle_metrics, reset_cycle_metrics
 
 
 def _snap(
@@ -848,3 +848,393 @@ class TestReplenishZeroMaxLevels:
 
         replenish_actions = [a for a in actions if a.reason == "REPLENISH"]
         assert len(replenish_actions) == 0
+
+
+# --- TP Auto-Renew tests (PR-TP-RENEW) ---
+
+
+def _make_renew_layer(
+    *,
+    tp_ttl_ms: int = 60_000,
+    renew_enabled: bool = True,
+    cooldown_ms: int = 60_000,
+    max_attempts: int = 3,
+) -> LiveCycleLayerV1:
+    """Create a cycle layer with TP renew config."""
+    return LiveCycleLayerV1(
+        LiveCycleConfig(
+            spacing_bps=10.0,
+            tick_size=Decimal("0.10"),
+            tp_ttl_ms=tp_ttl_ms,
+            tp_renew_enabled=renew_enabled,
+            tp_renew_cooldown_ms=cooldown_ms,
+            tp_renew_max_attempts=max_attempts,
+        )
+    )
+
+
+def _setup_fill_and_tp(
+    layer: LiveCycleLayerV1,
+    *,
+    fill_side: str = "BUY",
+    fill_price: Decimal = Decimal("50000"),
+) -> tuple[str, Decimal]:
+    """Run layer through fill detection → TP generation, return (tp_client_id, tp_price)."""
+    grid_oid = "grinder_d_BTCUSDT_1_1000_1"
+    grid_order = _snap(grid_oid, side=fill_side, price=fill_price)
+
+    # Call 1: establish prev
+    layer.on_snapshot(
+        symbol="BTCUSDT",
+        open_orders=(grid_order,),
+        mid_price=fill_price,
+        ts_ms=1_000_000,
+    )
+    # Call 2: grid gone → TP generated
+    actions = layer.on_snapshot(
+        symbol="BTCUSDT",
+        open_orders=(),
+        mid_price=fill_price,
+        ts_ms=2_000_000,
+    )
+    tp_action = [a for a in actions if a.action_type == ActionType.PLACE and a.reason == "TP_CLOSE"]
+    assert len(tp_action) == 1
+    tp_id = tp_action[0].client_order_id
+    assert tp_id is not None
+    tp_price = tp_action[0].price
+    assert tp_price is not None
+    return tp_id, tp_price
+
+
+class TestTpAutoRenew:
+    """Tests for TP auto-renew on expiry (PR-TP-RENEW)."""
+
+    def test_tp_expiry_with_position_renews(self) -> None:
+        """REQ-001: Expired TP with pos_qty != 0 emits [CANCEL old, PLACE new]."""
+        layer = _make_renew_layer()
+        tp_id, tp_price = _setup_fill_and_tp(layer)
+        tp_snap = _snap(tp_id, side="SELL", price=tp_price)
+
+        # TP visible, not expired
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(tp_snap,),
+            mid_price=Decimal("50000"),
+            ts_ms=2_030_000,
+            pos_qty=Decimal("0.002"),
+        )
+
+        # TP expired (age=61s > 60s TTL), position open → renew
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(tp_snap,),
+            mid_price=Decimal("50000"),
+            ts_ms=2_061_000,
+            pos_qty=Decimal("0.002"),
+        )
+
+        cancels = [a for a in actions if a.action_type == ActionType.CANCEL]
+        places = [a for a in actions if a.action_type == ActionType.PLACE]
+        assert len(cancels) == 1
+        assert cancels[0].order_id == tp_id
+        assert cancels[0].reason == "TP_RENEW"
+        assert len(places) == 1
+        assert places[0].reduce_only is True
+        assert places[0].reason == "TP_RENEW"
+        assert places[0].side is not None
+        assert places[0].side.value == "SELL"  # BUY fill → SELL TP
+
+    def test_tp_expiry_without_position_plain_cancel(self) -> None:
+        """TP expired with pos_qty=0 falls back to legacy plain cancel."""
+        layer = _make_renew_layer()
+        tp_id, tp_price = _setup_fill_and_tp(layer)
+        tp_snap = _snap(tp_id, side="SELL", price=tp_price)
+
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(tp_snap,),
+            mid_price=Decimal("50000"),
+            ts_ms=2_030_000,
+            pos_qty=Decimal("0"),
+        )
+
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(tp_snap,),
+            mid_price=Decimal("50000"),
+            ts_ms=2_061_000,
+            pos_qty=Decimal("0"),
+        )
+
+        cancels = [a for a in actions if a.action_type == ActionType.CANCEL]
+        places = [a for a in actions if a.action_type == ActionType.PLACE]
+        assert len(cancels) == 1
+        assert cancels[0].reason == "TP_EXPIRED"
+        assert len(places) == 0
+
+    def test_renew_cooldown_blocks_spam(self) -> None:
+        """REQ-002: Second renewal within cooldown is skipped."""
+        layer = _make_renew_layer(cooldown_ms=120_000)
+        tp_id, tp_price = _setup_fill_and_tp(layer)
+        tp_snap = _snap(tp_id, side="SELL", price=tp_price)
+
+        # Establish TP in prev
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(tp_snap,),
+            mid_price=Decimal("50000"),
+            ts_ms=2_030_000,
+            pos_qty=Decimal("0.002"),
+        )
+
+        # First expiry → renew succeeds
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(tp_snap,),
+            mid_price=Decimal("50000"),
+            ts_ms=2_061_000,
+            pos_qty=Decimal("0.002"),
+        )
+        assert any(a.reason == "TP_RENEW" and a.action_type == ActionType.PLACE for a in actions)
+
+        # Get new TP id from the place action
+        new_tp_id = next(a for a in actions if a.action_type == ActionType.PLACE).client_order_id
+        assert new_tp_id is not None
+        new_tp_snap = _snap(new_tp_id, side="SELL", price=tp_price)
+
+        # Establish new TP in prev
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(new_tp_snap,),
+            mid_price=Decimal("50000"),
+            ts_ms=2_062_000,
+            pos_qty=Decimal("0.002"),
+        )
+
+        # Second expiry within cooldown (120s) → skipped
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(new_tp_snap,),
+            mid_price=Decimal("50000"),
+            ts_ms=2_122_000,  # 61s after second TP created, but only 61s after last renew (< 120s cooldown)
+            pos_qty=Decimal("0.002"),
+        )
+        # Should have no renew actions (cooldown blocks)
+        renew_places = [
+            a for a in actions if a.reason == "TP_RENEW" and a.action_type == ActionType.PLACE
+        ]
+        assert len(renew_places) == 0
+
+    def test_renew_inflight_latch_prevents_concurrent(self) -> None:
+        """REQ-003: Inflight latch prevents concurrent renewals."""
+        layer = _make_renew_layer()
+        tp_id, tp_price = _setup_fill_and_tp(layer)
+        tp_snap = _snap(tp_id, side="SELL", price=tp_price)
+
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(tp_snap,),
+            mid_price=Decimal("50000"),
+            ts_ms=2_030_000,
+            pos_qty=Decimal("0.002"),
+        )
+
+        # Manually set inflight latch
+        layer._tp_renew_inflight["BTCUSDT"] = True
+
+        # Expiry with inflight → skipped
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(tp_snap,),
+            mid_price=Decimal("50000"),
+            ts_ms=2_061_000,
+            pos_qty=Decimal("0.002"),
+        )
+        renew_actions = [a for a in actions if a.reason == "TP_RENEW"]
+        assert len(renew_actions) == 0
+
+    def test_renew_max_attempts_degrades(self) -> None:
+        """REQ-004: After max failures, degrades to plain cancel."""
+        layer = _make_renew_layer(max_attempts=2)
+        tp_id, tp_price = _setup_fill_and_tp(layer)
+        tp_snap = _snap(tp_id, side="SELL", price=tp_price)
+
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(tp_snap,),
+            mid_price=Decimal("50000"),
+            ts_ms=2_030_000,
+            pos_qty=Decimal("0.002"),
+        )
+
+        # Exhaust retry budget
+        layer._tp_renew_attempts["BTCUSDT"] = 2
+
+        # Expiry with exhausted budget → plain cancel (degraded)
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(tp_snap,),
+            mid_price=Decimal("50000"),
+            ts_ms=2_061_000,
+            pos_qty=Decimal("0.002"),
+        )
+        cancels = [a for a in actions if a.action_type == ActionType.CANCEL]
+        places = [a for a in actions if a.action_type == ActionType.PLACE]
+        assert len(cancels) == 1
+        assert cancels[0].reason == "TP_EXPIRED"
+        assert len(places) == 0
+
+    def test_renew_metrics_recorded(self) -> None:
+        """REQ-005: Renew outcomes recorded in CycleMetrics."""
+        reset_cycle_metrics()
+        layer = _make_renew_layer()
+        tp_id, tp_price = _setup_fill_and_tp(layer)
+        tp_snap = _snap(tp_id, side="SELL", price=tp_price)
+
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(tp_snap,),
+            mid_price=Decimal("50000"),
+            ts_ms=2_030_000,
+            pos_qty=Decimal("0.002"),
+        )
+
+        # Trigger renew
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(tp_snap,),
+            mid_price=Decimal("50000"),
+            ts_ms=2_061_000,
+            pos_qty=Decimal("0.002"),
+        )
+
+        metrics = get_cycle_metrics()
+        assert metrics.tp_renew.get(("BTCUSDT", "started"), 0) == 1
+        assert metrics.tp_renew.get(("BTCUSDT", "renewed"), 0) == 1
+        lines = metrics.format_metrics()
+        assert any("grinder_cycle_tp_renew_total" in line for line in lines)
+
+    def test_renew_logging(self) -> None:
+        """REQ-006: Renew lifecycle produces correct actions (log verified via e2e)."""
+        layer = _make_renew_layer()
+        tp_id, tp_price = _setup_fill_and_tp(layer)
+        tp_snap = _snap(tp_id, side="SELL", price=tp_price)
+
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(tp_snap,),
+            mid_price=Decimal("50000"),
+            ts_ms=2_030_000,
+            pos_qty=Decimal("0.002"),
+        )
+
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(tp_snap,),
+            mid_price=Decimal("50000"),
+            ts_ms=2_061_000,
+            pos_qty=Decimal("0.002"),
+        )
+
+        # Verify renew lifecycle actions: CANCEL(TP_RENEW) + PLACE(TP_RENEW)
+        renew_cancel = [
+            a for a in actions if a.action_type == ActionType.CANCEL and a.reason == "TP_RENEW"
+        ]
+        renew_place = [
+            a for a in actions if a.action_type == ActionType.PLACE and a.reason == "TP_RENEW"
+        ]
+        assert len(renew_cancel) == 1
+        assert len(renew_place) == 1
+        # New TP has different client_order_id
+        assert renew_place[0].client_order_id != tp_id
+
+    def test_config_defaults(self) -> None:
+        """REQ-007: LiveCycleConfig has correct defaults for renew fields."""
+        cfg = LiveCycleConfig()
+        assert cfg.tp_renew_enabled is False
+        assert cfg.tp_renew_cooldown_ms == 60_000
+        assert cfg.tp_renew_max_attempts == 3
+
+    def test_renew_passes_grid_freeze(self) -> None:
+        """REQ-008: TP_RENEW actions pass through grid freeze filter."""
+        layer = _make_renew_layer()
+        tp_id, tp_price = _setup_fill_and_tp(layer)
+        tp_snap = _snap(tp_id, side="SELL", price=tp_price)
+
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(tp_snap,),
+            mid_price=Decimal("50000"),
+            ts_ms=2_030_000,
+            pos_qty=Decimal("0.002"),
+        )
+
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(tp_snap,),
+            mid_price=Decimal("50000"),
+            ts_ms=2_061_000,
+            pos_qty=Decimal("0.002"),
+        )
+
+        # Engine filters reason="REPLENISH" when frozen, but TP_RENEW must pass
+        renew_actions = [a for a in actions if a.reason == "TP_RENEW"]
+        assert len(renew_actions) == 2  # CANCEL + PLACE
+        assert all(a.reason != "REPLENISH" for a in renew_actions)
+
+    def test_renew_is_cancel_plus_place(self) -> None:
+        """REQ-009: Renew emits exactly [CANCEL, PLACE] pair, not REPLACE."""
+        layer = _make_renew_layer()
+        tp_id, tp_price = _setup_fill_and_tp(layer)
+        tp_snap = _snap(tp_id, side="SELL", price=tp_price)
+
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(tp_snap,),
+            mid_price=Decimal("50000"),
+            ts_ms=2_030_000,
+            pos_qty=Decimal("0.002"),
+        )
+
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(tp_snap,),
+            mid_price=Decimal("50000"),
+            ts_ms=2_061_000,
+            pos_qty=Decimal("0.002"),
+        )
+
+        renew_actions = [a for a in actions if a.reason == "TP_RENEW"]
+        assert len(renew_actions) == 2
+        assert renew_actions[0].action_type == ActionType.CANCEL
+        assert renew_actions[1].action_type == ActionType.PLACE
+        # No REPLACE action type
+        assert all(a.action_type != ActionType.REPLACE for a in actions)
+
+    def test_renew_preserves_original_price(self) -> None:
+        """REQ-010: Renewed TP uses original fill_price, not current mid."""
+        layer = _make_renew_layer()
+        tp_id, tp_price = _setup_fill_and_tp(layer, fill_price=Decimal("50000"))
+        tp_snap = _snap(tp_id, side="SELL", price=tp_price)
+
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(tp_snap,),
+            mid_price=Decimal("50000"),
+            ts_ms=2_030_000,
+            pos_qty=Decimal("0.002"),
+        )
+
+        # Mid price changed significantly, but renew should use original fill price
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(tp_snap,),
+            mid_price=Decimal("55000"),  # mid moved +10%
+            ts_ms=2_061_000,
+            pos_qty=Decimal("0.002"),
+        )
+
+        place_actions = [a for a in actions if a.action_type == ActionType.PLACE]
+        assert len(place_actions) == 1
+        # Price should be based on fill_price=50000, not mid=55000
+        assert place_actions[0].price == tp_price  # same as original TP

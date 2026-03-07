@@ -34,6 +34,7 @@ import os
 import time
 from collections import deque
 from dataclasses import dataclass, field
+from decimal import Decimal
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
@@ -80,8 +81,6 @@ from grinder.risk.emergency_exit import EmergencyExitExecutor
 from grinder.risk.emergency_exit_metrics import get_emergency_exit_metrics
 
 if TYPE_CHECKING:
-    from decimal import Decimal
-
     from grinder.account.contracts import AccountSnapshot
     from grinder.contracts import Snapshot
     from grinder.execution.port import ExchangePort
@@ -515,7 +514,7 @@ class LiveEngineV0:
         """Update configuration (e.g., arm/disarm, change mode)."""
         self._config = config
 
-    def process_snapshot(self, snapshot: Snapshot) -> LiveEngineOutput:  # noqa: PLR0912
+    def process_snapshot(self, snapshot: Snapshot) -> LiveEngineOutput:  # noqa: PLR0912, PLR0915
         """Process snapshot through paper engine and execute on live exchange.
 
         Flow:
@@ -598,12 +597,15 @@ class LiveEngineV0:
             symbol_orders = tuple(
                 o for o in self._last_account_snapshot.open_orders if o.symbol == snapshot.symbol
             )
+            # PR-TP-RENEW: pass position qty for auto-renew decision
+            pos_qty = self._get_position_qty(snapshot.symbol)
             self._cycle_layer.register_cancels(raw_actions, ts_ms=snapshot.ts)  # type: ignore[union-attr]
             cycle_actions = self._cycle_layer.on_snapshot(  # type: ignore[union-attr]
                 symbol=snapshot.symbol,
                 open_orders=symbol_orders,
                 mid_price=snapshot.mid_price,
                 ts_ms=snapshot.ts,
+                pos_qty=pos_qty,
             )
             # Filter out replenish when grid frozen (TP reduce-only still allowed)
             if grid_frozen and cycle_actions:
@@ -1015,6 +1017,20 @@ class LiveEngineV0:
         if snap is None:
             return False
         return any(p.qty > 0 for p in snap.positions if p.symbol == symbol)
+
+    def _get_position_qty(self, symbol: str) -> Decimal | None:
+        """Get absolute position quantity for symbol (PR-TP-RENEW).
+
+        Returns:
+            Decimal quantity (>= 0) if position found, None if no snapshot.
+        """
+        snap = self._last_account_snapshot
+        if snap is None:
+            return None
+        for p in snap.positions:
+            if p.symbol == symbol:
+                return p.qty
+        return Decimal("0")
 
     def _filter_grid_shift(
         self,

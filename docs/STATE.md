@@ -1364,6 +1364,15 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - GRID_FILL (missing orders) and GRID_TRIM (extra orders) always pass through
   - Log: `GRID_SHIFT_SUPPRESSED symbol=X move=Y bps < threshold=Z bps`
   - Recommended: `50` bps for mainnet (prevents sub-cent noise from triggering full grid rebuild)
+- **TP auto-renew on expiry** (`GRINDER_TP_RENEW_ENABLED`, default `false`):
+  - When TP expires (TTL) and position is still open (pos_qty != 0), cancel old TP + place new TP at same price
+  - Invariant: position open = TP must exist (auto-healed on expiry instead of abandoned)
+  - Source price preserved: renew uses original `fill_price` formula, not current mid
+  - 3 anti-churn guards: cooldown (`GRINDER_TP_RENEW_COOLDOWN_MS`, default 60s), inflight latch (per symbol), retry budget (`GRINDER_TP_RENEW_MAX_ATTEMPTS`, default 3 then degrade to plain cancel)
+  - Metrics: `grinder_cycle_tp_renew_total{symbol,outcome}` (started/renewed/failed/cooldown/inflight), `grinder_tp_active_gauge{symbol}` (0/1)
+  - Log: `TP_RENEW_STARTED`, `TP_RENEWED`, `TP_RENEW_FAILED`, `TP_RENEW_COOLDOWN`, `TP_RENEW_INFLIGHT`, `TP_RENEW_DEGRADED`
+  - Safe-by-default: disabled unless explicitly enabled
+  - Renew actions pass through grid freeze filter (only REPLENISH is blocked)
 - **Order budget exhaustion latch** (automatic, no env var):
   - When port returns "Order count limit reached", latch activates: `ORDER_BUDGET_LATCH`
   - Planner suppressed for remaining run (no new PLACE/CANCEL generation)
