@@ -1383,12 +1383,13 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - Safe-by-default: disabled unless explicitly enabled
   - No replenish when position fully closed (pos_qty == 0) or when no anchors available
   - Log: `TP_FILL_REPLENISH symbol=X pos_qty=Y buy=Z sell=W`
-- **Reduce-only enforcement** (always active, no env var toggle):
-  - When position open, opposite-side PLACE/REPLACE orders forced `reduce_only=True`
+- **Reduce-only enforcement** (`GRINDER_LIVE_REDUCE_ONLY_ENFORCEMENT`, default `true`):
+  - When enabled and position open, opposite-side PLACE/REPLACE orders forced `reduce_only=True`
   - LONG -> all SELL `reduce_only=True`, SHORT -> all BUY `reduce_only=True`
   - Flat/unknown position -> no enforcement (fail-open)
   - Prevents unintended position reversal (e.g. grid SELL opening SHORT after TP closes LONG)
-  - TP orders already have `reduce_only=True` -> enforcement is a no-op for them
+  - Set `GRINDER_LIVE_REDUCE_ONLY_ENFORCEMENT=0` for two-sided MM mode (grid can open/reverse)
+  - TP orders always keep `reduce_only=True` regardless of this flag (set by CycleLayer)
   - Metric: `grinder_live_reduce_only_enforced_total{sym,side,reason}`
   - Log: `REDUCE_ONLY_ENFORCED` (warning level, only when flag actually changed)
 - **Partial TP qty mode** (`GRINDER_TP_QTY_MODE`, default `full`):

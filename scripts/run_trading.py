@@ -735,6 +735,10 @@ def build_engine(  # noqa: PLR0915
     )
     print("  FeatureEngine enabled (bar_interval=60s, atr_period=14)")
 
+    # PR-ROLL-1b: reduce-only enforcement toggle
+    ro_enforcement = parse_bool("GRINDER_LIVE_REDUCE_ONLY_ENFORCEMENT", default=True)
+    print(f"  Reduce-only enforcement: {'enabled' if ro_enforcement else 'disabled'}")
+
     # Live grid planner (opt-in via GRINDER_LIVE_PLANNER_ENABLED, PR-L2)
     grid_planners = _build_grid_planners(symbols or [], symbol_constraints, paper_kwargs)
 
