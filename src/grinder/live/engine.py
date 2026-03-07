@@ -68,6 +68,7 @@ from grinder.execution.smart_order_router import (
 )
 from grinder.execution.sor_metrics import get_sor_metrics
 from grinder.execution.types import ActionType, ExecutionAction
+from grinder.live.live_metrics import get_live_engine_metrics
 from grinder.live.place_tracker import correlate_recent_places
 from grinder.ml.fill_model_loader import extract_online_features
 from grinder.ml.threshold_resolver import (
@@ -1041,6 +1042,59 @@ class LiveEngineV0:
             return -1
         return None  # flat or no position
 
+    def _enforce_reduce_only(
+        self,
+        action: ExecutionAction,
+        pos_sign: int | None,
+    ) -> bool:
+        """Enforce reduce_only on opposite-side orders when position open (PR-ROLL-1).
+
+        Rules:
+        - pos_sign=+1 (LONG) -> SELL orders get reduce_only=True
+        - pos_sign=-1 (SHORT) -> BUY orders get reduce_only=True
+        - pos_sign=None -> no enforcement (flat/unknown = fail-open)
+        - CANCEL actions: skip (no side relevance)
+        - Already reduce_only=True: skip (no metric, no log)
+
+        Returns True if enforcement was applied, False otherwise.
+        """
+        # Skip CANCEL — no side relevance
+        if action.action_type == ActionType.CANCEL:
+            return False
+
+        # Fail-open: unknown/flat position → don't enforce
+        if pos_sign is None:
+            return False
+
+        # Already reduce_only → no-op (TP orders come pre-set)
+        if action.reduce_only:
+            return False
+
+        sym = action.symbol or ""
+        enforced = False
+
+        if pos_sign == 1 and action.side == OrderSide.SELL:
+            action.reduce_only = True
+            reason = "position_long"
+            enforced = True
+        elif pos_sign == -1 and action.side == OrderSide.BUY:
+            action.reduce_only = True
+            reason = "position_short"
+            enforced = True
+
+        if enforced:
+            side_str = action.side.value if action.side else "UNKNOWN"
+            logger.warning(
+                "REDUCE_ONLY_ENFORCED sym=%s side=%s reason=%s action=%s",
+                sym,
+                side_str,
+                reason,
+                action.action_type.value,
+            )
+            get_live_engine_metrics().record_reduce_only_enforced(sym, side_str, reason)
+
+        return enforced
+
     def _has_open_position(self, symbol: str) -> bool:
         """Check if symbol has any non-zero position (cycle open).
 
@@ -1317,6 +1371,10 @@ class LiveEngineV0:
         """
         # PR-INV-1: position-aware intent classification
         pos_sign = self._get_position_sign(action.symbol) if action.symbol else None
+
+        # PR-ROLL-1: enforce reduce_only on opposite-side orders
+        self._enforce_reduce_only(action, pos_sign)
+
         intent = classify_intent(action, pos_sign=pos_sign)
 
         # Gate 1: Arming check

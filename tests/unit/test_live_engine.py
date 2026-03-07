@@ -63,6 +63,7 @@ from grinder.live.fsm_driver import FsmDriver
 from grinder.live.fsm_metrics import get_fsm_metrics, reset_fsm_metrics
 from grinder.live.fsm_orchestrator import FsmConfig, OrchestratorFSM
 from grinder.live.grid_planner import LiveGridConfig, LiveGridPlannerV1
+from grinder.live.live_metrics import get_live_engine_metrics, reset_live_engine_metrics
 from grinder.risk.drawdown_guard_v1 import (
     DrawdownGuardV1,
     DrawdownGuardV1Config,
@@ -3364,3 +3365,271 @@ class TestTpFillReplenishE2e:
         assert len(replenish_actions) == 2, (
             f"TP_FILL_REPLENISH should pass through freeze, got {len(replenish_actions)}"
         )
+
+
+# --- K) Reduce-only enforcement (PR-ROLL-1, 10 tests) ---
+
+
+class TestReduceOnlyEnforcement:
+    """Tests for _enforce_reduce_only() safety enforcement."""
+
+    @staticmethod
+    def _make_engine(port: Any = None) -> LiveEngineV0:
+        """Create a minimal engine for enforcement testing."""
+        paper = MagicMock()
+        paper.process_snapshot.return_value = MagicMock(actions=[])
+        if port is None:
+            port = NoOpExchangePort()
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        return LiveEngineV0(paper, port, config)
+
+    @staticmethod
+    def _long_snapshot(symbol: str = "BTCUSDT", qty: str = "0.01") -> AccountSnapshot:
+        """Create AccountSnapshot with a LONG position."""
+        return AccountSnapshot(
+            positions=(
+                PositionSnap(
+                    symbol=symbol,
+                    side="LONG",
+                    qty=Decimal(qty),
+                    entry_price=Decimal("50000"),
+                    mark_price=Decimal("50000"),
+                    unrealized_pnl=Decimal("0"),
+                    leverage=1,
+                    ts=1000,
+                ),
+            ),
+            open_orders=(),
+            ts=1000,
+            source="test",
+        )
+
+    @staticmethod
+    def _short_snapshot(symbol: str = "BTCUSDT", qty: str = "0.01") -> AccountSnapshot:
+        """Create AccountSnapshot with a SHORT position."""
+        return AccountSnapshot(
+            positions=(
+                PositionSnap(
+                    symbol=symbol,
+                    side="SHORT",
+                    qty=Decimal(qty),
+                    entry_price=Decimal("50000"),
+                    mark_price=Decimal("50000"),
+                    unrealized_pnl=Decimal("0"),
+                    leverage=1,
+                    ts=1000,
+                ),
+            ),
+            open_orders=(),
+            ts=1000,
+            source="test",
+        )
+
+    @staticmethod
+    def _flat_snapshot(symbol: str = "BTCUSDT") -> AccountSnapshot:
+        """Create AccountSnapshot with flat position (qty=0)."""
+        return AccountSnapshot(
+            positions=(
+                PositionSnap(
+                    symbol=symbol,
+                    side="LONG",
+                    qty=Decimal("0"),
+                    entry_price=Decimal("0"),
+                    mark_price=Decimal("50000"),
+                    unrealized_pnl=Decimal("0"),
+                    leverage=1,
+                    ts=1000,
+                ),
+            ),
+            open_orders=(),
+            ts=1000,
+            source="test",
+        )
+
+    def test_long_position_sell_enforced(self) -> None:
+        """pos=LONG, SELL PLACE -> reduce_only becomes True."""
+        engine = self._make_engine()
+        engine._last_account_snapshot = self._long_snapshot()
+        action = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            price=Decimal("51000"),
+            quantity=Decimal("0.01"),
+        )
+        pos_sign = engine._get_position_sign("BTCUSDT")
+        assert pos_sign == 1
+
+        result = engine._enforce_reduce_only(action, pos_sign)
+
+        assert result is True
+        assert action.reduce_only is True
+
+    def test_long_position_buy_unchanged(self) -> None:
+        """pos=LONG, BUY PLACE -> reduce_only stays False (same side)."""
+        engine = self._make_engine()
+        engine._last_account_snapshot = self._long_snapshot()
+        action = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.BUY,
+            price=Decimal("49000"),
+            quantity=Decimal("0.01"),
+        )
+        pos_sign = engine._get_position_sign("BTCUSDT")
+
+        result = engine._enforce_reduce_only(action, pos_sign)
+
+        assert result is False
+        assert action.reduce_only is False
+
+    def test_short_position_buy_enforced(self) -> None:
+        """pos=SHORT, BUY PLACE -> reduce_only becomes True."""
+        engine = self._make_engine()
+        engine._last_account_snapshot = self._short_snapshot()
+        action = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.BUY,
+            price=Decimal("49000"),
+            quantity=Decimal("0.01"),
+        )
+        pos_sign = engine._get_position_sign("BTCUSDT")
+        assert pos_sign == -1
+
+        result = engine._enforce_reduce_only(action, pos_sign)
+
+        assert result is True
+        assert action.reduce_only is True
+
+    def test_short_position_sell_unchanged(self) -> None:
+        """pos=SHORT, SELL PLACE -> reduce_only stays False (same side)."""
+        engine = self._make_engine()
+        engine._last_account_snapshot = self._short_snapshot()
+        action = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            price=Decimal("51000"),
+            quantity=Decimal("0.01"),
+        )
+        pos_sign = engine._get_position_sign("BTCUSDT")
+
+        result = engine._enforce_reduce_only(action, pos_sign)
+
+        assert result is False
+        assert action.reduce_only is False
+
+    def test_flat_no_enforcement(self) -> None:
+        """pos=flat (qty=0) -> reduce_only unchanged."""
+        engine = self._make_engine()
+        engine._last_account_snapshot = self._flat_snapshot()
+        action = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            price=Decimal("51000"),
+            quantity=Decimal("0.01"),
+        )
+        pos_sign = engine._get_position_sign("BTCUSDT")
+        assert pos_sign is None  # flat returns None
+
+        result = engine._enforce_reduce_only(action, pos_sign)
+
+        assert result is False
+        assert action.reduce_only is False
+
+    def test_pos_sign_none_no_enforcement(self) -> None:
+        """No snapshot / pos_sign=None -> no enforcement."""
+        engine = self._make_engine()
+        # No snapshot set -> _get_position_sign returns None
+        action = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            price=Decimal("51000"),
+            quantity=Decimal("0.01"),
+        )
+        result = engine._enforce_reduce_only(action, None)
+
+        assert result is False
+        assert action.reduce_only is False
+
+    def test_cancel_skipped(self) -> None:
+        """CANCEL action -> never enforced regardless of position."""
+        engine = self._make_engine()
+        engine._last_account_snapshot = self._long_snapshot()
+        action = ExecutionAction(
+            action_type=ActionType.CANCEL,
+            order_id="ORDER_123",
+            symbol="BTCUSDT",
+        )
+        pos_sign = engine._get_position_sign("BTCUSDT")
+        assert pos_sign == 1
+
+        result = engine._enforce_reduce_only(action, pos_sign)
+
+        assert result is False
+
+    def test_already_reduce_only_no_double_count(self) -> None:
+        """Action with reduce_only=True -> no metric increment, no log."""
+        reset_live_engine_metrics()
+        engine = self._make_engine()
+        engine._last_account_snapshot = self._long_snapshot()
+        action = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            price=Decimal("51000"),
+            quantity=Decimal("0.01"),
+            reduce_only=True,  # already set (e.g. TP order)
+        )
+        pos_sign = engine._get_position_sign("BTCUSDT")
+
+        result = engine._enforce_reduce_only(action, pos_sign)
+
+        assert result is False
+        assert action.reduce_only is True  # unchanged
+        metrics = get_live_engine_metrics()
+        assert len(metrics.reduce_only_enforced) == 0  # counter=0
+        reset_live_engine_metrics()
+
+    def test_metric_recorded(self) -> None:
+        """Verify counter incremented with correct {sym, side, reason}."""
+        reset_live_engine_metrics()
+        engine = self._make_engine()
+        engine._last_account_snapshot = self._long_snapshot()
+        action = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            price=Decimal("51000"),
+            quantity=Decimal("0.01"),
+        )
+        pos_sign = engine._get_position_sign("BTCUSDT")
+
+        engine._enforce_reduce_only(action, pos_sign)
+
+        metrics = get_live_engine_metrics()
+        key = ("BTCUSDT", "SELL", "position_long")
+        assert metrics.reduce_only_enforced.get(key) == 1
+        reset_live_engine_metrics()
+
+    def test_replace_enforced(self) -> None:
+        """REPLACE action also gets reduce_only=True when position open."""
+        engine = self._make_engine()
+        engine._last_account_snapshot = self._long_snapshot()
+        action = ExecutionAction(
+            action_type=ActionType.REPLACE,
+            order_id="ORDER_123",
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            price=Decimal("51000"),
+            quantity=Decimal("0.01"),
+        )
+        pos_sign = engine._get_position_sign("BTCUSDT")
+
+        result = engine._enforce_reduce_only(action, pos_sign)
+
+        assert result is True
+        assert action.reduce_only is True

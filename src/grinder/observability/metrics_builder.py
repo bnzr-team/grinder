@@ -28,6 +28,7 @@ from grinder.gating import get_gating_metrics
 from grinder.ha.role import HARole, get_ha_state
 from grinder.live.cycle_metrics import get_cycle_metrics
 from grinder.live.fsm_metrics import get_fsm_metrics
+from grinder.live.live_metrics import get_live_engine_metrics
 from grinder.ml.fill_model_loader import fill_model_metrics_to_prometheus_lines
 from grinder.ml.metrics import ml_metrics_to_prometheus_lines
 from grinder.observability.fill_metrics import get_fill_metrics
@@ -177,6 +178,9 @@ class MetricsBuilder:
 
         # Cycle layer metrics (PR-INV-3b)
         lines.extend(self._build_cycle_metrics())
+
+        # Live engine metrics (PR-ROLL-1)
+        lines.extend(self._build_live_engine_metrics())
 
         return "\n".join(lines)
 
@@ -369,6 +373,10 @@ class MetricsBuilder:
     def _build_cycle_metrics(self) -> list[str]:
         """Build cycle layer metrics (PR-INV-3b)."""
         return get_cycle_metrics().format_metrics()
+
+    def _build_live_engine_metrics(self) -> list[str]:
+        """Build live engine metrics (PR-ROLL-1)."""
+        return get_live_engine_metrics().format_metrics()
 
 
 class _BuilderHolder:
