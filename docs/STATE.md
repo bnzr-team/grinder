@@ -1373,6 +1373,16 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - Log: `TP_RENEW_STARTED`, `TP_RENEWED`, `TP_RENEW_FAILED`, `TP_RENEW_COOLDOWN`, `TP_RENEW_INFLIGHT`, `TP_RENEW_DEGRADED`
   - Safe-by-default: disabled unless explicitly enabled
   - Renew actions pass through grid freeze filter (only REPLENISH is blocked)
+- **Replenish on TP fill** (`GRINDER_LIVE_REPLENISH_ON_TP_FILL`, default `false`):
+  - Detects TP fill events via position magnitude decrease (prev > 0 → cur < prev, or short symmetric)
+  - On TP fill (position still open): generates BUY below lowest BUY + SELL above highest SELL
+  - Prices: `lowest_buy * (1 - spacing_bps/10000)`, `highest_sell * (1 + spacing_bps/10000)`, tick-rounded
+  - Anchors: stores lowest BUY / highest SELL per symbol when position is flat; uses anchors as fallback when no orders on a side
+  - Uses grid identity (`strategy_id="d"`, `level_id=0`), not TP namespace
+  - Reason: `TP_FILL_REPLENISH` (distinct from `REPLENISH`; passes through grid freeze filter)
+  - Safe-by-default: disabled unless explicitly enabled
+  - No replenish when position fully closed (pos_qty == 0) or when no anchors available
+  - Log: `TP_FILL_REPLENISH symbol=X pos_qty=Y buy=Z sell=W`
 - **Order budget exhaustion latch** (automatic, no env var):
   - When port returns "Order count limit reached", latch activates: `ORDER_BUDGET_LATCH`
   - Planner suppressed for remaining run (no new PLACE/CANCEL generation)

@@ -34,7 +34,7 @@ import os
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from decimal import Decimal
+from decimal import ROUND_DOWN, Decimal
 from enum import Enum
 from typing import TYPE_CHECKING, Any
 
@@ -74,7 +74,14 @@ from grinder.ml.threshold_resolver import (
     resolve_threshold_result,
     write_threshold_resolution_evidence,
 )
-from grinder.reconcile.identity import is_tp_order, parse_client_order_id
+from grinder.reconcile.identity import (
+    DEFAULT_PREFIX,
+    DEFAULT_STRATEGY_ID,
+    OrderIdentityConfig,
+    generate_client_order_id,
+    is_tp_order,
+    parse_client_order_id,
+)
 from grinder.risk.drawdown_guard_v1 import DrawdownGuardV1
 from grinder.risk.drawdown_guard_v1 import OrderIntent as RiskIntent
 from grinder.risk.emergency_exit import EmergencyExitExecutor
@@ -412,6 +419,14 @@ class LiveEngineV0:
             or 0
         )
         self._grid_anchor_mid: dict[str, Decimal] = {}  # per-symbol anchor
+        # Replenish-on-TP-fill: add BUY below + SELL above when TP fills
+        self._replenish_on_tp_fill = parse_bool(
+            "GRINDER_LIVE_REPLENISH_ON_TP_FILL", default=False, strict=False
+        )
+        self._prev_pos_qty: dict[str, Decimal] = {}  # per-symbol previous pos qty
+        self._grid_anchor_low_buy: dict[str, Decimal] = {}  # per-symbol lowest BUY price
+        self._grid_anchor_high_sell: dict[str, Decimal] = {}  # per-symbol highest SELL price
+        self._tp_fill_replenish_seq = 0
         # Order budget exhaustion latch: suppress planner when port is dead
         self._order_budget_exhausted = False
         if self._emergency_exit_enabled:
@@ -616,6 +631,25 @@ class LiveEngineV0:
                 paper_output = _DeferredPaperOutput(
                     ts=snapshot.ts, symbol=snapshot.symbol, actions=raw_actions
                 )
+
+        # Replenish-on-TP-fill: detect position decrease → add BUY below + SELL above
+        if self._is_cycle_layer_enabled() and self._last_account_snapshot is not None:
+            pos_qty_for_anchor = self._get_position_qty(snapshot.symbol)
+            self._update_grid_anchors(snapshot.symbol, pos_qty_for_anchor)
+            tp_fill_event = self._detect_tp_fill_event(snapshot.symbol, pos_qty_for_anchor)
+            if tp_fill_event:
+                tp_replenish = self._generate_tp_fill_replenish(
+                    snapshot.symbol,
+                    pos_qty_for_anchor,
+                    snapshot.ts,
+                )
+                if tp_replenish:
+                    raw_actions = raw_actions + tp_replenish
+                    paper_output = _DeferredPaperOutput(
+                        ts=snapshot.ts,
+                        symbol=snapshot.symbol,
+                        actions=raw_actions,
+                    )
 
         # FSM tick: update state before action processing (Launch-13 PR3)
         if self._fsm_driver is not None:
@@ -1031,6 +1065,188 @@ class LiveEngineV0:
             if p.symbol == symbol:
                 return p.qty
         return Decimal("0")
+
+    def _detect_tp_fill_event(self, symbol: str, pos_qty: Decimal | None) -> bool:
+        """Detect TP fill event: position magnitude decreased.
+
+        Long: prev > 0 and cur >= 0 and cur < prev.
+        Short: prev < 0 and cur <= 0 and cur > prev (magnitude decreased).
+
+        Updates _prev_pos_qty. Returns False if pos_qty unknown.
+        """
+        if pos_qty is None:
+            return False
+        prev = self._prev_pos_qty.get(symbol, Decimal("0"))
+        self._prev_pos_qty[symbol] = pos_qty
+
+        if prev > 0 and pos_qty >= 0 and pos_qty < prev:
+            return True
+        return bool(prev < 0 and pos_qty <= 0 and pos_qty > prev)
+
+    def _update_grid_anchors(self, symbol: str, pos_qty: Decimal | None) -> None:
+        """Update grid price anchors from open orders when position is flat.
+
+        Anchors are only set/updated when pos_qty == 0 (cycle closed).
+        Stores lowest BUY and highest SELL from current open orders.
+        """
+        if pos_qty is None or pos_qty != 0:
+            return
+        snap = self._last_account_snapshot
+        if snap is None:
+            return
+        buy_prices: list[Decimal] = []
+        sell_prices: list[Decimal] = []
+        for o in snap.open_orders:
+            if o.symbol != symbol:
+                continue
+            if is_tp_order(o.order_id):
+                continue
+            if o.side.upper() == "BUY":
+                buy_prices.append(o.price)
+            elif o.side.upper() == "SELL":
+                sell_prices.append(o.price)
+        if buy_prices:
+            self._grid_anchor_low_buy[symbol] = min(buy_prices)
+        if sell_prices:
+            self._grid_anchor_high_sell[symbol] = max(sell_prices)
+
+    def _generate_tp_fill_replenish(  # noqa: PLR0911
+        self,
+        symbol: str,
+        pos_qty: Decimal | None,
+        ts_ms: int,
+    ) -> list[ExecutionAction]:
+        """Generate BUY below + SELL above when TP fills (position decreases).
+
+        Uses current open orders to find lowest BUY / highest SELL.
+        Falls back to anchors if no orders on a side. Returns [] if no anchors.
+        """
+        if not self._replenish_on_tp_fill:
+            return []
+        if pos_qty is None or pos_qty == 0:
+            return []
+
+        snap = self._last_account_snapshot
+        if snap is None:
+            return []
+
+        # Get grid planner config for spacing/tick/qty
+        planners = self._grid_planners
+        if not planners:
+            return []
+        planner = planners.get(symbol)
+        if planner is None:
+            return []
+        cfg = planner._config
+        spacing_bps = cfg.base_spacing_bps
+        tick_size = cfg.tick_size
+        qty = cfg.size_per_level
+
+        if tick_size is None or tick_size <= 0:
+            return []
+
+        # Collect current grid orders (exclude TPs)
+        buy_prices: list[Decimal] = []
+        sell_prices: list[Decimal] = []
+        for o in snap.open_orders:
+            if o.symbol != symbol:
+                continue
+            if is_tp_order(o.order_id):
+                continue
+            if o.side.upper() == "BUY":
+                buy_prices.append(o.price)
+            elif o.side.upper() == "SELL":
+                sell_prices.append(o.price)
+
+        # Determine lowest BUY (current or anchor)
+        lowest_buy = min(buy_prices) if buy_prices else self._grid_anchor_low_buy.get(symbol)
+        # Determine highest SELL (current or anchor)
+        highest_sell = max(sell_prices) if sell_prices else self._grid_anchor_high_sell.get(symbol)
+
+        if lowest_buy is None or highest_sell is None:
+            logger.warning(
+                "TP_FILL_REPLENISH_SKIPPED symbol=%s — no anchor (low_buy=%s high_sell=%s)",
+                symbol,
+                lowest_buy,
+                highest_sell,
+            )
+            return []
+
+        # Compute new prices
+        spacing_factor = Decimal(str(spacing_bps)) / Decimal("10000")
+        new_buy_raw = lowest_buy * (Decimal("1") - spacing_factor)
+        new_sell_raw = highest_sell * (Decimal("1") + spacing_factor)
+        new_buy_price = (new_buy_raw / tick_size).quantize(
+            Decimal("1"), rounding=ROUND_DOWN
+        ) * tick_size
+        new_sell_price = (new_sell_raw / tick_size).quantize(
+            Decimal("1"), rounding=ROUND_DOWN
+        ) * tick_size
+
+        identity = OrderIdentityConfig(
+            prefix=DEFAULT_PREFIX,
+            strategy_id=DEFAULT_STRATEGY_ID,
+            require_strategy_allowlist=False,
+        )
+
+        actions: list[ExecutionAction] = []
+        # BUY below
+        self._tp_fill_replenish_seq += 1
+        buy_id = generate_client_order_id(
+            config=identity,
+            symbol=symbol,
+            level_id=0,
+            ts=ts_ms,
+            seq=self._tp_fill_replenish_seq,
+        )
+        actions.append(
+            ExecutionAction(
+                action_type=ActionType.PLACE,
+                symbol=symbol,
+                side=OrderSide.BUY,
+                price=new_buy_price,
+                quantity=qty,
+                level_id=0,
+                reason="TP_FILL_REPLENISH",
+                reduce_only=False,
+                client_order_id=buy_id,
+            )
+        )
+        # SELL above
+        self._tp_fill_replenish_seq += 1
+        sell_id = generate_client_order_id(
+            config=identity,
+            symbol=symbol,
+            level_id=0,
+            ts=ts_ms,
+            seq=self._tp_fill_replenish_seq,
+        )
+        actions.append(
+            ExecutionAction(
+                action_type=ActionType.PLACE,
+                symbol=symbol,
+                side=OrderSide.SELL,
+                price=new_sell_price,
+                quantity=qty,
+                level_id=0,
+                reason="TP_FILL_REPLENISH",
+                reduce_only=False,
+                client_order_id=sell_id,
+            )
+        )
+
+        logger.warning(
+            "TP_FILL_REPLENISH symbol=%s pos_qty=%s buy=%s sell=%s "
+            "low_buy=%s high_sell=%s spacing=%s bps",
+            symbol,
+            pos_qty,
+            new_buy_price,
+            new_sell_price,
+            lowest_buy,
+            highest_sell,
+            spacing_bps,
+        )
+        return actions
 
     def _filter_grid_shift(
         self,
