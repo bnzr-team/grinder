@@ -3633,3 +3633,140 @@ class TestReduceOnlyEnforcement:
 
         assert result is True
         assert action.reduce_only is True
+
+
+# --- L) Reduce-only enforcement toggle (PR-ROLL-1b, 4 tests) ---
+
+
+class TestReduceOnlyEnforcementToggle:
+    """Tests for GRINDER_LIVE_REDUCE_ONLY_ENFORCEMENT toggle."""
+
+    @staticmethod
+    def _make_engine_disabled() -> LiveEngineV0:
+        """Create engine with enforcement disabled."""
+        paper = MagicMock()
+        paper.process_snapshot.return_value = MagicMock(actions=[])
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        engine = LiveEngineV0(paper, NoOpExchangePort(), config)
+        engine._reduce_only_enforcement = False
+        return engine
+
+    @staticmethod
+    def _long_snapshot() -> AccountSnapshot:
+        return AccountSnapshot(
+            positions=(
+                PositionSnap(
+                    symbol="BTCUSDT",
+                    side="LONG",
+                    qty=Decimal("0.01"),
+                    entry_price=Decimal("50000"),
+                    mark_price=Decimal("50000"),
+                    unrealized_pnl=Decimal("0"),
+                    leverage=1,
+                    ts=1000,
+                ),
+            ),
+            open_orders=(),
+            ts=1000,
+            source="test",
+        )
+
+    @staticmethod
+    def _short_snapshot() -> AccountSnapshot:
+        return AccountSnapshot(
+            positions=(
+                PositionSnap(
+                    symbol="BTCUSDT",
+                    side="SHORT",
+                    qty=Decimal("0.01"),
+                    entry_price=Decimal("50000"),
+                    mark_price=Decimal("50000"),
+                    unrealized_pnl=Decimal("0"),
+                    leverage=1,
+                    ts=1000,
+                ),
+            ),
+            open_orders=(),
+            ts=1000,
+            source="test",
+        )
+
+    def test_disabled_long_sell_not_forced(self) -> None:
+        """Enforcement disabled + LONG + SELL -> reduce_only stays False."""
+        engine = self._make_engine_disabled()
+        engine._last_account_snapshot = self._long_snapshot()
+        action = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            price=Decimal("51000"),
+            quantity=Decimal("0.01"),
+        )
+        pos_sign = engine._get_position_sign("BTCUSDT")
+        assert pos_sign == 1
+
+        result = engine._enforce_reduce_only(action, pos_sign)
+
+        assert result is False
+        assert action.reduce_only is False
+
+    def test_disabled_short_buy_not_forced(self) -> None:
+        """Enforcement disabled + SHORT + BUY -> reduce_only stays False."""
+        engine = self._make_engine_disabled()
+        engine._last_account_snapshot = self._short_snapshot()
+        action = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.BUY,
+            price=Decimal("49000"),
+            quantity=Decimal("0.01"),
+        )
+        pos_sign = engine._get_position_sign("BTCUSDT")
+        assert pos_sign == -1
+
+        result = engine._enforce_reduce_only(action, pos_sign)
+
+        assert result is False
+        assert action.reduce_only is False
+
+    def test_disabled_no_metric(self) -> None:
+        """Enforcement disabled -> no metric increment."""
+        reset_live_engine_metrics()
+        engine = self._make_engine_disabled()
+        engine._last_account_snapshot = self._long_snapshot()
+        action = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            price=Decimal("51000"),
+            quantity=Decimal("0.01"),
+        )
+        pos_sign = engine._get_position_sign("BTCUSDT")
+
+        engine._enforce_reduce_only(action, pos_sign)
+
+        metrics = get_live_engine_metrics()
+        assert len(metrics.reduce_only_enforced) == 0
+        reset_live_engine_metrics()
+
+    def test_enabled_still_enforces(self) -> None:
+        """Enforcement enabled (default) -> LONG + SELL gets reduce_only=True."""
+        paper = MagicMock()
+        paper.process_snapshot.return_value = MagicMock(actions=[])
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        engine = LiveEngineV0(paper, NoOpExchangePort(), config)
+        assert engine._reduce_only_enforcement is True
+        engine._last_account_snapshot = self._long_snapshot()
+        action = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            price=Decimal("51000"),
+            quantity=Decimal("0.01"),
+        )
+        pos_sign = engine._get_position_sign("BTCUSDT")
+
+        result = engine._enforce_reduce_only(action, pos_sign)
+
+        assert result is True
+        assert action.reduce_only is True

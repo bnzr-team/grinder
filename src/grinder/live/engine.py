@@ -428,6 +428,10 @@ class LiveEngineV0:
         self._grid_anchor_low_buy: dict[str, Decimal] = {}  # per-symbol lowest BUY price
         self._grid_anchor_high_sell: dict[str, Decimal] = {}  # per-symbol highest SELL price
         self._tp_fill_replenish_seq = 0
+        # PR-ROLL-1b: reduce-only enforcement toggle (default=ON for safety)
+        self._reduce_only_enforcement = parse_bool(
+            "GRINDER_LIVE_REDUCE_ONLY_ENFORCEMENT", default=True, strict=False
+        )
         # Order budget exhaustion latch: suppress planner when port is dead
         self._order_budget_exhausted = False
         if self._emergency_exit_enabled:
@@ -447,6 +451,12 @@ class LiveEngineV0:
                 )
         ee_metrics = get_emergency_exit_metrics()
         ee_metrics.set_enabled(self._emergency_exit_enabled)
+
+        # PR-ROLL-1b: log enforcement status at startup
+        logger.info(
+            "Reduce-only enforcement: %s",
+            "enabled" if self._reduce_only_enforcement else "disabled",
+        )
 
     def _resolve_auto_threshold(self) -> None:
         """Resolve threshold from eval report at startup (PR-C9).
@@ -1058,6 +1068,10 @@ class LiveEngineV0:
 
         Returns True if enforcement was applied, False otherwise.
         """
+        # PR-ROLL-1b: toggle — disabled for MM mode
+        if not self._reduce_only_enforcement:
+            return False
+
         # Skip CANCEL — no side relevance
         if action.action_type == ActionType.CANCEL:
             return False
