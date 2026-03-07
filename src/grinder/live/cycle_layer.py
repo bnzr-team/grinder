@@ -74,6 +74,10 @@ class LiveCycleConfig:
         tp_renew_enabled: Auto-renew TP on expiry when position open (default: False).
         tp_renew_cooldown_ms: Minimum interval between renewals per symbol (ms).
         tp_renew_max_attempts: Max consecutive renew failures before degrading to plain cancel.
+        tp_qty_mode: TP quantity mode — "full" | "one_level" | "pct" (default: "full").
+        tp_qty_pct: Percentage of position for pct mode (int 1-100, default 100).
+        per_level_qty: Per-level quantity from paper config (Decimal, None = unknown).
+        step_size: Lot size step for qty rounding (Decimal, None = no rounding).
     """
 
     spacing_bps: float = 10.0
@@ -84,6 +88,10 @@ class LiveCycleConfig:
     tp_renew_enabled: bool = False
     tp_renew_cooldown_ms: int = 60_000
     tp_renew_max_attempts: int = 3
+    tp_qty_mode: str = "full"
+    tp_qty_pct: int = 100
+    per_level_qty: Decimal | None = None
+    step_size: Decimal | None = None
 
 
 class LiveCycleLayerV1:
@@ -152,7 +160,7 @@ class LiveCycleLayerV1:
         while len(self._generated_tp_ids) > _MAX_DEDUP_ENTRIES:
             self._generated_tp_ids.popitem(last=False)  # FIFO eviction
 
-    def on_snapshot(
+    def on_snapshot(  # noqa: PLR0915
         self,
         *,
         symbol: str,
@@ -227,6 +235,17 @@ class LiveCycleLayerV1:
             tp_side = OrderSide.SELL if snap.side.upper() == "BUY" else OrderSide.BUY
             tp_price = self._compute_tp_price(snap.price, snap.side)
 
+            # PR-TP-PARTIAL: compute TP qty (may be partial)
+            tp_qty = self._compute_tp_qty(snap.qty, pos_qty)
+            if tp_qty <= 0:
+                self._metrics.record_fill_candidate(symbol, "tp_qty_too_small")
+                logger.warning(
+                    "TP_SKIPPED_QTY_TOO_SMALL src=%s mode=%s",
+                    oid,
+                    self._config.tp_qty_mode,
+                )
+                continue
+
             # Pre-generate clientOrderId with TP namespace
             self._tp_seq += 1
             tp_client_id = generate_client_order_id(
@@ -243,7 +262,7 @@ class LiveCycleLayerV1:
                     symbol=symbol,
                     side=tp_side,
                     price=tp_price,
-                    quantity=snap.qty,
+                    quantity=tp_qty,
                     level_id=source_level_id,
                     reason="TP_CLOSE",
                     reduce_only=True,
@@ -263,7 +282,7 @@ class LiveCycleLayerV1:
                 oid,
                 tp_side.value,
                 tp_price,
-                snap.qty,
+                tp_qty,
                 tp_client_id,
             )
 
@@ -668,4 +687,51 @@ class LiveCycleLayerV1:
         tick = self._config.tick_size
         if tick and tick > 0:
             return (raw / tick).quantize(Decimal("1"), rounding=ROUND_DOWN) * tick
+        return raw
+
+    def _compute_tp_qty(self, fill_qty: Decimal, pos_qty: Decimal | None) -> Decimal:
+        """Compute TP quantity based on tp_qty_mode (PR-TP-PARTIAL).
+
+        Modes:
+        - full: fill_qty (current behavior, default)
+        - one_level: per_level_qty (capped at abs(pos_qty) if known)
+        - pct: abs(pos_qty) * tp_qty_pct / 100 (capped at abs(pos_qty))
+
+        Invariants:
+        - result <= abs(pos_qty) if pos_qty is known
+        - result >= step_size (else return 0 — too small, caller skips TP)
+        - result rounded down to step_size
+        - All arithmetic is Decimal-only (no floats)
+
+        Returns:
+            Decimal > 0 on success, Decimal("0") when partial qty too small.
+        """
+        mode = self._config.tp_qty_mode
+        step = self._config.step_size
+
+        if mode == "one_level":
+            plq = self._config.per_level_qty
+            if plq is None or plq <= 0:
+                return fill_qty  # fallback to full — missing config
+            raw = plq
+        elif mode == "pct":
+            if pos_qty is None or pos_qty == 0:
+                return fill_qty  # fallback — can't compute pct of unknown/zero
+            pct = Decimal(self._config.tp_qty_pct) / Decimal("100")
+            raw = abs(pos_qty) * pct
+        else:
+            return fill_qty  # mode="full"
+
+        # Cap at abs(pos_qty)
+        if pos_qty is not None and pos_qty != 0:
+            raw = min(raw, abs(pos_qty))
+
+        # Round down to step_size
+        if step and step > 0:
+            raw = (raw / step).quantize(Decimal("1"), rounding=ROUND_DOWN) * step
+
+        # Floor: must be >= step_size (else too small to place)
+        if step and step > 0 and raw < step:
+            return Decimal("0")  # too small — caller skips TP
+
         return raw

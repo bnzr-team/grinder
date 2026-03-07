@@ -1238,3 +1238,268 @@ class TestTpAutoRenew:
         assert len(place_actions) == 1
         # Price should be based on fill_price=50000, not mid=55000
         assert place_actions[0].price == tp_price  # same as original TP
+
+
+# --- PR-TP-PARTIAL: Partial TP qty mode tests ---
+
+
+def _make_partial_layer(
+    mode: str = "full",
+    pct: int = 100,
+    per_level_qty: Decimal | None = None,
+    step_size: Decimal | None = None,
+) -> LiveCycleLayerV1:
+    """Create a cycle layer with partial TP qty config."""
+    return LiveCycleLayerV1(
+        LiveCycleConfig(
+            spacing_bps=10.0,
+            tick_size=Decimal("0.10"),
+            tp_qty_mode=mode,
+            tp_qty_pct=pct,
+            per_level_qty=per_level_qty,
+            step_size=step_size,
+        )
+    )
+
+
+class TestComputeTpQty:
+    """Tests for _compute_tp_qty (PR-TP-PARTIAL)."""
+
+    def test_full_mode_returns_fill_qty(self) -> None:
+        layer = _make_partial_layer(mode="full")
+        result = layer._compute_tp_qty(Decimal("0.002"), Decimal("0.004"))
+        assert result == Decimal("0.002")
+
+    def test_one_level_mode_returns_per_level_qty(self) -> None:
+        layer = _make_partial_layer(
+            mode="one_level",
+            per_level_qty=Decimal("0.001"),
+            step_size=Decimal("0.001"),
+        )
+        result = layer._compute_tp_qty(Decimal("0.002"), Decimal("0.004"))
+        assert result == Decimal("0.001")
+
+    def test_one_level_fallback_no_per_level(self) -> None:
+        layer = _make_partial_layer(mode="one_level", per_level_qty=None)
+        result = layer._compute_tp_qty(Decimal("0.002"), Decimal("0.004"))
+        assert result == Decimal("0.002")  # fallback to fill_qty
+
+    def test_pct_mode_50_percent(self) -> None:
+        layer = _make_partial_layer(
+            mode="pct",
+            pct=50,
+            step_size=Decimal("0.001"),
+        )
+        result = layer._compute_tp_qty(Decimal("0.002"), Decimal("0.004"))
+        assert result == Decimal("0.002")  # 50% of 0.004 = 0.002
+
+    def test_pct_mode_caps_at_pos_qty(self) -> None:
+        layer = _make_partial_layer(
+            mode="pct",
+            pct=100,
+            step_size=Decimal("0.001"),
+        )
+        # pct=100 of pos_qty=0.004 = 0.004, capped at abs(pos_qty)=0.004
+        result = layer._compute_tp_qty(Decimal("0.002"), Decimal("0.004"))
+        assert result == Decimal("0.004")
+
+    def test_pct_mode_fallback_no_pos(self) -> None:
+        layer = _make_partial_layer(mode="pct", pct=50)
+        result = layer._compute_tp_qty(Decimal("0.002"), None)
+        assert result == Decimal("0.002")  # fallback to fill_qty
+
+    def test_step_size_rounding(self) -> None:
+        layer = _make_partial_layer(
+            mode="pct",
+            pct=50,
+            step_size=Decimal("0.001"),
+        )
+        # 50% of 0.005 = 0.0025, rounded down to 0.002
+        result = layer._compute_tp_qty(Decimal("0.005"), Decimal("0.005"))
+        assert result == Decimal("0.002")
+
+    def test_too_small_returns_zero(self) -> None:
+        layer = _make_partial_layer(
+            mode="pct",
+            pct=1,  # 1% of 0.002 = 0.00002, below step_size=0.001
+            step_size=Decimal("0.001"),
+        )
+        result = layer._compute_tp_qty(Decimal("0.002"), Decimal("0.002"))
+        assert result == Decimal("0")
+
+
+class TestPartialTpGeneration:
+    """Tests for partial TP qty in on_snapshot (PR-TP-PARTIAL)."""
+
+    def test_one_level_tp_qty_in_snapshot(self) -> None:
+        layer = _make_partial_layer(
+            mode="one_level",
+            per_level_qty=Decimal("0.001"),
+            step_size=Decimal("0.001"),
+        )
+        grid_order = _snap(
+            "grinder_d_BTCUSDT_3_1000_1",
+            side="BUY",
+            price=Decimal("50000"),
+            qty=Decimal("0.002"),
+        )
+
+        # Call 1: establish prev
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(grid_order,),
+            mid_price=Decimal("50000"),
+            ts_ms=1_000_000,
+            pos_qty=Decimal("0.004"),
+        )
+
+        # Call 2: order gone → TP with one_level qty
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(),
+            mid_price=Decimal("50000"),
+            ts_ms=2_000_000,
+            pos_qty=Decimal("0.004"),
+        )
+
+        tp_actions = [a for a in actions if a.reason == "TP_CLOSE"]
+        assert len(tp_actions) == 1
+        assert tp_actions[0].quantity == Decimal("0.001")
+
+    def test_pct_tp_qty_in_snapshot(self) -> None:
+        layer = _make_partial_layer(
+            mode="pct",
+            pct=50,
+            step_size=Decimal("0.001"),
+        )
+        grid_order = _snap(
+            "grinder_d_BTCUSDT_3_1000_1",
+            side="BUY",
+            price=Decimal("50000"),
+            qty=Decimal("0.002"),
+        )
+
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(grid_order,),
+            mid_price=Decimal("50000"),
+            ts_ms=1_000_000,
+            pos_qty=Decimal("0.004"),
+        )
+
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(),
+            mid_price=Decimal("50000"),
+            ts_ms=2_000_000,
+            pos_qty=Decimal("0.004"),
+        )
+
+        tp_actions = [a for a in actions if a.reason == "TP_CLOSE"]
+        assert len(tp_actions) == 1
+        assert tp_actions[0].quantity == Decimal("0.002")  # 50% of 0.004
+
+    def test_full_mode_tp_qty_unchanged(self) -> None:
+        layer = _make_partial_layer(mode="full")
+        grid_order = _snap(
+            "grinder_d_BTCUSDT_3_1000_1",
+            side="BUY",
+            price=Decimal("50000"),
+            qty=Decimal("0.002"),
+        )
+
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(grid_order,),
+            mid_price=Decimal("50000"),
+            ts_ms=1_000_000,
+            pos_qty=Decimal("0.004"),
+        )
+
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(),
+            mid_price=Decimal("50000"),
+            ts_ms=2_000_000,
+            pos_qty=Decimal("0.004"),
+        )
+
+        tp_actions = [a for a in actions if a.reason == "TP_CLOSE"]
+        assert len(tp_actions) == 1
+        assert tp_actions[0].quantity == Decimal("0.002")  # snap.qty unchanged
+
+
+class TestPartialTpSkipTooSmall:
+    """Tests for TP skip when partial qty too small (PR-TP-PARTIAL)."""
+
+    def test_too_small_skips_tp(self) -> None:
+        reset_cycle_metrics()
+        layer = _make_partial_layer(
+            mode="pct",
+            pct=1,  # 1% of 0.002 = 0.00002 < step_size 0.001
+            step_size=Decimal("0.001"),
+        )
+        grid_order = _snap(
+            "grinder_d_BTCUSDT_3_1000_1",
+            side="BUY",
+            price=Decimal("50000"),
+            qty=Decimal("0.002"),
+        )
+
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(grid_order,),
+            mid_price=Decimal("50000"),
+            ts_ms=1_000_000,
+            pos_qty=Decimal("0.002"),
+        )
+
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(),
+            mid_price=Decimal("50000"),
+            ts_ms=2_000_000,
+            pos_qty=Decimal("0.002"),
+        )
+
+        # No TP generated — qty too small
+        tp_actions = [a for a in actions if a.reason == "TP_CLOSE"]
+        assert len(tp_actions) == 0
+
+        # Metric recorded
+        m = get_cycle_metrics()
+        assert m.fill_candidates.get(("BTCUSDT", "tp_qty_too_small"), 0) == 1
+        reset_cycle_metrics()
+
+    def test_one_level_caps_at_pos_qty(self) -> None:
+        layer = _make_partial_layer(
+            mode="one_level",
+            per_level_qty=Decimal("0.010"),  # bigger than pos_qty
+            step_size=Decimal("0.001"),
+        )
+        grid_order = _snap(
+            "grinder_d_BTCUSDT_3_1000_1",
+            side="BUY",
+            price=Decimal("50000"),
+            qty=Decimal("0.002"),
+        )
+
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(grid_order,),
+            mid_price=Decimal("50000"),
+            ts_ms=1_000_000,
+            pos_qty=Decimal("0.003"),
+        )
+
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(),
+            mid_price=Decimal("50000"),
+            ts_ms=2_000_000,
+            pos_qty=Decimal("0.003"),
+        )
+
+        tp_actions = [a for a in actions if a.reason == "TP_CLOSE"]
+        assert len(tp_actions) == 1
+        assert tp_actions[0].quantity == Decimal("0.003")  # capped at pos_qty
