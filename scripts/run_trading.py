@@ -491,7 +491,7 @@ def _build_grid_planners(
     return planners
 
 
-def _build_cycle_layer(
+def _build_cycle_layer(  # noqa: PLR0912
     symbols: list[str],
     symbol_constraints: dict[str, SymbolConstraints] | None,
     paper_kwargs: dict[str, Any],
@@ -541,19 +541,44 @@ def _build_cycle_layer(
         except ValueError:
             print(f"  WARNING: invalid GRINDER_REPLENISH_MAX_LEVELS={raw_max!r}, using 0")
 
+    # PR-TP-RENEW: Auto-renew TP on expiry when position open (safe-by-default)
+    tp_renew_enabled = parse_bool("GRINDER_TP_RENEW_ENABLED", default=False)
+    tp_renew_cooldown_ms = 60_000
+    raw_cooldown = os.environ.get("GRINDER_TP_RENEW_COOLDOWN_MS", "").strip()
+    if raw_cooldown:
+        try:
+            tp_renew_cooldown_ms = int(raw_cooldown)
+        except ValueError:
+            print(f"  WARNING: invalid GRINDER_TP_RENEW_COOLDOWN_MS={raw_cooldown!r}, using 60000")
+    tp_renew_max_attempts = 3
+    raw_attempts = os.environ.get("GRINDER_TP_RENEW_MAX_ATTEMPTS", "").strip()
+    if raw_attempts:
+        try:
+            tp_renew_max_attempts = max(1, int(raw_attempts))
+        except ValueError:
+            print(f"  WARNING: invalid GRINDER_TP_RENEW_MAX_ATTEMPTS={raw_attempts!r}, using 3")
+
     cfg = LiveCycleConfig(
         spacing_bps=paper_kwargs.get("spacing_bps", 10.0),
         tick_size=first_tick,
         tp_ttl_ms=tp_ttl_ms,
         replenish_enabled=replenish_enabled,
         replenish_max_levels=replenish_max_levels,
+        tp_renew_enabled=tp_renew_enabled,
+        tp_renew_cooldown_ms=tp_renew_cooldown_ms,
+        tp_renew_max_attempts=tp_renew_max_attempts,
     )
     layer = LiveCycleLayerV1(cfg)
     ttl_str = f"{cfg.tp_ttl_ms}ms" if cfg.tp_ttl_ms else "disabled"
     replenish_str = f"max_levels={replenish_max_levels}" if replenish_enabled else "disabled"
+    renew_str = (
+        f"cooldown={tp_renew_cooldown_ms}ms max_attempts={tp_renew_max_attempts}"
+        if tp_renew_enabled
+        else "disabled"
+    )
     print(
         f"  LiveCycleLayer enabled: spacing={cfg.spacing_bps}bps tick={first_tick}"
-        f" tp_ttl={ttl_str} replenish={replenish_str}"
+        f" tp_ttl={ttl_str} replenish={replenish_str} tp_renew={renew_str}"
     )
     return layer
 
