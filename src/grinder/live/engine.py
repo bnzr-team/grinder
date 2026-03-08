@@ -1697,6 +1697,20 @@ class LiveEngineV0:
                 intent=intent,
             )
 
+        # PR-VIS-1: log place intent before execution (env-gated)
+        if action.action_type == ActionType.PLACE and self._debug_open_orders:
+            logger.warning(
+                "PLACE_INTENT order_id=%s symbol=%s side=%s price=%s qty=%s "
+                "reduceOnly=%s reason=%s",
+                action.client_order_id or "?",
+                action.symbol,
+                action.side.value if action.side else "?",
+                action.price,
+                action.quantity,
+                action.reduce_only,
+                action.reason or "planner",
+            )
+
         # P0-2d: log cancel intent before execution (env-gated)
         if action.action_type == ActionType.CANCEL and self._debug_open_orders:
             logger.warning(

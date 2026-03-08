@@ -520,7 +520,7 @@ class BinanceFuturesPort:
                 len(raw_orders),
                 symbols_sample,
             )
-            for i, o in enumerate(raw_orders[:5]):  # bounded: first 5 only
+            for i, o in enumerate(raw_orders[:10]):  # bounded: first 10
                 logger.warning(
                     "  [%d] clientOrderId=%s orderId=%s symbol=%s side=%s "
                     "price=%s qty=%s status=%s type=%s timeInForce=%s reduceOnly=%s",
