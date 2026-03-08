@@ -3296,7 +3296,7 @@ class TestGenerateTpFillReplenish:
         noop_port: NoOpExchangePort,
         monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        """TP fills → BUY below lowest BUY + SELL above highest SELL."""
+        """LONG partial TP → BUY above highest BUY (inward) + SELL above highest SELL."""
         engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
         engine._last_account_snapshot = self._snapshot_with_orders(
             buy_prices=("49900.0", "49800.0"),
@@ -3315,9 +3315,10 @@ class TestGenerateTpFillReplenish:
         assert sell_action.reason == "TP_FILL_REPLENISH"
         assert buy_action.reduce_only is False
         assert sell_action.reduce_only is False
-        # BUY below lowest: 49800 * (1 - 10/10000) = 49800 * 0.999 = 49750.2 → 49750.2
-        assert buy_action.price == Decimal("49750.2")
-        # SELL above highest: 50200 * (1 + 10/10000) = 50200 * 1.001 = 50250.2 → 50250.2
+        # PR-ROLL-3b: LONG inward — BUY above highest_buy
+        # 49900 * 1.001 = 49949.9
+        assert buy_action.price == Decimal("49949.9")
+        # SELL above highest_sell: 50200 * 1.001 = 50250.2
         assert sell_action.price == Decimal("50250.2")
 
     def test_disabled_returns_empty(
@@ -3398,7 +3399,8 @@ class TestGenerateTpFillReplenish:
         assert len(actions) == 2
         buy_action = next(a for a in actions if a.side == OrderSide.BUY)
         sell_action = next(a for a in actions if a.side == OrderSide.SELL)
-        assert buy_action.price == Decimal("49750.2")
+        # PR-ROLL-3b: LONG inward — anchor fallback 49800 * 1.001 = 49849.8
+        assert buy_action.price == Decimal("49849.8")
         assert sell_action.price == Decimal("50250.2")
 
     def test_client_order_id_generated(
@@ -3421,6 +3423,212 @@ class TestGenerateTpFillReplenish:
         for a in actions:
             assert a.client_order_id is not None
             assert a.client_order_id.startswith("grinder_d_")
+
+
+class TestTpFillReplenishInward:
+    """PR-ROLL-3b: inward replenish — BUY above (LONG), SELL below (SHORT)."""
+
+    @staticmethod
+    def _make_engine(
+        mock_paper_engine: MagicMock,
+        port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> LiveEngineV0:
+        monkeypatch.setenv("GRINDER_LIVE_PLANNER_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_ACCOUNT_SYNC_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_LIVE_CYCLE_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_LIVE_REPLENISH_ON_TP_FILL", "1")
+
+        planner = LiveGridPlannerV1(
+            LiveGridConfig(
+                tick_size=Decimal("0.10"),
+                levels=2,
+                size_per_level=Decimal("0.01"),
+                base_spacing_bps=10.0,
+            )
+        )
+        cycle_layer = LiveCycleLayerV1(LiveCycleConfig(spacing_bps=10.0, tick_size=Decimal("0.10")))
+        mock_syncer = MagicMock()
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        return LiveEngineV0(
+            mock_paper_engine,
+            port,
+            config,
+            account_syncer=mock_syncer,
+            grid_planners={"BTCUSDT": planner},
+            cycle_layer=cycle_layer,
+        )
+
+    @staticmethod
+    def _snapshot_with_orders(
+        *,
+        buy_prices: tuple[str, ...] = (),
+        sell_prices: tuple[str, ...] = (),
+        pos_qty: str = "0.01",
+    ) -> AccountSnapshot:
+        orders: list[OpenOrderSnap] = []
+        for i, p in enumerate(buy_prices, 1):
+            orders.append(
+                OpenOrderSnap(
+                    order_id=f"grinder_d_BTCUSDT_{i}_1000_1",
+                    symbol="BTCUSDT",
+                    side="BUY",
+                    order_type="LIMIT",
+                    price=Decimal(p),
+                    qty=Decimal("0.01"),
+                    filled_qty=Decimal("0"),
+                    reduce_only=False,
+                    status="NEW",
+                    ts=1000000,
+                )
+            )
+        for i, p in enumerate(sell_prices, len(buy_prices) + 1):
+            orders.append(
+                OpenOrderSnap(
+                    order_id=f"grinder_d_BTCUSDT_{i}_1000_1",
+                    symbol="BTCUSDT",
+                    side="SELL",
+                    order_type="LIMIT",
+                    price=Decimal(p),
+                    qty=Decimal("0.01"),
+                    filled_qty=Decimal("0"),
+                    reduce_only=False,
+                    status="NEW",
+                    ts=1000000,
+                )
+            )
+        positions: tuple[PositionSnap, ...] = ()
+        if Decimal(pos_qty) != 0:
+            positions = (
+                PositionSnap(
+                    symbol="BTCUSDT",
+                    side="LONG" if Decimal(pos_qty) > 0 else "SHORT",
+                    qty=Decimal(pos_qty),
+                    entry_price=Decimal("50000"),
+                    mark_price=Decimal("50000"),
+                    unrealized_pnl=Decimal("0"),
+                    leverage=1,
+                    ts=1000000,
+                ),
+            )
+        return AccountSnapshot(
+            positions=positions,
+            open_orders=tuple(orders),
+            ts=1000000,
+            source="test",
+        )
+
+    def test_short_partial_close_sell_below_buy_below(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """SHORT partial TP → SELL below lowest SELL (inward) + BUY below lowest BUY."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._last_account_snapshot = self._snapshot_with_orders(
+            buy_prices=("49800.0", "49900.0"),
+            sell_prices=("50100.0", "50200.0"),
+            pos_qty="-0.01",
+        )
+
+        actions = engine._generate_tp_fill_replenish("BTCUSDT", Decimal("-0.01"), 1000000)
+
+        assert len(actions) == 2
+        buy_action = next(a for a in actions if a.side == OrderSide.BUY)
+        sell_action = next(a for a in actions if a.side == OrderSide.SELL)
+        # SHORT inward: SELL below lowest_sell
+        # 50100 * (1 - 10/10000) = 50100 * 0.999 = 50049.9
+        assert sell_action.price == Decimal("50049.9")
+        # SHORT outward: BUY below lowest_buy
+        # 49800 * 0.999 = 49750.2
+        assert buy_action.price == Decimal("49750.2")
+
+    def test_long_mid_cross_skips_buy(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """LONG: if inward BUY price >= mid → skip BUY, keep SELL."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._last_account_snapshot = self._snapshot_with_orders(
+            buy_prices=("50000.0",),
+            sell_prices=("50200.0",),
+            pos_qty="0.01",
+        )
+        # Set mid so that BUY inward (50000*1.001=50050) >= mid (50050)
+        engine._grid_anchor_mid["BTCUSDT"] = Decimal("50050.0")
+
+        actions = engine._generate_tp_fill_replenish("BTCUSDT", Decimal("0.01"), 1000000)
+
+        # BUY skipped (50050.0 >= 50050.0), only SELL remains
+        assert len(actions) == 1
+        assert actions[0].side == OrderSide.SELL
+
+    def test_short_mid_cross_skips_sell(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """SHORT: if inward SELL price <= mid → skip SELL, keep BUY."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._last_account_snapshot = self._snapshot_with_orders(
+            buy_prices=("49800.0",),
+            sell_prices=("49950.0",),
+            pos_qty="-0.01",
+        )
+        # Set mid so SELL inward (49950*0.999=49900.05→49900.0) <= mid (49950)
+        engine._grid_anchor_mid["BTCUSDT"] = Decimal("49950.0")
+
+        actions = engine._generate_tp_fill_replenish("BTCUSDT", Decimal("-0.01"), 1000000)
+
+        # SELL skipped (49900.0 <= 49950.0), only BUY remains
+        assert len(actions) == 1
+        assert actions[0].side == OrderSide.BUY
+
+    def test_no_mid_anchor_no_skip(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """No mid anchor → mid-cross guard not applied, both orders placed."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._last_account_snapshot = self._snapshot_with_orders(
+            buy_prices=("49900.0",),
+            sell_prices=("50100.0",),
+            pos_qty="0.01",
+        )
+        # No _grid_anchor_mid set
+
+        actions = engine._generate_tp_fill_replenish("BTCUSDT", Decimal("0.01"), 1000000)
+        assert len(actions) == 2
+
+    def test_tick_rounding_deterministic(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Verify tick rounding produces exact values (no floating-point drift)."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._last_account_snapshot = self._snapshot_with_orders(
+            buy_prices=("49753.3",),
+            sell_prices=("50247.7",),
+            pos_qty="0.01",
+        )
+
+        actions = engine._generate_tp_fill_replenish("BTCUSDT", Decimal("0.01"), 1000000)
+
+        assert len(actions) == 2
+        buy_action = next(a for a in actions if a.side == OrderSide.BUY)
+        sell_action = next(a for a in actions if a.side == OrderSide.SELL)
+        # LONG inward: 49753.3 * 1.001 = 49803.0533 → round_down(498030.533) * 0.1 = 49803.0
+        assert buy_action.price == Decimal("49803.0")
+        # SELL outward: 50247.7 * 1.001 = 50297.9477 → round_down(502979.477) * 0.1 = 50297.9
+        assert sell_action.price == Decimal("50297.9")
 
 
 class TestTpFillReplenishE2e:
