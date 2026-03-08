@@ -1338,6 +1338,17 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - Failed TP PLACEs retried 3x (10s cooldown, `-4118` only) via engine retry queue
   - Known limitation: successful retry does not fire compensating CANCEL. Extra grid order may be reconciled by planner on unfreeze under existing planner behavior; not guaranteed by this PR. Follow-up live evidence required
   - Non-goal: no Prometheus counters - logs only (`TP_SLOT_TAKEOVER_SKIPPED`, `TP_CLOSE_RETRY_QUEUED`, `_OK`, `_EXHAUSTED`). Counters deferred to observability PR
+- **Converge-first planner + budget-burn stop** (PR-P0-RACE-1, ADR-084):
+  - Three guards scoped to planner/grid-shift path ONLY (cycle layer TP/replenish unaffected):
+    1. Sync-gated planner: skip planner until AccountSync refreshes after dispatch (`_account_sync_generation` counter)
+    2. Cancel-first on extras: if `GridPlanResult.diff_extra > 0`, only CANCEL actions pass (PLACEs deferred)
+    3. Budget pre-check: if `orders_remaining() <= 0` or PLACEs > budget, entire shift deferred (no partial execution)
+  - Convergence = `diff_extra == 0` after fresh AccountSync
+  - Inflight latch: 30s timeout safety valve (clears sync-wait but cancel-only still applies if extras present)
+  - `ExchangePort.orders_remaining() -> int | None`: clean public API (NoOp returns None = unlimited)
+  - Env: `GRINDER_LIVE_CONVERGE_FIRST` (bool, default `True`, safe-by-default)
+  - Logs: `GRID_SHIFT_DEFERRED`, `PLACEMENT_DEFERRED`, `INFLIGHT_GENERATION_TIMEOUT`, `ORDER_BUDGET_EXHAUSTED`, `ORDER_BUDGET_NEAR_EXHAUSTION`
+  - Run #18 motivation: budget usage drops from 100+ (exhausted in 2min) to ~36 (stable grid)
 - **Verification knobs** (PR-VERIF-KNOBS-1):
   - `GRINDER_LIVE_ADAPTIVE_SPACING_ENABLED` (bool, default True): disables NATR-driven spacing when False
   - `GRINDER_LIVE_MAX_LEVEL_DISTANCE_BPS` (int, default 0=None): cap max distance from mid; levels beyond are skipped (not clamped)

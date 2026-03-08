@@ -4123,3 +4123,28 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
   - Atomicity in cycle_layer: cycle_layer has no execution feedback.
   - Immediate retry (blocking sleep): `-4118` resolves after account sync (~30s), not after milliseconds.
 - **SSOT:** `src/grinder/execution/types.py` (ExecutionAction.correlation_id), `src/grinder/live/engine.py` (atomicity guard + retry queue)
+
+## ADR-084: Converge-first planner + budget-burn stop (PR-P0-RACE-1)
+
+- **Date:** 2026-03-08
+- **Status:** Accepted
+- **Context:** Run #18 (main @ `d3e950d`): Grid shift churn burned 100-order budget in ~2min. `mismatch=10` triggered 20 actions (10 CANCEL + 10 PLACE) per shift. AccountSync REST lag (5s throttle) caused planner to see stale state and re-emit PLACEs, inflating open orders to count=16 (6 stale + 10 new). 10,561 `ORDER_BUDGET_EXHAUSTED` log lines, zero fills.
+- **Convergence contract:**
+  - Definition: `GridPlanResult.diff_extra == 0` after fresh AccountSync.
+  - Identity: `_account_sync_generation` counter (monotonic int, incremented per successful sync). Inflight shift records sync_gen at dispatch.
+  - Convergence check: sync_gen advanced AND extra==0 → converged.
+  - Why extra-based (not order-ID tracking): planner already computes `diff_extra` via level matching. Reusing this avoids new identity infrastructure. Extra>0 reliably indicates stale orders because level matching is unique per side.
+- **Decision:**
+  1. Sync-gated planner: skip planner until AccountSync refreshes after dispatch.
+  2. Cancel-first on extras: if `diff_extra > 0`, only CANCEL actions pass.
+  3. Budget pre-check: if `orders_remaining() <= 0` OR PLACEs > budget, entire shift deferred.
+  4. All guards scoped to planner path only. Cycle layer (TP/replenish) unaffected.
+  5. No partial shift execution (asymmetric grid → more churn). Explicit non-goal.
+- **Env:** `GRINDER_LIVE_CONVERGE_FIRST` (bool, default `True`, safe-by-default).
+- **Fail-open:** `CONVERGE_FIRST=0` disables all guards. `orders_remaining()=None` disables budget guard. Timeout (30s) prevents permanent latch.
+- **Known limitation:** timeout after 30s allows planner to proceed without proven convergence. Cancel-only filter still applies if extras present, so churn risk is bounded but not eliminated.
+- **Consequences:**
+  - `_plan_grid()` return type changed from `list[ExecutionAction]` to `GridPlanResult` (internal, no serialization, no digest impact).
+  - `ExchangePort` protocol gains `orders_remaining() -> int | None` method.
+  - Run #18 scenario: budget usage drops from 100+ (exhausted) to ~36 (stable grid).
+- **SSOT:** `src/grinder/live/engine.py` (`_apply_convergence_guards`, `_InflightShift`), `src/grinder/execution/port.py` (`orders_remaining`)

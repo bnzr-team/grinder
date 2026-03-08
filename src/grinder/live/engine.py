@@ -69,6 +69,7 @@ from grinder.execution.smart_order_router import (
 )
 from grinder.execution.sor_metrics import get_sor_metrics
 from grinder.execution.types import ActionType, ExecutionAction
+from grinder.live.grid_planner import GridPlanResult
 from grinder.live.live_metrics import get_live_engine_metrics
 from grinder.live.place_tracker import correlate_recent_places
 from grinder.ml.fill_model_loader import extract_online_features
@@ -115,6 +116,18 @@ _TP_CLOSE_RETRYABLE_CODES = frozenset({-4118})
 
 _TP_CLOSE_MAX_RETRIES = 3  # 3 retry attempts AFTER initial failure
 _TP_CLOSE_RETRY_COOLDOWN_MS = 10_000  # 10s between retry attempts
+
+# PR-P0-RACE-1: Convergence guard constants
+_CONVERGENCE_TIMEOUT_MS = 30_000  # 30s safety valve for inflight latch
+
+
+@dataclass
+class _InflightShift:
+    """Tracks a dispatched grid shift awaiting AccountSync convergence."""
+
+    sync_gen: int  # _account_sync_generation at dispatch time
+    place_count: int  # PLACEs dispatched
+    ts_ms: int  # wall-clock for timeout
 
 
 def _extract_binance_error_code(error: str | None) -> int | None:
@@ -471,6 +484,12 @@ class LiveEngineV0:
         # key: correlation_id, value: (action, retry_count, last_attempt_ts_ms)
         # retry_count 0 = enqueued (not yet retried), exhausted at >= _TP_CLOSE_MAX_RETRIES
         self._tp_close_retries: dict[str, tuple[ExecutionAction, int, int]] = {}
+        # PR-P0-RACE-1: Convergence guards
+        self._converge_first_enabled = parse_bool(
+            "GRINDER_LIVE_CONVERGE_FIRST", default=True, strict=False
+        )
+        self._inflight_shift: dict[str, _InflightShift] = {}
+        self._account_sync_generation: int = 0
         if self._emergency_exit_enabled:
             # Duck-type check: port must have cancel_all_orders + place_market_order + get_positions
             port = self._exchange_port
@@ -657,9 +676,15 @@ class LiveEngineV0:
         elif self._is_live_planner_enabled():
             # PR-L2: Exchange-truth grid planner replaces PaperEngine for action generation.
             # PaperEngine is NOT called (avoids ghost state mutation, doc-25 I1).
-            raw_actions = self._plan_grid(snapshot)
+            plan_result = self._plan_grid(snapshot)
+            raw_actions = plan_result.actions
             # Anti-churn: suppress GRID_SHIFT if mid hasn't moved enough from anchor
             raw_actions = self._filter_grid_shift(snapshot.symbol, snapshot.mid_price, raw_actions)
+            # PR-P0-RACE-1: convergence guards (sync-gate, cancel-first, budget)
+            # Scoped to planner path ONLY — cycle layer (TP/replenish) appended AFTER.
+            raw_actions = self._apply_convergence_guards(
+                snapshot.symbol, raw_actions, plan_result, snapshot.ts
+            )
             paper_output = _DeferredPaperOutput(
                 ts=snapshot.ts, symbol=snapshot.symbol, actions=raw_actions
             )
@@ -979,22 +1004,25 @@ class LiveEngineV0:
             return False
         return self._is_live_planner_enabled()
 
-    def _plan_grid(self, snapshot: Snapshot) -> list[ExecutionAction]:
+    def _plan_grid(self, snapshot: Snapshot) -> GridPlanResult:
         """Generate grid actions from LiveGridPlannerV1 (PR-L2).
 
         Uses last AccountSync snapshot for exchange truth.
-        Returns empty list if no snapshot yet (safe startup).
+        Returns empty GridPlanResult if no snapshot yet (safe startup).
+
+        PR-P0-RACE-1: returns full GridPlanResult (not just .actions) so
+        convergence guards can inspect diff_extra.
         """
         assert self._grid_planners is not None
 
         planner = self._grid_planners.get(snapshot.symbol)
         if planner is None:
             logger.debug("No grid planner for %s, skipping", snapshot.symbol)
-            return []
+            return GridPlanResult()
 
         if self._last_account_snapshot is None:
             logger.debug("No account snapshot yet, planner returns 0 actions (safe startup)")
-            return []
+            return GridPlanResult()
 
         # Filter open orders for this symbol only.
         # PR-INV-3: Exclude TP orders from planner diff (managed by cycle layer).
@@ -1049,7 +1077,7 @@ class LiveEngineV0:
                 float(snapshot.mid_price),
             )
 
-        return plan_result.actions
+        return plan_result
 
     def _tick_account_sync(self) -> None:  # noqa: PLR0912
         """Run one account sync cycle (read-only).
@@ -1079,6 +1107,8 @@ class LiveEngineV0:
             self._position_notional_usd = AccountSyncer.compute_position_notional(result.snapshot)
             # PR-L2: Store full snapshot for LiveGridPlannerV1 (open_orders as exchange truth)
             self._last_account_snapshot = result.snapshot
+            # PR-P0-RACE-1: monotonic generation counter for convergence guards
+            self._account_sync_generation += 1
 
         # Evidence writing (env-gated, safe-by-default)
         if result.snapshot is not None:
@@ -1504,6 +1534,95 @@ class LiveEngineV0:
                 sell_anchor_val,
                 spacing_bps,
             )
+        return actions
+
+    def _apply_convergence_guards(
+        self,
+        symbol: str,
+        actions: list[ExecutionAction],
+        plan_result: GridPlanResult,
+        ts_ms: int,
+    ) -> list[ExecutionAction]:
+        """PR-P0-RACE-1: convergence guards for planner/grid-shift path.
+
+        Three independent guards:
+        1. Sync-gated planner: skip planner until AccountSync refreshes after dispatch.
+        2. Cancel-first on extras: if diff_extra > 0, only CANCEL actions pass.
+        3. Budget pre-check: if PLACEs > budget remaining, entire shift deferred.
+
+        Scope: ONLY planner/grid actions. Cycle layer (TP/replenish) is
+        appended AFTER this method and is never filtered by it.
+
+        Returns filtered actions list.
+        """
+        if not self._converge_first_enabled:
+            return actions
+
+        if not actions:
+            return actions
+
+        # Guard 1: Inflight latch — wait for sync refresh after dispatch
+        inflight = self._inflight_shift.get(symbol)
+        if inflight is not None:
+            # Check timeout first (30s safety valve)
+            elapsed = ts_ms - inflight.ts_ms
+            if elapsed > _CONVERGENCE_TIMEOUT_MS:
+                logger.warning(
+                    "INFLIGHT_GENERATION_TIMEOUT symbol=%s elapsed_ms=%d",
+                    symbol,
+                    elapsed,
+                )
+                self._inflight_shift.pop(symbol, None)
+            elif self._account_sync_generation <= inflight.sync_gen:
+                # Sync hasn't refreshed since dispatch → skip planner entirely
+                logger.warning(
+                    "GRID_SHIFT_DEFERRED reason=INFLIGHT_GENERATION symbol=%s "
+                    "sync_gen=%d inflight_gen=%d",
+                    symbol,
+                    self._account_sync_generation,
+                    inflight.sync_gen,
+                )
+                return []
+            elif plan_result.diff_extra == 0:
+                # Converged: extras=0 after fresh sync → clear latch
+                self._inflight_shift.pop(symbol, None)
+            # else: sync refreshed but extras > 0 → fall through to Guard 2
+
+        # Guard 2: Cancel-first on extras (no inflight, latch just cleared, or post-timeout)
+        if plan_result.diff_extra > 0:
+            filtered = [a for a in actions if a.action_type == ActionType.CANCEL]
+            logger.warning(
+                "PLACEMENT_DEFERRED reason=ACCOUNT_SYNC_NOT_CONVERGED "
+                "symbol=%s extras=%d open=%d desired=%d",
+                symbol,
+                plan_result.diff_extra,
+                plan_result.actual_count,
+                plan_result.desired_count,
+            )
+            return filtered
+
+        # Guard 3: Budget pre-check
+        place_count = sum(1 for a in actions if a.action_type == ActionType.PLACE)
+        budget = self._exchange_port.orders_remaining()
+        if budget is not None and place_count > 0 and budget < place_count:
+            reason = "ORDER_BUDGET_EXHAUSTED" if budget <= 0 else "ORDER_BUDGET_NEAR_EXHAUSTION"
+            logger.warning(
+                "GRID_SHIFT_DEFERRED reason=%s symbol=%s budget_remaining=%d shift_cost=%d",
+                reason,
+                symbol,
+                budget,
+                place_count,
+            )
+            return []
+
+        # All guards passed — record inflight if PLACEs dispatched
+        if place_count > 0:
+            self._inflight_shift[symbol] = _InflightShift(
+                sync_gen=self._account_sync_generation,
+                place_count=place_count,
+                ts_ms=ts_ms,
+            )
+
         return actions
 
     def _filter_grid_shift(

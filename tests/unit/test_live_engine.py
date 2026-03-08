@@ -61,11 +61,16 @@ from grinder.live import (
     classify_intent,
 )
 from grinder.live.cycle_layer import LiveCycleConfig, LiveCycleLayerV1
-from grinder.live.engine import _BINANCE_ERROR_RE, _extract_binance_error_code
+from grinder.live.engine import (
+    _BINANCE_ERROR_RE,
+    _CONVERGENCE_TIMEOUT_MS,
+    _extract_binance_error_code,
+    _InflightShift,
+)
 from grinder.live.fsm_driver import FsmDriver
 from grinder.live.fsm_metrics import get_fsm_metrics, reset_fsm_metrics
 from grinder.live.fsm_orchestrator import FsmConfig, OrchestratorFSM
-from grinder.live.grid_planner import LiveGridConfig, LiveGridPlannerV1
+from grinder.live.grid_planner import GridPlanResult, LiveGridConfig, LiveGridPlannerV1
 from grinder.live.live_metrics import get_live_engine_metrics, reset_live_engine_metrics
 from grinder.risk.drawdown_guard_v1 import (
     DrawdownGuardV1,
@@ -2403,11 +2408,13 @@ class TestGridUnfreezeAnchorReset:
         engine._last_account_snapshot = AccountSnapshot(
             positions=(), open_orders=(), ts=1000000, source="test"
         )
+        engine._account_sync_generation += 1  # simulate sync
         engine.process_snapshot(self._snap("50000"))
         assert "BTCUSDT" in engine._grid_anchor_mid, "Anchor should be set"
 
         # Tick 2: position open → grid frozen
         engine._last_account_snapshot = self._pos_snapshot("0.01")
+        engine._account_sync_generation += 1  # simulate sync
         out_frozen = engine.process_snapshot(self._snap("50010"))
         grid_actions_frozen = [
             la for la in out_frozen.live_actions if la.action.reason in ("GRID_SHIFT", "GRID_FILL")
@@ -2418,6 +2425,7 @@ class TestGridUnfreezeAnchorReset:
         # Without fix: GRID_SHIFT suppressed (2bps < 50bps threshold)
         # With fix: anchor reset → treated as first-time → all actions pass through
         engine._last_account_snapshot = self._flat_snapshot_with_orders()
+        engine._account_sync_generation += 1  # simulate sync
         out_unfrozen = engine.process_snapshot(self._snap("50010"))
         shift_actions = [la for la in out_unfrozen.live_actions if la.action.reason == "GRID_SHIFT"]
         assert len(shift_actions) > 0, (
@@ -2437,10 +2445,12 @@ class TestGridUnfreezeAnchorReset:
         engine._last_account_snapshot = AccountSnapshot(
             positions=(), open_orders=(), ts=1000000, source="test"
         )
+        engine._account_sync_generation += 1  # simulate sync
         engine.process_snapshot(self._snap("50000"))
 
         # Tick 2: small move (5bps), stale orders — should still be suppressed
         engine._last_account_snapshot = self._flat_snapshot_with_orders()
+        engine._account_sync_generation += 1  # simulate sync
         out = engine.process_snapshot(self._snap("50025"))
         shift_actions = [la for la in out.live_actions if la.action.reason == "GRID_SHIFT"]
         assert shift_actions == [], "Without prior freeze, small move still suppressed"
@@ -2458,19 +2468,23 @@ class TestGridUnfreezeAnchorReset:
         engine._last_account_snapshot = AccountSnapshot(
             positions=(), open_orders=(), ts=1000000, source="test"
         )
+        engine._account_sync_generation += 1  # simulate sync
         engine.process_snapshot(self._snap("50000"))
 
         # Tick 2: freeze (position open)
         engine._last_account_snapshot = self._pos_snapshot("0.01")
+        engine._account_sync_generation += 1  # simulate sync
         engine.process_snapshot(self._snap("50010"))
 
         # Tick 3: unfreeze → anchor reset → grid shifts pass through
         engine._last_account_snapshot = self._flat_snapshot_with_orders()
+        engine._account_sync_generation += 1  # simulate sync
         out_recenter = engine.process_snapshot(self._snap("50010"))
         shift_first = [la for la in out_recenter.live_actions if la.action.reason == "GRID_SHIFT"]
         assert len(shift_first) > 0, "Recenter after unfreeze"
 
         # Tick 4: anchor now set to 50010, small move to 50015 (1bps) → suppressed again
+        engine._account_sync_generation += 1  # simulate sync
         out_after = engine.process_snapshot(self._snap("50015"))
         shift_second = [la for la in out_after.live_actions if la.action.reason == "GRID_SHIFT"]
         assert shift_second == [], "After recenter, anti-churn resumes normally"
@@ -4937,9 +4951,9 @@ class TestTPCloseAtomicity:
         be silently suppressed as "skipped_pending_cancel".
         """
         # Engine with planner + cycle_layer (_is_cycle_layer_enabled requires planner).
-        # Mock _plan_grid to return [] so planner doesn't generate interfering actions.
+        # Mock _plan_grid to return empty GridPlanResult so planner doesn't generate interfering actions.
         engine = self._make_engine_with_cycle(mock_paper_engine, noop_port, monkeypatch)
-        engine._plan_grid = lambda _snap: []  # type: ignore[assignment]
+        engine._plan_grid = lambda _snap: GridPlanResult()  # type: ignore[assignment]
 
         # Grid orders
         buy_l2 = OpenOrderSnap(
@@ -5226,3 +5240,391 @@ class TestTPCloseAtomicity:
         results = engine._process_tp_close_retries("BTCUSDT", 45000)
         assert len(results) == 0  # No retry attempt, just cleanup
         assert corr not in engine._tp_close_retries  # Cleared
+
+
+# ---------------------------------------------------------------------------
+# PR-P0-RACE-1: Convergence guards
+# ---------------------------------------------------------------------------
+
+
+class TestPlannerConvergence:
+    """PR-P0-RACE-1: convergence guards for planner/grid-shift path."""
+
+    @staticmethod
+    def _make_engine(
+        mock_paper_engine: MagicMock,
+        port: NoOpExchangePort | MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        converge_first: bool = True,
+    ) -> LiveEngineV0:
+        monkeypatch.setenv("GRINDER_LIVE_PLANNER_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_ACCOUNT_SYNC_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_LIVE_CONVERGE_FIRST", "1" if converge_first else "0")
+
+        planner = LiveGridPlannerV1(
+            LiveGridConfig(tick_size=Decimal("0.10"), levels=2, size_per_level=Decimal("0.01"))
+        )
+        mock_syncer = MagicMock()
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        return LiveEngineV0(
+            mock_paper_engine,
+            port,
+            config,
+            account_syncer=mock_syncer,
+            grid_planners={"BTCUSDT": planner},
+        )
+
+    @staticmethod
+    def _place_action(level: int = 1, side: OrderSide = OrderSide.BUY) -> ExecutionAction:
+        return ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=side,
+            price=Decimal("50000"),
+            quantity=Decimal("0.01"),
+            level_id=level,
+            reason="GRID_FILL",
+        )
+
+    @staticmethod
+    def _cancel_action(order_id: str = "grinder_d_BTCUSDT_1_1000000_1") -> ExecutionAction:
+        return ExecutionAction(
+            action_type=ActionType.CANCEL,
+            symbol="BTCUSDT",
+            side=OrderSide.BUY,
+            price=Decimal("50000"),
+            quantity=Decimal("0.01"),
+            order_id=order_id,
+            level_id=1,
+            reason="GRID_TRIM",
+        )
+
+    # 1. test_converge_first_extras_defer_places
+    def test_converge_first_extras_defer_places(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Planner sees extra=3 → only CANCELs pass, PLACEs filtered."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+
+        actions = [self._place_action(1), self._place_action(2), self._cancel_action()]
+        plan = GridPlanResult(actions=actions, diff_extra=3, actual_count=8, desired_count=5)
+
+        with caplog.at_level(logging.WARNING):
+            result = engine._apply_convergence_guards("BTCUSDT", actions, plan, 1000000)
+
+        assert len(result) == 1
+        assert result[0].action_type == ActionType.CANCEL
+        assert "PLACEMENT_DEFERRED" in caplog.text
+        assert "ACCOUNT_SYNC_NOT_CONVERGED" in caplog.text
+        assert "extras=3" in caplog.text
+
+    # 2. test_converge_first_no_extras_places_pass
+    def test_converge_first_no_extras_places_pass(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Planner sees extra=0 → all actions pass unfiltered."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+
+        actions = [self._place_action(1), self._place_action(2), self._cancel_action()]
+        plan = GridPlanResult(actions=actions, diff_extra=0, desired_count=4, actual_count=4)
+
+        result = engine._apply_convergence_guards("BTCUSDT", actions, plan, 1000000)
+
+        assert len(result) == 3  # all pass
+
+    # 3. test_inflight_latch_blocks_until_sync_refresh
+    def test_inflight_latch_blocks_until_sync_refresh(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Dispatch PLACEs at sync_gen=0. Next tick (gen=0) → blocked. After gen=1 → runs."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._account_sync_generation = 0
+
+        # First call: PLACEs pass, inflight set
+        actions = [self._place_action(1)]
+        plan = GridPlanResult(actions=actions, diff_extra=0, desired_count=4, actual_count=4)
+        base_ts = 1_000_000_000  # large enough, all within 30s timeout
+        result = engine._apply_convergence_guards("BTCUSDT", actions, plan, base_ts)
+        assert len(result) == 1
+        assert "BTCUSDT" in engine._inflight_shift
+
+        # Second call: same sync_gen=0, within 30s → blocked
+        with caplog.at_level(logging.WARNING):
+            result2 = engine._apply_convergence_guards("BTCUSDT", actions, plan, base_ts + 5000)
+        assert result2 == []
+        assert "GRID_SHIFT_DEFERRED" in caplog.text
+        assert "INFLIGHT_GENERATION" in caplog.text
+
+        # Simulate sync refresh
+        engine._account_sync_generation = 1
+        result3 = engine._apply_convergence_guards("BTCUSDT", actions, plan, base_ts + 10000)
+        assert len(result3) == 1  # runs now
+
+    # 4. test_inflight_latch_clears_on_convergence
+    def test_inflight_latch_clears_on_convergence(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Dispatch PLACEs. Sync refreshes. extra=0 → latch cleared. Next tick normal."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._account_sync_generation = 0
+
+        # Dispatch PLACEs
+        actions = [self._place_action(1)]
+        plan = GridPlanResult(actions=actions, diff_extra=0, desired_count=4, actual_count=4)
+        base_ts = 1_000_000_000
+        engine._apply_convergence_guards("BTCUSDT", actions, plan, base_ts)
+        assert "BTCUSDT" in engine._inflight_shift
+
+        # Sync refreshes, extra=0 → converged, latch cleared
+        engine._account_sync_generation = 1
+        # Use plan with no PLACEs (cancel-only) so latch is not re-set
+        plan_empty = GridPlanResult(
+            actions=[self._cancel_action()], diff_extra=0, desired_count=4, actual_count=4
+        )
+        engine._apply_convergence_guards(
+            "BTCUSDT", [self._cancel_action()], plan_empty, base_ts + 5000
+        )
+        assert "BTCUSDT" not in engine._inflight_shift  # cleared (no PLACEs → no new latch)
+
+    # 5. test_inflight_latch_cancel_only_after_sync_with_extras
+    def test_inflight_latch_cancel_only_after_sync_with_extras(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Dispatch PLACEs. Sync refreshes. extra=3 → cancel-only. Latch NOT cleared."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._account_sync_generation = 0
+
+        # Dispatch PLACEs
+        base_ts = 1_000_000_000
+        actions = [self._place_action(1)]
+        plan_ok = GridPlanResult(actions=actions, diff_extra=0, desired_count=4, actual_count=4)
+        engine._apply_convergence_guards("BTCUSDT", actions, plan_ok, base_ts)
+
+        # Sync refreshes but extras exist
+        engine._account_sync_generation = 1
+        mixed = [self._place_action(1), self._cancel_action()]
+        plan_extras = GridPlanResult(actions=mixed, diff_extra=3, actual_count=8, desired_count=5)
+
+        with caplog.at_level(logging.WARNING):
+            result = engine._apply_convergence_guards("BTCUSDT", mixed, plan_extras, base_ts + 5000)
+
+        # Only CANCELs pass
+        assert len(result) == 1
+        assert result[0].action_type == ActionType.CANCEL
+        assert "PLACEMENT_DEFERRED" in caplog.text
+
+    # 6. test_inflight_timeout_clears_latch_with_warning
+    def test_inflight_timeout_clears_latch_with_warning(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """30s passes without sync refresh → latch cleared with WARNING."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._account_sync_generation = 0
+
+        # Dispatch PLACEs at ts=1000000
+        actions = [self._place_action(1)]
+        plan = GridPlanResult(actions=actions, diff_extra=0, desired_count=4, actual_count=4)
+        engine._apply_convergence_guards("BTCUSDT", actions, plan, 1000000)
+
+        # 31s later (>30s timeout), sync still gen=0
+        with caplog.at_level(logging.WARNING):
+            result = engine._apply_convergence_guards(
+                "BTCUSDT", actions, plan, 1000000 + _CONVERGENCE_TIMEOUT_MS + 1
+            )
+
+        assert len(result) == 1  # passes (latch cleared by timeout)
+        assert "INFLIGHT_GENERATION_TIMEOUT" in caplog.text
+
+    # 7. test_inflight_timeout_still_cancel_only_if_extras
+    def test_inflight_timeout_still_cancel_only_if_extras(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """After timeout clears latch, planner sees extra=4 → cancel-only still applies."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._account_sync_generation = 0
+
+        # Dispatch PLACEs
+        actions = [self._place_action(1)]
+        plan_ok = GridPlanResult(actions=actions, diff_extra=0, desired_count=4, actual_count=4)
+        engine._apply_convergence_guards("BTCUSDT", actions, plan_ok, 1000000)
+
+        # 31s timeout, extras=4
+        mixed = [self._place_action(1), self._cancel_action()]
+        plan_extras = GridPlanResult(actions=mixed, diff_extra=4, actual_count=9, desired_count=5)
+
+        with caplog.at_level(logging.WARNING):
+            result = engine._apply_convergence_guards(
+                "BTCUSDT", mixed, plan_extras, 1000000 + _CONVERGENCE_TIMEOUT_MS + 1
+            )
+
+        # Timeout fires, but Guard 2 (extras>0) catches → cancel-only
+        assert len(result) == 1
+        assert result[0].action_type == ActionType.CANCEL
+        assert "INFLIGHT_GENERATION_TIMEOUT" in caplog.text
+        assert "PLACEMENT_DEFERRED" in caplog.text
+
+    # 8. test_budget_near_exhaustion_defers_entire_shift
+    def test_budget_near_exhaustion_defers_entire_shift(
+        self,
+        mock_paper_engine: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Port returns orders_remaining()=5, shift needs 10 PLACEs → entire shift deferred."""
+        port = MagicMock()
+        port.orders_remaining.return_value = 5
+        engine = self._make_engine(mock_paper_engine, port, monkeypatch)
+
+        actions = [self._place_action(i) for i in range(10)]
+        plan = GridPlanResult(actions=actions, diff_extra=0, desired_count=10, actual_count=0)
+
+        with caplog.at_level(logging.WARNING):
+            result = engine._apply_convergence_guards("BTCUSDT", actions, plan, 1000000)
+
+        assert result == []
+        assert "ORDER_BUDGET_NEAR_EXHAUSTION" in caplog.text
+        assert "budget_remaining=5" in caplog.text
+        assert "shift_cost=10" in caplog.text
+
+    # 9. test_budget_sufficient_allows_shift
+    def test_budget_sufficient_allows_shift(
+        self,
+        mock_paper_engine: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Port returns orders_remaining()=25, shift needs 10 PLACEs → all pass."""
+        port = MagicMock()
+        port.orders_remaining.return_value = 25
+        engine = self._make_engine(mock_paper_engine, port, monkeypatch)
+
+        actions = [self._place_action(i) for i in range(10)]
+        plan = GridPlanResult(actions=actions, diff_extra=0, desired_count=10, actual_count=0)
+
+        result = engine._apply_convergence_guards("BTCUSDT", actions, plan, 1000000)
+
+        assert len(result) == 10
+
+    # 10. test_budget_zero_or_negative_defers
+    def test_budget_zero_or_negative_defers(
+        self,
+        mock_paper_engine: MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """orders_remaining()=0 (or -1) → full defer. Same path as near-exhaustion."""
+        for budget_val in (0, -1):
+            port = MagicMock()
+            port.orders_remaining.return_value = budget_val
+            engine = self._make_engine(mock_paper_engine, port, monkeypatch)
+
+            actions = [self._place_action(1)]
+            plan = GridPlanResult(actions=actions, diff_extra=0, desired_count=4, actual_count=3)
+
+            with caplog.at_level(logging.WARNING):
+                caplog.clear()
+                result = engine._apply_convergence_guards("BTCUSDT", actions, plan, 1000000)
+
+            assert result == [], f"budget={budget_val} should defer"
+            assert "ORDER_BUDGET_EXHAUSTED" in caplog.text
+
+    # 11. test_tp_cycle_not_blocked_by_convergence
+    def test_tp_cycle_not_blocked_by_convergence(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        sample_snapshot: Snapshot,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Convergence guards active, planner deferred — but cycle layer TP actions dispatched."""
+        monkeypatch.setenv("GRINDER_LIVE_PLANNER_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_ACCOUNT_SYNC_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_LIVE_CONVERGE_FIRST", "1")
+        monkeypatch.setenv("GRINDER_LIVE_CYCLE_ENABLED", "1")
+
+        planner = LiveGridPlannerV1(
+            LiveGridConfig(tick_size=Decimal("0.10"), levels=2, size_per_level=Decimal("0.01"))
+        )
+        mock_syncer = MagicMock()
+        cycle_layer = MagicMock()
+        # Cycle layer returns a TP_CLOSE action
+        tp_action = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            price=Decimal("50100"),
+            quantity=Decimal("0.01"),
+            level_id=99,
+            reason="TP_CLOSE",
+            reduce_only=True,
+        )
+        cycle_layer.on_snapshot.return_value = [tp_action]
+        cycle_layer.register_cancels = MagicMock()
+
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        engine = LiveEngineV0(
+            mock_paper_engine,
+            noop_port,
+            config,
+            account_syncer=mock_syncer,
+            grid_planners={"BTCUSDT": planner},
+            cycle_layer=cycle_layer,
+        )
+
+        # Set up snapshot + inflight latch (planner will be deferred)
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(), open_orders=(), ts=1000000, source="test"
+        )
+        engine._account_sync_generation = 0
+        engine._inflight_shift["BTCUSDT"] = _InflightShift(sync_gen=0, place_count=4, ts_ms=1000000)
+
+        output = engine.process_snapshot(sample_snapshot)
+
+        # Planner actions deferred (inflight latch), but TP_CLOSE from cycle layer passes
+        tp_actions = [la for la in output.live_actions if la.action.reason == "TP_CLOSE"]
+        assert len(tp_actions) == 1, "TP_CLOSE should NOT be blocked by convergence guards"
+
+    # 12. test_convergence_disabled_by_env
+    def test_convergence_disabled_by_env(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """GRINDER_LIVE_CONVERGE_FIRST=0 → all guards bypassed."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch, converge_first=False)
+
+        # With extras — would be filtered if guards were active
+        actions = [self._place_action(1), self._place_action(2), self._cancel_action()]
+        plan = GridPlanResult(actions=actions, diff_extra=5, actual_count=10, desired_count=5)
+
+        result = engine._apply_convergence_guards("BTCUSDT", actions, plan, 1000000)
+
+        # All pass — guards disabled
+        assert len(result) == 3
