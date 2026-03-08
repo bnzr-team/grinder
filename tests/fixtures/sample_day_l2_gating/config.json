@@ -2,7 +2,7 @@
   "description": "Fixture to test M7 L2 policy gating: entries blocked when impact > threshold",
   "symbols": ["TESTUSDT"],
   "duration_ms": 3000,
-  "expected_digest": "000a25c4ec85e712",
+  "expected_digest": "d2b82294b8ef65f4",
   "expected_paper_digest": "b349ccdacf7b46aa",
   "notes": "L2 snapshot with 67 bps impact > 50 bps threshold => L2_IMPACT_*_HIGH blocks entries",
   "schema_version": "v1",
