@@ -1393,8 +1393,10 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - Renew actions pass through grid freeze filter (only REPLENISH is blocked)
 - **Replenish on TP fill** (`GRINDER_LIVE_REPLENISH_ON_TP_FILL`, default `false`):
   - Detects TP fill events via position magnitude decrease (prev > 0 → cur < prev, or short symmetric)
-  - On TP fill (position still open): generates BUY below lowest BUY + SELL above highest SELL
-  - Prices: `lowest_buy * (1 - spacing_bps/10000)`, `highest_sell * (1 + spacing_bps/10000)`, tick-rounded
+  - On TP fill (position still open): **inward** re-entry + **outward** opposite (PR-ROLL-3b)
+  - LONG: BUY above highest_buy (inward), SELL above highest_sell (outward)
+  - SHORT: SELL below lowest_sell (inward), BUY below lowest_buy (outward)
+  - Guard: mid-cross -- skip inward order if price crosses mid (prevents overlap)
   - Anchors: stores lowest BUY / highest SELL per symbol when position is flat; uses anchors as fallback when no orders on a side
   - Uses grid identity (`strategy_id="d"`, `level_id=0`), not TP namespace
   - Reason: `TP_FILL_REPLENISH` (distinct from `REPLENISH`; passes through grid freeze filter)

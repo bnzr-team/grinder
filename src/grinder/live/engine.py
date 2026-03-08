@@ -1231,16 +1231,18 @@ class LiveEngineV0:
         if sell_prices:
             self._grid_anchor_high_sell[symbol] = max(sell_prices)
 
-    def _generate_tp_fill_replenish(  # noqa: PLR0911
+    def _generate_tp_fill_replenish(  # noqa: PLR0911, PLR0912, PLR0915
         self,
         symbol: str,
         pos_qty: Decimal | None,
         ts_ms: int,
     ) -> list[ExecutionAction]:
-        """Generate BUY below + SELL above when TP fills (position decreases).
+        """Generate inward BUY + outward SELL after partial TP close (PR-ROLL-3b).
 
-        Uses current open orders to find lowest BUY / highest SELL.
-        Falls back to anchors if no orders on a side. Returns [] if no anchors.
+        LONG (pos_qty > 0): BUY above highest_buy (inward), SELL above highest_sell (outward).
+        SHORT (pos_qty < 0): SELL below lowest_sell (inward), BUY below lowest_buy (outward).
+
+        Guards: mid-cross → skip inward order. Missing anchors → [].
         """
         if not self._replenish_on_tp_fill:
             return []
@@ -1279,24 +1281,58 @@ class LiveEngineV0:
             elif o.side.upper() == "SELL":
                 sell_prices.append(o.price)
 
-        # Determine lowest BUY (current or anchor)
-        lowest_buy = min(buy_prices) if buy_prices else self._grid_anchor_low_buy.get(symbol)
-        # Determine highest SELL (current or anchor)
-        highest_sell = max(sell_prices) if sell_prices else self._grid_anchor_high_sell.get(symbol)
+        is_long = pos_qty > 0
 
-        if lowest_buy is None or highest_sell is None:
-            logger.warning(
-                "TP_FILL_REPLENISH_SKIPPED symbol=%s — no anchor (low_buy=%s high_sell=%s)",
-                symbol,
-                lowest_buy,
-                highest_sell,
-            )
-            return []
-
-        # Compute new prices
         spacing_factor = Decimal(str(spacing_bps)) / Decimal("10000")
-        new_buy_raw = lowest_buy * (Decimal("1") - spacing_factor)
-        new_sell_raw = highest_sell * (Decimal("1") + spacing_factor)
+        identity = OrderIdentityConfig(
+            prefix=DEFAULT_PREFIX,
+            strategy_id=DEFAULT_STRATEGY_ID,
+            require_strategy_allowlist=False,
+        )
+
+        if is_long:
+            # LONG: BUY inward (above highest_buy), SELL outward (above highest_sell)
+            highest_buy = max(buy_prices) if buy_prices else self._grid_anchor_low_buy.get(symbol)
+            highest_sell = (
+                max(sell_prices) if sell_prices else self._grid_anchor_high_sell.get(symbol)
+            )
+            if highest_buy is None or highest_sell is None:
+                logger.warning(
+                    "TP_FILL_REPLENISH_SKIPPED symbol=%s -- no anchor "
+                    "(highest_buy=%s highest_sell=%s)",
+                    symbol,
+                    highest_buy,
+                    highest_sell,
+                )
+                return []
+            new_buy_raw = highest_buy * (Decimal("1") + spacing_factor)
+            new_sell_raw = highest_sell * (Decimal("1") + spacing_factor)
+            buy_anchor_label = "highest_buy"
+            buy_anchor_val = highest_buy
+            sell_anchor_label = "highest_sell"
+            sell_anchor_val = highest_sell
+        else:
+            # SHORT: SELL inward (below lowest_sell), BUY outward (below lowest_buy)
+            lowest_sell = (
+                min(sell_prices) if sell_prices else self._grid_anchor_high_sell.get(symbol)
+            )
+            lowest_buy = min(buy_prices) if buy_prices else self._grid_anchor_low_buy.get(symbol)
+            if lowest_sell is None or lowest_buy is None:
+                logger.warning(
+                    "TP_FILL_REPLENISH_SKIPPED symbol=%s -- no anchor "
+                    "(lowest_sell=%s lowest_buy=%s)",
+                    symbol,
+                    lowest_sell,
+                    lowest_buy,
+                )
+                return []
+            new_sell_raw = lowest_sell * (Decimal("1") - spacing_factor)
+            new_buy_raw = lowest_buy * (Decimal("1") - spacing_factor)
+            buy_anchor_label = "lowest_buy"
+            buy_anchor_val = lowest_buy
+            sell_anchor_label = "lowest_sell"
+            sell_anchor_val = lowest_sell
+
         new_buy_price = (new_buy_raw / tick_size).quantize(
             Decimal("1"), rounding=ROUND_DOWN
         ) * tick_size
@@ -1304,69 +1340,91 @@ class LiveEngineV0:
             Decimal("1"), rounding=ROUND_DOWN
         ) * tick_size
 
-        identity = OrderIdentityConfig(
-            prefix=DEFAULT_PREFIX,
-            strategy_id=DEFAULT_STRATEGY_ID,
-            require_strategy_allowlist=False,
-        )
+        # Guard: mid-cross — inward order must not cross mid
+        mid = self._grid_anchor_mid.get(symbol)
 
         actions: list[ExecutionAction] = []
-        # BUY below
-        self._tp_fill_replenish_seq += 1
-        buy_id = generate_client_order_id(
-            config=identity,
-            symbol=symbol,
-            level_id=0,
-            ts=ts_ms,
-            seq=self._tp_fill_replenish_seq,
-        )
-        actions.append(
-            ExecutionAction(
-                action_type=ActionType.PLACE,
-                symbol=symbol,
-                side=OrderSide.BUY,
-                price=new_buy_price,
-                quantity=qty,
-                level_id=0,
-                reason="TP_FILL_REPLENISH",
-                reduce_only=False,
-                client_order_id=buy_id,
-            )
-        )
-        # SELL above
-        self._tp_fill_replenish_seq += 1
-        sell_id = generate_client_order_id(
-            config=identity,
-            symbol=symbol,
-            level_id=0,
-            ts=ts_ms,
-            seq=self._tp_fill_replenish_seq,
-        )
-        actions.append(
-            ExecutionAction(
-                action_type=ActionType.PLACE,
-                symbol=symbol,
-                side=OrderSide.SELL,
-                price=new_sell_price,
-                quantity=qty,
-                level_id=0,
-                reason="TP_FILL_REPLENISH",
-                reduce_only=False,
-                client_order_id=sell_id,
-            )
-        )
+        skip_buy = False
+        skip_sell = False
 
-        logger.warning(
-            "TP_FILL_REPLENISH symbol=%s pos_qty=%s buy=%s sell=%s "
-            "low_buy=%s high_sell=%s spacing=%s bps",
-            symbol,
-            pos_qty,
-            new_buy_price,
-            new_sell_price,
-            lowest_buy,
-            highest_sell,
-            spacing_bps,
-        )
+        if is_long and mid is not None and new_buy_price >= mid:
+            logger.warning(
+                "TP_FILL_REPLENISH_MID_CROSS symbol=%s side=BUY price=%s >= mid=%s -- skipped",
+                symbol,
+                new_buy_price,
+                mid,
+            )
+            skip_buy = True
+        if not is_long and mid is not None and new_sell_price <= mid:
+            logger.warning(
+                "TP_FILL_REPLENISH_MID_CROSS symbol=%s side=SELL price=%s <= mid=%s -- skipped",
+                symbol,
+                new_sell_price,
+                mid,
+            )
+            skip_sell = True
+
+        if not skip_buy:
+            self._tp_fill_replenish_seq += 1
+            buy_id = generate_client_order_id(
+                config=identity,
+                symbol=symbol,
+                level_id=0,
+                ts=ts_ms,
+                seq=self._tp_fill_replenish_seq,
+            )
+            actions.append(
+                ExecutionAction(
+                    action_type=ActionType.PLACE,
+                    symbol=symbol,
+                    side=OrderSide.BUY,
+                    price=new_buy_price,
+                    quantity=qty,
+                    level_id=0,
+                    reason="TP_FILL_REPLENISH",
+                    reduce_only=False,
+                    client_order_id=buy_id,
+                )
+            )
+
+        if not skip_sell:
+            self._tp_fill_replenish_seq += 1
+            sell_id = generate_client_order_id(
+                config=identity,
+                symbol=symbol,
+                level_id=0,
+                ts=ts_ms,
+                seq=self._tp_fill_replenish_seq,
+            )
+            actions.append(
+                ExecutionAction(
+                    action_type=ActionType.PLACE,
+                    symbol=symbol,
+                    side=OrderSide.SELL,
+                    price=new_sell_price,
+                    quantity=qty,
+                    level_id=0,
+                    reason="TP_FILL_REPLENISH",
+                    reduce_only=False,
+                    client_order_id=sell_id,
+                )
+            )
+
+        if actions:
+            logger.warning(
+                "TP_FILL_REPLENISH symbol=%s pos_qty=%s dir=%s "
+                "buy=%s sell=%s %s=%s %s=%s spacing=%s bps",
+                symbol,
+                pos_qty,
+                "LONG_INWARD" if is_long else "SHORT_INWARD",
+                new_buy_price if not skip_buy else "SKIPPED",
+                new_sell_price if not skip_sell else "SKIPPED",
+                buy_anchor_label,
+                buy_anchor_val,
+                sell_anchor_label,
+                sell_anchor_val,
+                spacing_bps,
+            )
         return actions
 
     def _filter_grid_shift(
