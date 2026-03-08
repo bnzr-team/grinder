@@ -2288,6 +2288,191 @@ class TestGridShiftAntiChurn:
         assert len(fill_actions) > 0, "GRID_FILL always allowed"
 
 
+class TestGridUnfreezeAnchorReset:
+    """PR-ANTI-CHURN-2: anchor reset when grid unfreezes after position closes."""
+
+    @staticmethod
+    def _make_engine(
+        mock_paper_engine: MagicMock,
+        port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+        *,
+        min_move_bps: int = 50,
+    ) -> LiveEngineV0:
+        monkeypatch.setenv("GRINDER_LIVE_PLANNER_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_ACCOUNT_SYNC_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_LIVE_FREEZE_GRID_WHEN_IN_POSITION", "1")
+        monkeypatch.setenv("GRINDER_LIVE_GRID_SHIFT_MIN_MOVE_BPS", str(min_move_bps))
+
+        planner = LiveGridPlannerV1(
+            LiveGridConfig(tick_size=Decimal("0.10"), levels=2, size_per_level=Decimal("0.01"))
+        )
+        mock_syncer = MagicMock()
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        return LiveEngineV0(
+            mock_paper_engine,
+            port,
+            config,
+            account_syncer=mock_syncer,
+            grid_planners={"BTCUSDT": planner},
+        )
+
+    @staticmethod
+    def _snap(mid: str = "50000") -> Snapshot:
+        mid_d = Decimal(mid)
+        return Snapshot(
+            ts=1000000,
+            symbol="BTCUSDT",
+            bid_price=mid_d,
+            ask_price=mid_d + 1,
+            bid_qty=Decimal("1"),
+            ask_qty=Decimal("1"),
+            last_price=mid_d,
+            last_qty=Decimal("0.5"),
+        )
+
+    @staticmethod
+    def _pos_snapshot(qty: str = "0.01") -> AccountSnapshot:
+        return AccountSnapshot(
+            positions=(
+                PositionSnap(
+                    symbol="BTCUSDT",
+                    side="LONG",
+                    qty=Decimal(qty),
+                    entry_price=Decimal("50000"),
+                    mark_price=Decimal("50000"),
+                    unrealized_pnl=Decimal("0"),
+                    leverage=1,
+                    ts=1000000,
+                ),
+            ),
+            open_orders=(),
+            ts=1000000,
+            source="test",
+        )
+
+    @staticmethod
+    def _flat_snapshot_with_orders() -> AccountSnapshot:
+        """Flat position + stale grid orders at old prices."""
+        old_orders = tuple(
+            OpenOrderSnap(
+                order_id=f"grinder_d_BTCUSDT_{i}_1000000_{i}",
+                symbol="BTCUSDT",
+                side="BUY" if i <= 2 else "SELL",
+                order_type="LIMIT",
+                price=Decimal("49960") if i <= 2 else Decimal("50040"),
+                qty=Decimal("0.01"),
+                filled_qty=Decimal("0"),
+                reduce_only=False,
+                status="NEW",
+                ts=1000000,
+            )
+            for i in range(1, 5)
+        )
+        return AccountSnapshot(
+            positions=(
+                PositionSnap(
+                    symbol="BTCUSDT",
+                    side="BOTH",
+                    qty=Decimal("0"),
+                    entry_price=Decimal("0"),
+                    mark_price=Decimal("50010"),
+                    unrealized_pnl=Decimal("0"),
+                    leverage=1,
+                    ts=2000000,
+                ),
+            ),
+            open_orders=old_orders,
+            ts=2000000,
+            source="test",
+        )
+
+    def test_unfreeze_resets_anchor_allows_grid_shift(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """After position closes to 0, anchor resets → GRID_SHIFT passes through."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch, min_move_bps=50)
+
+        # Tick 1: empty exchange, build grid, set anchor at mid=50000
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(), open_orders=(), ts=1000000, source="test"
+        )
+        engine.process_snapshot(self._snap("50000"))
+        assert "BTCUSDT" in engine._grid_anchor_mid, "Anchor should be set"
+
+        # Tick 2: position open → grid frozen
+        engine._last_account_snapshot = self._pos_snapshot("0.01")
+        out_frozen = engine.process_snapshot(self._snap("50010"))
+        grid_actions_frozen = [
+            la for la in out_frozen.live_actions if la.action.reason in ("GRID_SHIFT", "GRID_FILL")
+        ]
+        assert grid_actions_frozen == [], "Frozen: no grid actions"
+
+        # Tick 3: position closes to 0 → unfreeze, mid moved only 2bps (50000 → 50010)
+        # Without fix: GRID_SHIFT suppressed (2bps < 50bps threshold)
+        # With fix: anchor reset → treated as first-time → all actions pass through
+        engine._last_account_snapshot = self._flat_snapshot_with_orders()
+        out_unfrozen = engine.process_snapshot(self._snap("50010"))
+        shift_actions = [la for la in out_unfrozen.live_actions if la.action.reason == "GRID_SHIFT"]
+        assert len(shift_actions) > 0, (
+            "After unfreeze, GRID_SHIFT should pass through (anchor was reset)"
+        )
+
+    def test_no_unfreeze_without_prior_freeze(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Without prior freeze, small move still suppressed (normal anti-churn)."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch, min_move_bps=50)
+
+        # Tick 1: build grid at mid=50000
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(), open_orders=(), ts=1000000, source="test"
+        )
+        engine.process_snapshot(self._snap("50000"))
+
+        # Tick 2: small move (5bps), stale orders — should still be suppressed
+        engine._last_account_snapshot = self._flat_snapshot_with_orders()
+        out = engine.process_snapshot(self._snap("50025"))
+        shift_actions = [la for la in out.live_actions if la.action.reason == "GRID_SHIFT"]
+        assert shift_actions == [], "Without prior freeze, small move still suppressed"
+
+    def test_anchor_reset_is_one_shot(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """After unfreeze recenter, subsequent small moves are suppressed again."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch, min_move_bps=50)
+
+        # Tick 1: build grid
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(), open_orders=(), ts=1000000, source="test"
+        )
+        engine.process_snapshot(self._snap("50000"))
+
+        # Tick 2: freeze (position open)
+        engine._last_account_snapshot = self._pos_snapshot("0.01")
+        engine.process_snapshot(self._snap("50010"))
+
+        # Tick 3: unfreeze → anchor reset → grid shifts pass through
+        engine._last_account_snapshot = self._flat_snapshot_with_orders()
+        out_recenter = engine.process_snapshot(self._snap("50010"))
+        shift_first = [la for la in out_recenter.live_actions if la.action.reason == "GRID_SHIFT"]
+        assert len(shift_first) > 0, "Recenter after unfreeze"
+
+        # Tick 4: anchor now set to 50010, small move to 50015 (1bps) → suppressed again
+        out_after = engine.process_snapshot(self._snap("50015"))
+        shift_second = [la for la in out_after.live_actions if la.action.reason == "GRID_SHIFT"]
+        assert shift_second == [], "After recenter, anti-churn resumes normally"
+
+
 class TestOrderBudgetLatch:
     """Tests for order budget exhaustion latch."""
 
