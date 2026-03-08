@@ -1391,6 +1391,11 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - Log: `TP_RENEW_STARTED`, `TP_RENEWED`, `TP_RENEW_FAILED`, `TP_RENEW_COOLDOWN`, `TP_RENEW_INFLIGHT`, `TP_RENEW_DEGRADED`
   - Safe-by-default: disabled unless explicitly enabled
   - Renew actions pass through grid freeze filter (only REPLENISH is blocked)
+  - **Overalloc guard** (PR-P0-TP-RENEW-OVERALLOC-GUARD): prevents temporary reduceOnly over-allocation
+    during renew when multiple TPs exist. Decision: if `tp_sum + new_qty > pos_abs` AND other TPs
+    exist, use CANCEL-first order (safe — other TPs cover the gap). Single TP stays PLACE-first
+    (PR-367 engine guard handles -2022 rejection). Fixes Run #16 bug where Binance auto-expired
+    a different TP during renew over-allocation.
 - **Replenish on TP fill** (`GRINDER_LIVE_REPLENISH_ON_TP_FILL`, default `false`):
   - Detects TP fill events via position magnitude decrease (prev > 0 → cur < prev, or short symmetric)
   - On TP fill (position still open): **inward** re-entry + **outward** opposite (PR-ROLL-3b)
