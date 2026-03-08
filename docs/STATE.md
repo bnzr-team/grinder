@@ -1381,6 +1381,9 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - Invariant: position open = TP must exist (auto-healed on expiry instead of abandoned)
   - Source price preserved: renew uses original `fill_price` formula, not current mid
   - 3 anti-churn guards: cooldown (`GRINDER_TP_RENEW_COOLDOWN_MS`, default 60s), inflight latch (per symbol), retry budget (`GRINDER_TP_RENEW_MAX_ATTEMPTS`, default 3 then degrade to plain cancel)
+  - **Atomic renew** (PR-P0-TP-RENEW-ATOMIC): PLACE new TP first, CANCEL old TP second.
+    If PLACE is blocked by gates (MAX_POSITION, FSM, etc.), CANCEL is skipped and old TP stays alive.
+    Log: `TP_RENEW_CANCEL_SKIPPED symbol=X — PLACE was blocked, keeping old TP alive`
   - Metrics: `grinder_cycle_tp_renew_total{symbol,outcome}` (started/renewed/failed/cooldown/inflight), `grinder_tp_active_gauge{symbol}` (0/1)
   - Log: `TP_RENEW_STARTED`, `TP_RENEWED`, `TP_RENEW_FAILED`, `TP_RENEW_COOLDOWN`, `TP_RENEW_INFLIGHT`, `TP_RENEW_DEGRADED`
   - Safe-by-default: disabled unless explicitly enabled

@@ -2473,6 +2473,193 @@ class TestGridUnfreezeAnchorReset:
         assert shift_second == [], "After recenter, anti-churn resumes normally"
 
 
+class TestTpRenewAtomic:
+    """PR-P0-TP-RENEW-ATOMIC: PLACE-first renew prevents TP loss when gates block."""
+
+    @staticmethod
+    def _make_engine(
+        mock_paper_engine: MagicMock,
+        port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> LiveEngineV0:
+        # Paper engine path (no live planner) so mock actions are used
+        monkeypatch.setenv("GRINDER_ACCOUNT_SYNC_ENABLED", "1")
+
+        mock_syncer = MagicMock()
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        return LiveEngineV0(
+            mock_paper_engine,
+            port,
+            config,
+            account_syncer=mock_syncer,
+        )
+
+    def test_tp_renew_cancel_skipped_when_place_blocked(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """If TP_RENEW PLACE is blocked by gates, CANCEL is skipped → old TP stays."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(), open_orders=(), ts=1000000, source="test"
+        )
+
+        # Simulate: cycle layer emits [PLACE, CANCEL] for TP_RENEW
+        # PLACE will be blocked by max-position gate
+        place_action = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            price=Decimal("50100"),
+            quantity=Decimal("0.002"),
+            reason="TP_RENEW",
+            reduce_only=True,
+            client_order_id="grinder_tp_BTCUSDT_1_2000000_2",
+        )
+        cancel_action = ExecutionAction(
+            action_type=ActionType.CANCEL,
+            symbol="BTCUSDT",
+            order_id="grinder_tp_BTCUSDT_1_1000000_1",
+            reason="TP_RENEW",
+        )
+
+        # Force PLACE to be blocked: position notional exceeds max cap
+        engine._config.max_position_usd = 1.0
+        engine._position_notional_usd = 1000.0
+
+        # Inject actions as if paper_output.actions contained them
+        mock_paper_engine.process_snapshot.return_value = MagicMock(
+            actions=[place_action, cancel_action]
+        )
+        snap = Snapshot(
+            ts=2000000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50001"),
+            bid_qty=Decimal("1"),
+            ask_qty=Decimal("1"),
+            last_price=Decimal("50000"),
+            last_qty=Decimal("0.5"),
+        )
+        output = engine.process_snapshot(snap)
+
+        # PLACE should be blocked
+        place_results = [
+            la for la in output.live_actions if la.action.action_type == ActionType.PLACE
+        ]
+        assert len(place_results) == 1
+        assert place_results[0].status == LiveActionStatus.BLOCKED
+
+        # CANCEL should also be blocked (skipped) to keep old TP alive
+        cancel_results = [
+            la for la in output.live_actions if la.action.action_type == ActionType.CANCEL
+        ]
+        assert len(cancel_results) == 1
+        assert cancel_results[0].status == LiveActionStatus.BLOCKED
+        assert cancel_results[0].block_reason == BlockReason.TP_RENEW_PLACE_FAILED
+
+    def test_tp_renew_cancel_executes_when_place_ok(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """If TP_RENEW PLACE succeeds, CANCEL proceeds normally."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(), open_orders=(), ts=1000000, source="test"
+        )
+
+        place_action = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            price=Decimal("50100"),
+            quantity=Decimal("0.002"),
+            reason="TP_RENEW",
+            reduce_only=True,
+            client_order_id="grinder_tp_BTCUSDT_1_2000000_2",
+        )
+        cancel_action = ExecutionAction(
+            action_type=ActionType.CANCEL,
+            symbol="BTCUSDT",
+            order_id="grinder_tp_BTCUSDT_1_1000000_1",
+            reason="TP_RENEW",
+        )
+
+        mock_paper_engine.process_snapshot.return_value = MagicMock(
+            actions=[place_action, cancel_action]
+        )
+        snap = Snapshot(
+            ts=2000000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50001"),
+            bid_qty=Decimal("1"),
+            ask_qty=Decimal("1"),
+            last_price=Decimal("50000"),
+            last_qty=Decimal("0.5"),
+        )
+        output = engine.process_snapshot(snap)
+
+        # Both PLACE and CANCEL should execute
+        place_results = [
+            la for la in output.live_actions if la.action.action_type == ActionType.PLACE
+        ]
+        cancel_results = [
+            la for la in output.live_actions if la.action.action_type == ActionType.CANCEL
+        ]
+        assert len(place_results) == 1
+        assert place_results[0].status == LiveActionStatus.EXECUTED
+        assert len(cancel_results) == 1
+        # CANCEL executes (even if the order doesn't exist on exchange, it's attempted)
+        assert cancel_results[0].status in (
+            LiveActionStatus.EXECUTED,
+            LiveActionStatus.FAILED,
+        )
+
+    def test_non_tp_renew_cancel_not_affected(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """CANCEL with reason != TP_RENEW is never skipped by this guard."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(), open_orders=(), ts=1000000, source="test"
+        )
+
+        cancel_action = ExecutionAction(
+            action_type=ActionType.CANCEL,
+            symbol="BTCUSDT",
+            order_id="grinder_d_BTCUSDT_1_1000000_1",
+            reason="TP_SLOT_TAKEOVER",
+        )
+
+        mock_paper_engine.process_snapshot.return_value = MagicMock(actions=[cancel_action])
+        snap = Snapshot(
+            ts=2000000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50001"),
+            bid_qty=Decimal("1"),
+            ask_qty=Decimal("1"),
+            last_price=Decimal("50000"),
+            last_qty=Decimal("0.5"),
+        )
+        output = engine.process_snapshot(snap)
+
+        # Non-TP_RENEW CANCEL should proceed normally
+        cancel_results = [
+            la for la in output.live_actions if la.action.action_type == ActionType.CANCEL
+        ]
+        assert len(cancel_results) == 1
+        assert cancel_results[0].status != LiveActionStatus.BLOCKED
+
+
 class TestOrderBudgetLatch:
     """Tests for order budget exhaustion latch."""
 

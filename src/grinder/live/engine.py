@@ -120,6 +120,7 @@ class BlockReason(Enum):
     ROUTER_BLOCKED = "ROUTER_BLOCKED"
     FILL_PROB_LOW = "FILL_PROB_LOW"
     MAX_POSITION_EXCEEDED = "MAX_POSITION_EXCEEDED"
+    TP_RENEW_PLACE_FAILED = "TP_RENEW_PLACE_FAILED"
 
 
 class LiveActionStatus(Enum):
@@ -700,14 +701,48 @@ class LiveEngineV0:
         live_actions: list[LiveAction] = []
         raw_actions = paper_output.actions if hasattr(paper_output, "actions") else []
 
+        # PR-P0-TP-RENEW-ATOMIC: track whether TP_RENEW PLACE succeeded per symbol.
+        # If PLACE was blocked, skip the paired CANCEL to keep old TP alive.
+        tp_renew_place_ok: dict[str, bool] = {}
+
         for raw_action in raw_actions:
             # PaperOutput.actions is list[dict], but tests may pass ExecutionAction directly
             if isinstance(raw_action, dict):
                 action = ExecutionAction.from_dict(raw_action)
             else:
                 action = raw_action
+
+            # Guard: skip TP_RENEW CANCEL if the paired PLACE was blocked
+            if (
+                action.action_type == ActionType.CANCEL
+                and action.reason == "TP_RENEW"
+                and action.symbol is not None
+                and not tp_renew_place_ok.get(action.symbol, True)
+            ):
+                logger.warning(
+                    "TP_RENEW_CANCEL_SKIPPED symbol=%s order_id=%s — "
+                    "PLACE was blocked, keeping old TP alive",
+                    action.symbol,
+                    action.order_id,
+                )
+                live_actions.append(
+                    LiveAction(
+                        action=action,
+                        status=LiveActionStatus.BLOCKED,
+                        block_reason=BlockReason.TP_RENEW_PLACE_FAILED,
+                        intent=RiskIntent.CANCEL,
+                    )
+                )
+                continue
+
             live_action = self._process_action(action, snapshot.ts)
             live_actions.append(live_action)
+
+            # Track TP_RENEW PLACE results
+            if action.reason == "TP_RENEW" and action.action_type == ActionType.PLACE:
+                tp_renew_place_ok[action.symbol or ""] = (
+                    live_action.status == LiveActionStatus.EXECUTED
+                )
 
         # Step 3: Build output
         return LiveEngineOutput(
