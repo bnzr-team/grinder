@@ -2473,6 +2473,141 @@ class TestGridUnfreezeAnchorReset:
         assert shift_second == [], "After recenter, anti-churn resumes normally"
 
 
+class TestReduceOnlyIntent:
+    """PR-P0-REDUCEONLY-INTENT: reduce_only=True → REDUCE_RISK, bypasses gates."""
+
+    def test_classify_intent_reduce_only_is_reduce_risk_pos_unknown(self) -> None:
+        """reduce_only=True + pos_sign=None → REDUCE_RISK (not INCREASE_RISK)."""
+        action = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            price=Decimal("50000"),
+            quantity=Decimal("0.002"),
+            reduce_only=True,
+        )
+        assert classify_intent(action, pos_sign=None) == RiskIntent.REDUCE_RISK
+
+    def test_classify_intent_reduce_only_buy_pos_unknown(self) -> None:
+        """reduce_only=True BUY + pos_sign=None → REDUCE_RISK."""
+        action = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.BUY,
+            price=Decimal("49000"),
+            quantity=Decimal("0.002"),
+            reduce_only=True,
+        )
+        assert classify_intent(action, pos_sign=None) == RiskIntent.REDUCE_RISK
+
+    def test_classify_intent_non_reduce_only_pos_unknown_still_increase(self) -> None:
+        """reduce_only=False + pos_sign=None → INCREASE_RISK (unchanged)."""
+        action = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            price=Decimal("50000"),
+            quantity=Decimal("0.002"),
+        )
+        assert classify_intent(action, pos_sign=None) == RiskIntent.INCREASE_RISK
+
+    def test_reduce_only_not_blocked_by_max_position(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """reduce_only PLACE passes Gate 5 even when notional exceeds cap."""
+        monkeypatch.setenv("GRINDER_ACCOUNT_SYNC_ENABLED", "1")
+        mock_syncer = MagicMock()
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        engine = LiveEngineV0(mock_paper_engine, noop_port, config, account_syncer=mock_syncer)
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(), open_orders=(), ts=1000000, source="test"
+        )
+        engine._config.max_position_usd = 1.0
+        engine._position_notional_usd = 1000.0  # way over cap
+
+        place_action = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            price=Decimal("50100"),
+            quantity=Decimal("0.002"),
+            reason="TP_RENEW",
+            reduce_only=True,
+            client_order_id="grinder_tp_BTCUSDT_1_2000000_2",
+        )
+        mock_paper_engine.process_snapshot.return_value = MagicMock(actions=[place_action])
+        snap = Snapshot(
+            ts=2000000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50001"),
+            bid_qty=Decimal("1"),
+            ask_qty=Decimal("1"),
+            last_price=Decimal("50000"),
+            last_qty=Decimal("0.5"),
+        )
+        output = engine.process_snapshot(snap)
+
+        place_results = [
+            la for la in output.live_actions if la.action.action_type == ActionType.PLACE
+        ]
+        assert len(place_results) == 1
+        assert place_results[0].status == LiveActionStatus.EXECUTED
+        assert place_results[0].block_reason != BlockReason.MAX_POSITION_EXCEEDED
+
+    def test_reduce_only_not_blocked_by_fsm(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """reduce_only PLACE bypasses FSM gate even in restrictive state."""
+        monkeypatch.setenv("GRINDER_ACCOUNT_SYNC_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_FSM_ENABLED", "1")
+        mock_syncer = MagicMock()
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        engine = LiveEngineV0(mock_paper_engine, noop_port, config, account_syncer=mock_syncer)
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(), open_orders=(), ts=1000000, source="test"
+        )
+        # Force FSM into INIT state (blocks everything including REDUCE_RISK)
+        if engine._fsm_driver is not None:
+            engine._fsm_driver._fsm.state = SystemState.INIT
+
+        place_action = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            price=Decimal("50100"),
+            quantity=Decimal("0.002"),
+            reason="TP_CLOSE",
+            reduce_only=True,
+            client_order_id="grinder_tp_BTCUSDT_1_2000000_2",
+        )
+        mock_paper_engine.process_snapshot.return_value = MagicMock(actions=[place_action])
+        snap = Snapshot(
+            ts=2000000,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50001"),
+            bid_qty=Decimal("1"),
+            ask_qty=Decimal("1"),
+            last_price=Decimal("50000"),
+            last_qty=Decimal("0.5"),
+        )
+        output = engine.process_snapshot(snap)
+
+        place_results = [
+            la for la in output.live_actions if la.action.action_type == ActionType.PLACE
+        ]
+        assert len(place_results) == 1
+        assert place_results[0].status != LiveActionStatus.BLOCKED
+        assert place_results[0].block_reason != BlockReason.FSM_STATE_BLOCKED
+
+
 class TestTpRenewAtomic:
     """PR-P0-TP-RENEW-ATOMIC: PLACE-first renew prevents TP loss when gates block."""
 
@@ -2507,7 +2642,7 @@ class TestTpRenewAtomic:
         )
 
         # Simulate: cycle layer emits [PLACE, CANCEL] for TP_RENEW
-        # PLACE will be blocked by max-position gate
+        # PLACE will be blocked by kill-switch (blocks PLACE regardless of reduce_only)
         place_action = ExecutionAction(
             action_type=ActionType.PLACE,
             symbol="BTCUSDT",
@@ -2525,9 +2660,8 @@ class TestTpRenewAtomic:
             reason="TP_RENEW",
         )
 
-        # Force PLACE to be blocked: position notional exceeds max cap
-        engine._config.max_position_usd = 1.0
-        engine._position_notional_usd = 1000.0
+        # Force PLACE to be blocked: kill-switch blocks all non-CANCEL
+        engine._config.kill_switch_active = True
 
         # Inject actions as if paper_output.actions contained them
         mock_paper_engine.process_snapshot.return_value = MagicMock(

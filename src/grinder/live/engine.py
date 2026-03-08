@@ -233,6 +233,7 @@ def classify_intent(
     Mapping:
         CANCEL → CANCEL (always allowed)
         NOOP → CANCEL (no action, treated as safe)
+        PLACE/REPLACE with reduce_only=True → REDUCE_RISK (PR-P0-REDUCEONLY-INTENT)
         PLACE/REPLACE with pos_sign:
             pos_sign=+1 (LONG) + SELL → REDUCE_RISK
             pos_sign=-1 (SHORT) + BUY → REDUCE_RISK
@@ -252,6 +253,11 @@ def classify_intent(
     elif action.action_type == ActionType.NOOP:
         return RiskIntent.CANCEL  # NOOP is safe, treat as CANCEL
     else:
+        # PR-P0-REDUCEONLY-INTENT: reduce_only=True always = REDUCE_RISK.
+        # Exchange enforces reduce-only server-side, so this is safe regardless
+        # of pos_sign (even None/unknown).
+        if action.reduce_only:
+            return RiskIntent.REDUCE_RISK
         # PLACE and REPLACE: check if this would reduce existing position
         if pos_sign is not None and action.side is not None:
             if pos_sign > 0 and action.side == OrderSide.SELL:
@@ -1531,7 +1537,13 @@ class LiveEngineV0:
                 )
 
         # Gate 7: FSM state permission (Launch-13)
-        if self._fsm_driver is not None and not self._fsm_driver.check_intent(intent):
+        # PR-P0-REDUCEONLY-INTENT: reduce_only bypasses FSM gate — TP must
+        # always be placeable when position is open (even in INIT/READY).
+        if (
+            self._fsm_driver is not None
+            and not action.reduce_only
+            and not self._fsm_driver.check_intent(intent)
+        ):
             return LiveAction(
                 action=action,
                 status=LiveActionStatus.BLOCKED,

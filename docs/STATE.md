@@ -1383,7 +1383,10 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - 3 anti-churn guards: cooldown (`GRINDER_TP_RENEW_COOLDOWN_MS`, default 60s), inflight latch (per symbol), retry budget (`GRINDER_TP_RENEW_MAX_ATTEMPTS`, default 3 then degrade to plain cancel)
   - **Atomic renew** (PR-P0-TP-RENEW-ATOMIC): PLACE new TP first, CANCEL old TP second.
     If PLACE is blocked by gates (MAX_POSITION, FSM, etc.), CANCEL is skipped and old TP stays alive.
-    Log: `TP_RENEW_CANCEL_SKIPPED symbol=X — PLACE was blocked, keeping old TP alive`
+    Log: `TP_RENEW_CANCEL_SKIPPED symbol=X -- PLACE was blocked, keeping old TP alive`
+  - **reduce_only intent** (PR-P0-REDUCEONLY-INTENT): `reduce_only=True` actions always classify
+    as `REDUCE_RISK` (regardless of pos_sign). Bypasses Gate 5 (MAX_POSITION) and Gate 7 (FSM).
+    P0 invariant: TP must always be placeable when position is open.
   - Metrics: `grinder_cycle_tp_renew_total{symbol,outcome}` (started/renewed/failed/cooldown/inflight), `grinder_tp_active_gauge{symbol}` (0/1)
   - Log: `TP_RENEW_STARTED`, `TP_RENEWED`, `TP_RENEW_FAILED`, `TP_RENEW_COOLDOWN`, `TP_RENEW_INFLIGHT`, `TP_RENEW_DEGRADED`
   - Safe-by-default: disabled unless explicitly enabled
