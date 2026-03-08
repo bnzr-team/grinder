@@ -550,19 +550,22 @@ class LiveCycleLayerV1:
         self._tp_renew_last_ts[symbol] = ts_ms
         # Clear inflight — actions emitted, execution pipeline handles them
         self._tp_renew_inflight[symbol] = False
-        # Reset attempt counter on successful emission
-        self._tp_renew_attempts[symbol] = 0
+        # Increment attempt counter (tracks total renewals, not consecutive failures)
+        self._tp_renew_attempts[symbol] = self._tp_renew_attempts.get(symbol, 0) + 1
 
         self._metrics.record_tp_renew(symbol, "renewed")
         logger.info(
-            "TP_RENEWED symbol=%s old=%s new=%s price=%s",
+            "TP_RENEWED symbol=%s old=%s new=%s price=%s attempt=%d",
             symbol,
             old_tp_id,
             new_tp_id,
             tp_price,
+            self._tp_renew_attempts[symbol],
         )
 
-        return [cancel_action, place_action]
+        # PR-P0-TP-RENEW-ATOMIC: PLACE first, CANCEL second.
+        # Engine skips CANCEL if PLACE was blocked → old TP stays alive.
+        return [place_action, cancel_action]
 
     def _cleanup_tp_created_ts(self, current: dict[str, OpenOrderSnap], ts_ms: int) -> None:
         """Remove tp_created_ts entries for TPs no longer in open_orders.

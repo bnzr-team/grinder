@@ -1182,8 +1182,8 @@ class TestTpAutoRenew:
         assert len(renew_actions) == 2  # CANCEL + PLACE
         assert all(a.reason != "REPLENISH" for a in renew_actions)
 
-    def test_renew_is_cancel_plus_place(self) -> None:
-        """REQ-009: Renew emits exactly [CANCEL, PLACE] pair, not REPLACE."""
+    def test_renew_is_place_then_cancel(self) -> None:
+        """REQ-009: Renew emits [PLACE, CANCEL] — PLACE first for atomicity."""
         layer = _make_renew_layer()
         tp_id, tp_price = _setup_fill_and_tp(layer)
         tp_snap = _snap(tp_id, side="SELL", price=tp_price)
@@ -1206,8 +1206,9 @@ class TestTpAutoRenew:
 
         renew_actions = [a for a in actions if a.reason == "TP_RENEW"]
         assert len(renew_actions) == 2
-        assert renew_actions[0].action_type == ActionType.CANCEL
-        assert renew_actions[1].action_type == ActionType.PLACE
+        # PR-P0-TP-RENEW-ATOMIC: PLACE first, CANCEL second
+        assert renew_actions[0].action_type == ActionType.PLACE
+        assert renew_actions[1].action_type == ActionType.CANCEL
         # No REPLACE action type
         assert all(a.action_type != ActionType.REPLACE for a in actions)
 
