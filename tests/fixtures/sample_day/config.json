@@ -2,7 +2,7 @@
   "description": "Sample day fixture for M1 vertical slice determinism testing",
   "symbols": ["BTCUSDT", "ETHUSDT"],
   "duration_ms": 5000,
-  "expected_digest": "1119be13d7a22e8a",
+  "expected_digest": "74a643bccb9e5d53",
   "expected_paper_digest": "66b29a4e92192f8f",
   "schema_version": "v1"
 }

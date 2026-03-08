@@ -4102,3 +4102,24 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
 - **Consequences:**
   - Replay digests changed (new fields in `to_dict()` affect hash): `sample_day_allowed` = `887812017a697c8a`, `sample_day_toxic` = `97c8b0d37cae3ce3`, `sample_day_multisymbol` = `b605159aac9c0aac`. `sample_day` unchanged (0 fills).
 - **SSOT:** `src/grinder/execution/types.py` (ExecutionAction), `src/grinder/execution/port.py` (Protocol)
+
+## ADR-083: TP_CLOSE + TP_SLOT_TAKEOVER atomicity (PR-P0-TP-CLOSE-ATOMIC)
+
+- **Date:** 2026-03-08
+- **Status:** Accepted
+- **Context:** TP_CLOSE PLACE and TP_SLOT_TAKEOVER CANCEL were independent actions. If PLACE failed (`-4118 ReduceOnly`), CANCEL still executed, shrinking grid without TP protection (observed in Run #17).
+- **Decision:**
+  1. Atomicity enforced in **engine** (not cycle_layer) via `correlation_id` field on `ExecutionAction`. Both PLACE and CANCEL share the same correlation_id (= TP client_order_id). Engine tracks success per correlation_id.
+  2. Retry: only `-4118` is retryable (reconvergence after race-duplicate orders). Max 3 attempts after initial failure, 10s cooldown. Error code extracted via regex parser from the deterministic format `"Binance error {code}: {msg}"` (`binance_port.py:250`).
+  3. After successful retry, no compensating CANCEL. Extra grid order may be reconciled by planner on unfreeze under existing planner behavior; not guaranteed by this PR. Follow-up live evidence required.
+  4. Non-goal: no Prometheus counters (logs only). Counters deferred to observability PR.
+- **Consequences:**
+  - ExecutionAction schema gains `correlation_id` field - replay digests change (precedent: ADR-082 added `reduce_only` + `client_order_id`, same mechanism).
+  - Missing correlation_id on new cycle_layer actions = generation bug (tested).
+  - Engine atomicity pattern reusable for future paired action scenarios.
+- **Alternatives rejected:**
+  - Positional pairing (PLACE always before CANCEL): implicit contract, fragile on refactoring.
+  - Per-symbol tracking: breaks on multi-fill same symbol.
+  - Atomicity in cycle_layer: cycle_layer has no execution feedback.
+  - Immediate retry (blocking sleep): `-4118` resolves after account sync (~30s), not after milliseconds.
+- **SSOT:** `src/grinder/execution/types.py` (ExecutionAction.correlation_id), `src/grinder/live/engine.py` (atomicity guard + retry queue)

@@ -145,6 +145,14 @@ class LiveCycleLayerV1:
             if a.action_type == ActionType.CANCEL and a.order_id:
                 self._pending_cancels[a.order_id] = ts_ms
 
+    def unregister_pending_cancel(self, order_id: str) -> None:
+        """Remove pending cancel entry (engine calls when CANCEL skipped).
+
+        Prevents false fill-suppression on next tick if the order fills
+        naturally after the CANCEL was not executed.
+        """
+        self._pending_cancels.pop(order_id, None)
+
     def _cleanup_pending_cancels(self, ts_ms: int) -> None:
         """Remove expired pending cancel entries (TTL-based)."""
         expired = [
@@ -269,6 +277,7 @@ class LiveCycleLayerV1:
                     reason="TP_CLOSE",
                     reduce_only=True,
                     client_order_id=tp_client_id,
+                    correlation_id=tp_client_id,
                 )
             )
 
@@ -311,6 +320,7 @@ class LiveCycleLayerV1:
                         order_id=farthest.order_id,
                         symbol=symbol,
                         reason="TP_SLOT_TAKEOVER",
+                        correlation_id=tp_client_id,
                     )
                 )
                 self._pending_cancels[farthest.order_id] = ts_ms

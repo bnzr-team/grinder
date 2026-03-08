@@ -96,6 +96,7 @@ class ExecutionAction:
     reason: str = ""
     reduce_only: bool = False
     client_order_id: str | None = None
+    correlation_id: str | None = None  # Links paired actions (e.g., TP PLACE + CANCEL)
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to JSON-serializable dict."""
@@ -110,6 +111,7 @@ class ExecutionAction:
             "reason": self.reason,
             "reduce_only": self.reduce_only,
             "client_order_id": self.client_order_id,
+            "correlation_id": self.correlation_id,
         }
 
     @classmethod
@@ -126,6 +128,7 @@ class ExecutionAction:
             reason=d.get("reason", ""),
             reduce_only=d.get("reduce_only", False),
             client_order_id=d.get("client_order_id"),
+            correlation_id=d.get("correlation_id"),
         )
 
 
