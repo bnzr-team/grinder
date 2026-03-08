@@ -381,6 +381,13 @@ class LiveCycleLayerV1:
         has_position = pos_qty is not None and pos_qty != 0
         renew_enabled = self._config.tp_renew_enabled and has_position
 
+        # PR-P0-TP-RENEW-OVERALLOC-GUARD: compute total TP qty for overalloc check
+        tp_sum_qty = Decimal("0")
+        if renew_enabled:
+            for _oid, _snap in current.items():
+                if _snap.symbol == symbol and is_tp_order(_oid):
+                    tp_sum_qty += _snap.qty
+
         actions: list[ExecutionAction] = []
         for oid, snap in current.items():
             if snap.symbol != symbol:
@@ -397,7 +404,9 @@ class LiveCycleLayerV1:
             self._metrics.record_tp_expired(symbol)
 
             if renew_enabled:
-                renew_actions = self._try_renew_tp(oid, snap, symbol, ts_ms, age_ms)
+                renew_actions = self._try_renew_tp(
+                    oid, snap, symbol, ts_ms, age_ms, pos_qty, tp_sum_qty
+                )
                 actions.extend(renew_actions)
             else:
                 # Legacy: plain cancel
@@ -426,10 +435,17 @@ class LiveCycleLayerV1:
         symbol: str,
         ts_ms: int,
         age_ms: int,
+        pos_qty: Decimal | None = None,
+        tp_sum_qty: Decimal = Decimal("0"),
     ) -> list[ExecutionAction]:
         """Attempt to renew an expired TP (cancel old + place new).
 
-        Returns [CANCEL, PLACE] on success, [CANCEL] on degradation.
+        PR-P0-TP-RENEW-OVERALLOC-GUARD: When multiple TPs exist and adding
+        a new TP would exceed abs(pos_qty) (reduceOnly budget), use cancel-first
+        order instead of place-first to avoid temporary over-allocation that
+        causes Binance to auto-expire a different TP.
+
+        Returns [PLACE, CANCEL] or [CANCEL, PLACE] on success, [CANCEL] on degradation.
         """
         ttl = self._config.tp_ttl_ms or 0
 
@@ -553,18 +569,31 @@ class LiveCycleLayerV1:
         # Increment attempt counter (tracks total renewals, not consecutive failures)
         self._tp_renew_attempts[symbol] = self._tp_renew_attempts.get(symbol, 0) + 1
 
+        # PR-P0-TP-RENEW-OVERALLOC-GUARD: decide action order.
+        # With multiple TPs, place-first can cause temporary reduceOnly
+        # over-allocation → Binance auto-expires a different TP (Run #16 bug).
+        # cancel-first is safe when other TPs cover the gap.
+        # Single TP: place-first with PR-367 guard (engine skips CANCEL on -2022).
+        pos_abs = abs(pos_qty) if pos_qty is not None else Decimal("0")
+        place_first_overalloc = tp_sum_qty + snap.qty > pos_abs
+        other_tps_exist = tp_sum_qty > snap.qty
+
+        mode = "cancel_first" if place_first_overalloc and other_tps_exist else "place_first"
+
         self._metrics.record_tp_renew(symbol, "renewed")
         logger.info(
-            "TP_RENEWED symbol=%s old=%s new=%s price=%s attempt=%d",
+            "TP_RENEWED symbol=%s old=%s new=%s price=%s attempt=%d mode=%s",
             symbol,
             old_tp_id,
             new_tp_id,
             tp_price,
             self._tp_renew_attempts[symbol],
+            mode,
         )
 
-        # PR-P0-TP-RENEW-ATOMIC: PLACE first, CANCEL second.
-        # Engine skips CANCEL if PLACE was blocked → old TP stays alive.
+        if mode == "cancel_first":
+            return [cancel_action, place_action]
+        # place-first: engine skips CANCEL if PLACE was blocked (PR-367)
         return [place_action, cancel_action]
 
     def _cleanup_tp_created_ts(self, current: dict[str, OpenOrderSnap], ts_ms: int) -> None:

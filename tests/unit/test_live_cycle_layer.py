@@ -1691,3 +1691,176 @@ class TestTPSlotTakeover:
         # Verify _pending_cancels registration
         assert cancelled_id in layer._pending_cancels
         assert layer._pending_cancels[cancelled_id] == 2_000_000
+
+
+# --- PR-P0-TP-RENEW-OVERALLOC-GUARD tests ---
+
+
+def _setup_multi_tp(
+    layer: LiveCycleLayerV1,
+    n_fills: int = 3,
+    fill_price_start: Decimal = Decimal("50000"),
+    step: Decimal = Decimal("100"),
+) -> list[tuple[str, Decimal]]:
+    """Run layer through N fill→TP cycles, return [(tp_id, tp_price), ...]."""
+    results: list[tuple[str, Decimal]] = []
+    for i in range(n_fills):
+        fp = fill_price_start - step * i
+        grid_oid = f"grinder_d_BTCUSDT_{i + 1}_1000_{i + 1}"
+        grid_order = _snap(grid_oid, side="BUY", price=fp)
+
+        # Establish prev with this grid order
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(grid_order,),
+            mid_price=fp,
+            ts_ms=1_000_000 + i * 10_000,
+        )
+        # Grid gone → TP generated
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(),
+            mid_price=fp,
+            ts_ms=2_000_000 + i * 10_000,
+        )
+        tp_action = [
+            a for a in actions if a.action_type == ActionType.PLACE and a.reason == "TP_CLOSE"
+        ]
+        assert len(tp_action) == 1
+        tp_id = tp_action[0].client_order_id
+        assert tp_id is not None
+        tp_price = tp_action[0].price
+        assert tp_price is not None
+        results.append((tp_id, tp_price))
+    return results
+
+
+class TestTpRenewOverallocGuard:
+    """Tests for PR-P0-TP-RENEW-OVERALLOC-GUARD."""
+
+    def test_multi_tp_uses_cancel_first(self) -> None:
+        """3 TPs on 0.006 pos → renew uses cancel-first (not place-first)."""
+        layer = _make_renew_layer()
+        tps = _setup_multi_tp(layer, n_fills=3)
+        tp1_id, tp1_price = tps[0]
+        tp2_id, tp2_price = tps[1]
+        tp3_id, tp3_price = tps[2]
+
+        tp1_snap = _snap(tp1_id, side="SELL", price=tp1_price)
+        tp2_snap = _snap(tp2_id, side="SELL", price=tp2_price)
+        tp3_snap = _snap(tp3_id, side="SELL", price=tp3_price)
+        all_tps = (tp1_snap, tp2_snap, tp3_snap)
+
+        # Establish prev with all 3 TPs
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=all_tps,
+            mid_price=Decimal("50000"),
+            ts_ms=2_030_000,
+            pos_qty=Decimal("0.006"),
+        )
+
+        # Expire TP1 (age > 60s TTL) with all 3 TPs still present
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=all_tps,
+            mid_price=Decimal("50000"),
+            ts_ms=2_061_000,
+            pos_qty=Decimal("0.006"),
+        )
+
+        renew = [a for a in actions if a.reason == "TP_RENEW"]
+        assert len(renew) == 2
+        # cancel-first: CANCEL before PLACE
+        assert renew[0].action_type == ActionType.CANCEL
+        assert renew[0].order_id == tp1_id
+        assert renew[1].action_type == ActionType.PLACE
+        assert renew[1].reduce_only is True
+
+    def test_single_tp_uses_place_first(self) -> None:
+        """1 TP on 0.002 pos → place-first (PR-367 guard handles -2022)."""
+        layer = _make_renew_layer()
+        tp_id, tp_price = _setup_fill_and_tp(layer)
+        tp_snap = _snap(tp_id, side="SELL", price=tp_price)
+
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(tp_snap,),
+            mid_price=Decimal("50000"),
+            ts_ms=2_030_000,
+            pos_qty=Decimal("0.002"),
+        )
+
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(tp_snap,),
+            mid_price=Decimal("50000"),
+            ts_ms=2_061_000,
+            pos_qty=Decimal("0.002"),
+        )
+
+        renew = [a for a in actions if a.reason == "TP_RENEW"]
+        assert len(renew) == 2
+        # place-first: PLACE before CANCEL
+        assert renew[0].action_type == ActionType.PLACE
+        assert renew[1].action_type == ActionType.CANCEL
+
+    def test_no_overalloc_uses_place_first(self) -> None:
+        """1 TP (0.002) on large pos (0.010) → no overalloc → place-first."""
+        layer = _make_renew_layer()
+        tp_id, tp_price = _setup_fill_and_tp(layer)
+        tp_snap = _snap(tp_id, side="SELL", price=tp_price)
+
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(tp_snap,),
+            mid_price=Decimal("50000"),
+            ts_ms=2_030_000,
+            pos_qty=Decimal("0.010"),
+        )
+
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(tp_snap,),
+            mid_price=Decimal("50000"),
+            ts_ms=2_061_000,
+            pos_qty=Decimal("0.010"),
+        )
+
+        renew = [a for a in actions if a.reason == "TP_RENEW"]
+        assert len(renew) == 2
+        # place-first (0.002 + 0.002 = 0.004 <= 0.010)
+        assert renew[0].action_type == ActionType.PLACE
+        assert renew[1].action_type == ActionType.CANCEL
+
+    def test_two_tps_cancel_first(self) -> None:
+        """2 TPs on 0.004 pos → cancel-first (overalloc + other TPs cover)."""
+        layer = _make_renew_layer()
+        tps = _setup_multi_tp(layer, n_fills=2)
+        tp1_id, tp1_price = tps[0]
+        tp2_id, tp2_price = tps[1]
+
+        tp1_snap = _snap(tp1_id, side="SELL", price=tp1_price)
+        tp2_snap = _snap(tp2_id, side="SELL", price=tp2_price)
+
+        layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(tp1_snap, tp2_snap),
+            mid_price=Decimal("50000"),
+            ts_ms=2_030_000,
+            pos_qty=Decimal("0.004"),
+        )
+
+        actions = layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(tp1_snap, tp2_snap),
+            mid_price=Decimal("50000"),
+            ts_ms=2_061_000,
+            pos_qty=Decimal("0.004"),
+        )
+
+        renew = [a for a in actions if a.reason == "TP_RENEW"]
+        assert len(renew) == 2
+        # cancel-first (0.004 + 0.002 = 0.006 > 0.004, and other TP covers)
+        assert renew[0].action_type == ActionType.CANCEL
+        assert renew[1].action_type == ActionType.PLACE
