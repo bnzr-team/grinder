@@ -1372,6 +1372,10 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - GRID_FILL (missing orders) and GRID_TRIM (extra orders) always pass through
   - Log: `GRID_SHIFT_SUPPRESSED symbol=X move=Y bps < threshold=Z bps`
   - Recommended: `50` bps for mainnet (prevents sub-cent noise from triggering full grid rebuild)
+  - **Unfreeze anchor reset** (PR-ANTI-CHURN-2): when position closes to 0 (freeze→unfreeze transition),
+    anchor is cleared so planner can recenter grid immediately without waiting for 50bps move.
+    One-shot: anchor re-set on first tick after unfreeze, then anti-churn resumes normally.
+    Log: `GRID_UNFREEZE symbol=X — anchor reset, planner will recenter grid`
 - **TP auto-renew on expiry** (`GRINDER_TP_RENEW_ENABLED`, default `false`):
   - When TP expires (TTL) and position is still open (pos_qty != 0), cancel old TP + place new TP at same price
   - Invariant: position open = TP must exist (auto-healed on expiry instead of abandoned)

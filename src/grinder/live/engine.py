@@ -420,6 +420,7 @@ class LiveEngineV0:
             or 0
         )
         self._grid_anchor_mid: dict[str, Decimal] = {}  # per-symbol anchor
+        self._was_grid_frozen: dict[str, bool] = {}  # per-symbol freeze state tracker
         # Replenish-on-TP-fill: add BUY below + SELL above when TP fills
         self._replenish_on_tp_fill = parse_bool(
             "GRINDER_LIVE_REPLENISH_ON_TP_FILL", default=False, strict=False
@@ -590,6 +591,17 @@ class LiveEngineV0:
                 "GRID_FREEZE_IN_POSITION symbol=%s — skipping planner + replenish",
                 snapshot.symbol,
             )
+
+        # PR-ANTI-CHURN-2: detect freeze→unfreeze transition, reset anchor so
+        # anti-churn allows full grid rebuild on first tick after position closes.
+        was_frozen = self._was_grid_frozen.get(snapshot.symbol, False)
+        if was_frozen and not grid_frozen:
+            self._grid_anchor_mid.pop(snapshot.symbol, None)
+            logger.warning(
+                "GRID_UNFREEZE symbol=%s — anchor reset, planner will recenter grid",
+                snapshot.symbol,
+            )
+        self._was_grid_frozen[snapshot.symbol] = grid_frozen
 
         # Budget exhaustion latch: skip planner when order budget is dead
         budget_dead = self._order_budget_exhausted
