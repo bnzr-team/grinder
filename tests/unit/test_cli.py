@@ -17,7 +17,7 @@ from pathlib import Path
 from grinder.replay import ReplayEngine
 
 FIXTURE_DIR = Path(__file__).parent.parent / "fixtures" / "sample_day"
-EXPECTED_DIGEST = "1119be13d7a22e8a"
+EXPECTED_DIGEST = "74a643bccb9e5d53"  # v1.3 + correlation_id field
 
 
 class TestCLIHelp:

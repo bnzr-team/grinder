@@ -10,6 +10,6 @@
   "topk_v1_warmup_min": 5,
   "expected_selected": ["LOWUSDT", "HIGHUSDT", "MEDUSDT"],
   "expected_gated": ["THINUSDT"],
-  "expected_paper_digest": "5b73848493cf2cf9",
+  "expected_paper_digest": "b70123fe017e0409",
   "notes": "6 symbols with varying characteristics: HIGHUSDT (high range, high liquidity), MEDUSDT (medium range, medium liquidity), LOWUSDT (low range, very high liquidity - selected first due to liquidity), TRENDUSDT (trending - high net_return penalty), THINUSDT (thin book - gated by THIN_BOOK), WIDEUSDT (moderate spread - not gated, just not selected)"
 }

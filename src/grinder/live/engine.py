@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import time
 from collections import deque
 from dataclasses import dataclass, field
@@ -104,6 +105,29 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+# PR-P0-TP-CLOSE-ATOMIC: Binance error code parser for retry decisions.
+# Expected format: "Binance error {code}: {msg}" (from binance_port.py map_binance_error).
+_BINANCE_ERROR_RE = re.compile(r"Binance error (-?\d+):")
+
+# Only -4118 (ReduceOnly Order Failed) is retryable for TP_CLOSE.
+# Temporary conflict from race-duplicate orders that resolves after account sync.
+_TP_CLOSE_RETRYABLE_CODES = frozenset({-4118})
+
+_TP_CLOSE_MAX_RETRIES = 3  # 3 retry attempts AFTER initial failure
+_TP_CLOSE_RETRY_COOLDOWN_MS = 10_000  # 10s between retry attempts
+
+
+def _extract_binance_error_code(error: str | None) -> int | None:
+    """Extract numeric error code from Binance error message.
+
+    Expected format: "Binance error {code}: {msg}" (from binance_port.py:250).
+    Returns None if format doesn't match.
+    """
+    if error is None:
+        return None
+    m = _BINANCE_ERROR_RE.search(error)
+    return int(m.group(1)) if m else None
+
 
 class BlockReason(Enum):
     """Reason why an action was blocked at engine level."""
@@ -121,6 +145,7 @@ class BlockReason(Enum):
     FILL_PROB_LOW = "FILL_PROB_LOW"
     MAX_POSITION_EXCEEDED = "MAX_POSITION_EXCEEDED"
     TP_RENEW_PLACE_FAILED = "TP_RENEW_PLACE_FAILED"
+    TP_CLOSE_PLACE_FAILED = "TP_CLOSE_PLACE_FAILED"
 
 
 class LiveActionStatus(Enum):
@@ -442,6 +467,10 @@ class LiveEngineV0:
         )
         # Order budget exhaustion latch: suppress planner when port is dead
         self._order_budget_exhausted = False
+        # PR-P0-TP-CLOSE-ATOMIC: retry queue for failed TP_CLOSE PLACEs
+        # key: correlation_id, value: (action, retry_count, last_attempt_ts_ms)
+        # retry_count 0 = enqueued (not yet retried), exhausted at >= _TP_CLOSE_MAX_RETRIES
+        self._tp_close_retries: dict[str, tuple[ExecutionAction, int, int]] = {}
         if self._emergency_exit_enabled:
             # Duck-type check: port must have cancel_all_orders + place_market_order + get_positions
             port = self._exchange_port
@@ -707,9 +736,17 @@ class LiveEngineV0:
         live_actions: list[LiveAction] = []
         raw_actions = paper_output.actions if hasattr(paper_output, "actions") else []
 
+        # PR-P0-TP-CLOSE-ATOMIC: retry failed TP_CLOSE PLACEs from previous ticks
+        retry_results = self._process_tp_close_retries(snapshot.symbol, snapshot.ts)
+        live_actions.extend(retry_results)
+
         # PR-P0-TP-RENEW-ATOMIC: track whether TP_RENEW PLACE succeeded per symbol.
         # If PLACE was blocked, skip the paired CANCEL to keep old TP alive.
         tp_renew_place_ok: dict[str, bool] = {}
+
+        # PR-P0-TP-CLOSE-ATOMIC: track TP_CLOSE PLACE success per correlation_id.
+        # If PLACE failed, skip paired TP_SLOT_TAKEOVER CANCEL (same correlation_id).
+        tp_close_place_ok: dict[str, bool] = {}
 
         for raw_action in raw_actions:
             # PaperOutput.actions is list[dict], but tests may pass ExecutionAction directly
@@ -717,6 +754,32 @@ class LiveEngineV0:
                 action = ExecutionAction.from_dict(raw_action)
             else:
                 action = raw_action
+
+            # Guard: skip TP_SLOT_TAKEOVER CANCEL if paired TP_CLOSE PLACE failed
+            if (
+                action.action_type == ActionType.CANCEL
+                and action.reason == "TP_SLOT_TAKEOVER"
+                and action.correlation_id is not None
+                and not tp_close_place_ok.get(action.correlation_id, True)
+            ):
+                logger.warning(
+                    "TP_SLOT_TAKEOVER_SKIPPED symbol=%s order_id=%s corr=%s — "
+                    "TP_CLOSE PLACE failed, keeping grid order alive",
+                    action.symbol,
+                    action.order_id,
+                    action.correlation_id,
+                )
+                if self._cycle_layer is not None and action.order_id is not None:
+                    self._cycle_layer.unregister_pending_cancel(action.order_id)
+                live_actions.append(
+                    LiveAction(
+                        action=action,
+                        status=LiveActionStatus.BLOCKED,
+                        block_reason=BlockReason.TP_CLOSE_PLACE_FAILED,
+                        intent=RiskIntent.CANCEL,
+                    )
+                )
+                continue
 
             # Guard: skip TP_RENEW CANCEL if the paired PLACE was blocked
             if (
@@ -743,6 +806,22 @@ class LiveEngineV0:
 
             live_action = self._process_action(action, snapshot.ts)
             live_actions.append(live_action)
+
+            # Track TP_CLOSE PLACE result by correlation_id
+            if action.reason == "TP_CLOSE" and action.action_type == ActionType.PLACE:
+                if action.correlation_id is None:
+                    # Invariant breach: new TP path MUST set correlation_id.
+                    logger.error(
+                        "TP_CLOSE_MISSING_CORRELATION_ID sym=%s id=%s — "
+                        "generation bug, atomicity guard disabled for this pair",
+                        action.symbol,
+                        action.client_order_id,
+                    )
+                else:
+                    ok = live_action.status == LiveActionStatus.EXECUTED
+                    tp_close_place_ok[action.correlation_id] = ok
+                    if not ok and self._is_tp_close_retryable(live_action):
+                        self._enqueue_tp_close_retry(action, snapshot.ts)
 
             # Track TP_RENEW PLACE results
             if action.reason == "TP_RENEW" and action.action_type == ActionType.PLACE:
@@ -1795,6 +1874,89 @@ class LiveEngineV0:
 
         # ALLOW or SHADOW: continue normal processing
         return None
+
+    # --- PR-P0-TP-CLOSE-ATOMIC: retry queue for failed TP_CLOSE PLACEs ---
+
+    @staticmethod
+    def _is_tp_close_retryable(live_action: LiveAction) -> bool:
+        """Check if failed TP_CLOSE PLACE should be retried.
+
+        Only -4118 (ReduceOnly Order Failed) is retryable — temporary conflict
+        from race-duplicate orders that resolves after account sync reconciliation.
+        All other failures (budget exhaustion, circuit breaker, gates) are terminal.
+        """
+        if live_action.status != LiveActionStatus.FAILED:
+            return False
+        code = _extract_binance_error_code(live_action.error)
+        return code is not None and code in _TP_CLOSE_RETRYABLE_CODES
+
+    def _enqueue_tp_close_retry(self, action: ExecutionAction, ts_ms: int) -> None:
+        """Enqueue a failed TP_CLOSE PLACE for retry on next tick.
+
+        Invariant: action.correlation_id MUST be set for new TP path.
+        Missing correlation_id = generation bug -> log and skip.
+        """
+        if action.correlation_id is None:
+            logger.error(
+                "TP_CLOSE_RETRY_INVARIANT_BREACH sym=%s id=%s — "
+                "missing correlation_id, cannot enqueue",
+                action.symbol,
+                action.client_order_id,
+            )
+            return
+        # Overwrite is intentional: one retry slot per correlation_id.
+        # If same pair enqueues again, the old entry is stale (already processed).
+        self._tp_close_retries[action.correlation_id] = (action, 0, ts_ms)
+        logger.warning(
+            "TP_CLOSE_RETRY_QUEUED sym=%s id=%s corr=%s",
+            action.symbol,
+            action.client_order_id,
+            action.correlation_id,
+        )
+
+    def _process_tp_close_retries(self, symbol: str, ts_ms: int) -> list[LiveAction]:
+        """Retry failed TP_CLOSE PLACEs (max 3 retries after initial, 10s cooldown).
+
+        Safe iteration: builds to_update/to_delete, applies AFTER loop.
+        """
+        results: list[LiveAction] = []
+        to_update: dict[str, tuple[ExecutionAction, int, int]] = {}
+        to_delete: list[str] = []
+
+        for corr_id, (action, retry_count, last_ts) in list(self._tp_close_retries.items()):
+            if (action.symbol or "") != symbol:
+                continue
+            if retry_count >= _TP_CLOSE_MAX_RETRIES:
+                logger.warning(
+                    "TP_CLOSE_RETRY_EXHAUSTED sym=%s id=%s corr=%s retries=%d",
+                    symbol,
+                    action.client_order_id,
+                    corr_id,
+                    retry_count,
+                )
+                to_delete.append(corr_id)
+                continue
+            if ts_ms - last_ts < _TP_CLOSE_RETRY_COOLDOWN_MS:
+                continue  # cooldown not elapsed
+            live_action = self._process_action(action, ts_ms)
+            results.append(live_action)
+            if live_action.status == LiveActionStatus.EXECUTED:
+                logger.info(
+                    "TP_CLOSE_RETRY_OK sym=%s id=%s corr=%s retry=%d",
+                    symbol,
+                    action.client_order_id,
+                    corr_id,
+                    retry_count + 1,
+                )
+                to_delete.append(corr_id)
+            else:
+                to_update[corr_id] = (action, retry_count + 1, ts_ms)
+
+        # Apply mutations AFTER iteration (safe pattern)
+        for corr_id in to_delete:
+            self._tp_close_retries.pop(corr_id, None)
+        self._tp_close_retries.update(to_update)
+        return results
 
     def _execute_action(self, action: ExecutionAction, ts: int, intent: RiskIntent) -> LiveAction:  # noqa: PLR0912
         """Execute action on exchange port with retries.

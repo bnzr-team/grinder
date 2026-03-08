@@ -47,18 +47,21 @@ from grinder.connectors.live_connector import SafeMode
 from grinder.connectors.retries import RetryPolicy
 from grinder.contracts import Snapshot
 from grinder.core import OrderSide, SystemState
+from grinder.execution.binance_port import map_binance_error
 from grinder.execution.idempotent_port import IdempotentExchangePort
 from grinder.execution.port import NoOpExchangePort
 from grinder.execution.types import ActionType, ExecutionAction
 from grinder.features.engine import FeatureEngine, FeatureEngineConfig
 from grinder.live import (
     BlockReason,
+    LiveAction,
     LiveActionStatus,
     LiveEngineConfig,
     LiveEngineV0,
     classify_intent,
 )
 from grinder.live.cycle_layer import LiveCycleConfig, LiveCycleLayerV1
+from grinder.live.engine import _BINANCE_ERROR_RE, _extract_binance_error_code
 from grinder.live.fsm_driver import FsmDriver
 from grinder.live.fsm_metrics import get_fsm_metrics, reset_fsm_metrics
 from grinder.live.fsm_orchestrator import FsmConfig, OrchestratorFSM
@@ -4484,3 +4487,742 @@ class TestReduceOnlyEnforcementToggle:
 
         assert result is True
         assert action.reduce_only is True
+
+
+class TestTPCloseAtomicity:
+    """PR-P0-TP-CLOSE-ATOMIC: TP_CLOSE PLACE + TP_SLOT_TAKEOVER CANCEL atomicity.
+
+    When CycleLayer generates a TP_CLOSE PLACE and TP_SLOT_TAKEOVER CANCEL pair,
+    the CANCEL must only execute if the paired PLACE succeeded (linked by
+    correlation_id on ExecutionAction).
+    """
+
+    @staticmethod
+    def _make_engine(
+        mock_paper_engine: MagicMock,
+        port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> LiveEngineV0:
+        """Paper engine path (no live planner) so mock actions are used."""
+        monkeypatch.setenv("GRINDER_ACCOUNT_SYNC_ENABLED", "1")
+
+        mock_syncer = MagicMock()
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        return LiveEngineV0(
+            mock_paper_engine,
+            port,
+            config,
+            account_syncer=mock_syncer,
+        )
+
+    @staticmethod
+    def _make_engine_with_cycle(
+        mock_paper_engine: MagicMock,
+        port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> LiveEngineV0:
+        """Engine with cycle_layer for unregister_pending_cancel tests."""
+        monkeypatch.setenv("GRINDER_ACCOUNT_SYNC_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_LIVE_PLANNER_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_LIVE_CYCLE_ENABLED", "1")
+
+        planner = LiveGridPlannerV1(
+            LiveGridConfig(tick_size=Decimal("0.10"), levels=2, size_per_level=Decimal("0.01"))
+        )
+        cycle_layer = LiveCycleLayerV1(LiveCycleConfig(spacing_bps=10.0, tick_size=Decimal("0.10")))
+        mock_syncer = MagicMock()
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        return LiveEngineV0(
+            mock_paper_engine,
+            port,
+            config,
+            account_syncer=mock_syncer,
+            grid_planners={"BTCUSDT": planner},
+            cycle_layer=cycle_layer,
+        )
+
+    @staticmethod
+    def _snap(ts: int = 2000000) -> Snapshot:
+        return Snapshot(
+            ts=ts,
+            symbol="BTCUSDT",
+            bid_price=Decimal("50000"),
+            ask_price=Decimal("50001"),
+            bid_qty=Decimal("1"),
+            ask_qty=Decimal("1"),
+            last_price=Decimal("50000"),
+            last_qty=Decimal("0.5"),
+        )
+
+    # --- Test 1: PLACE fails → CANCEL skipped ---
+
+    def test_tp_place_fails_cancel_skipped(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """TP_CLOSE PLACE blocked by kill-switch → TP_SLOT_TAKEOVER CANCEL BLOCKED."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(), open_orders=(), ts=1000000, source="test"
+        )
+
+        corr = "grinder_tp_BTCUSDT_1_2000000_1"
+        place_action = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            price=Decimal("50100"),
+            quantity=Decimal("0.002"),
+            reason="TP_CLOSE",
+            reduce_only=True,
+            client_order_id=corr,
+            correlation_id=corr,
+        )
+        cancel_action = ExecutionAction(
+            action_type=ActionType.CANCEL,
+            symbol="BTCUSDT",
+            order_id="grinder_d_BTCUSDT_5_1000000_1",
+            reason="TP_SLOT_TAKEOVER",
+            correlation_id=corr,
+        )
+
+        engine._config.kill_switch_active = True
+        mock_paper_engine.process_snapshot.return_value = MagicMock(
+            actions=[place_action, cancel_action]
+        )
+        output = engine.process_snapshot(self._snap())
+
+        place_results = [
+            la for la in output.live_actions if la.action.action_type == ActionType.PLACE
+        ]
+        cancel_results = [
+            la for la in output.live_actions if la.action.action_type == ActionType.CANCEL
+        ]
+        assert len(place_results) == 1
+        assert place_results[0].status == LiveActionStatus.BLOCKED
+
+        assert len(cancel_results) == 1
+        assert cancel_results[0].status == LiveActionStatus.BLOCKED
+        assert cancel_results[0].block_reason == BlockReason.TP_CLOSE_PLACE_FAILED
+
+    # --- Test 2: PLACE succeeds → CANCEL executes ---
+
+    def test_tp_place_succeeds_cancel_executed(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """TP_CLOSE PLACE succeeds → TP_SLOT_TAKEOVER CANCEL proceeds normally."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(), open_orders=(), ts=1000000, source="test"
+        )
+
+        corr = "grinder_tp_BTCUSDT_1_2000000_1"
+        place_action = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            price=Decimal("50100"),
+            quantity=Decimal("0.002"),
+            reason="TP_CLOSE",
+            reduce_only=True,
+            client_order_id=corr,
+            correlation_id=corr,
+        )
+        cancel_action = ExecutionAction(
+            action_type=ActionType.CANCEL,
+            symbol="BTCUSDT",
+            order_id="grinder_d_BTCUSDT_5_1000000_1",
+            reason="TP_SLOT_TAKEOVER",
+            correlation_id=corr,
+        )
+
+        mock_paper_engine.process_snapshot.return_value = MagicMock(
+            actions=[place_action, cancel_action]
+        )
+        output = engine.process_snapshot(self._snap())
+
+        place_results = [
+            la for la in output.live_actions if la.action.action_type == ActionType.PLACE
+        ]
+        cancel_results = [
+            la for la in output.live_actions if la.action.action_type == ActionType.CANCEL
+        ]
+        assert len(place_results) == 1
+        assert place_results[0].status == LiveActionStatus.EXECUTED
+
+        assert len(cancel_results) == 1
+        # CANCEL executes (NoOp port → EXECUTED or FAILED depending on order existence)
+        assert cancel_results[0].status in (LiveActionStatus.EXECUTED, LiveActionStatus.FAILED)
+        assert cancel_results[0].block_reason is None
+
+    # --- Test 3: Multi-fill same symbol, mixed results ---
+
+    def test_multi_fill_same_symbol_mixed(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """2 fills on BTCUSDT: PLACE_A ok → CANCEL_A ok, PLACE_B fails → CANCEL_B skipped.
+
+        Proves per-pair tracking via correlation_id, not per-symbol.
+        """
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(), open_orders=(), ts=1000000, source="test"
+        )
+
+        corr_a = "grinder_tp_BTCUSDT_1_2000000_1"
+        corr_b = "grinder_tp_BTCUSDT_2_2000000_2"
+
+        place_a = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            price=Decimal("50100"),
+            quantity=Decimal("0.002"),
+            reason="TP_CLOSE",
+            reduce_only=True,
+            client_order_id=corr_a,
+            correlation_id=corr_a,
+        )
+        cancel_a = ExecutionAction(
+            action_type=ActionType.CANCEL,
+            symbol="BTCUSDT",
+            order_id="grinder_d_BTCUSDT_5_1000000_1",
+            reason="TP_SLOT_TAKEOVER",
+            correlation_id=corr_a,
+        )
+        place_b = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            price=Decimal("50200"),
+            quantity=Decimal("0.002"),
+            reason="TP_CLOSE",
+            reduce_only=True,
+            client_order_id=corr_b,
+            correlation_id=corr_b,
+        )
+        cancel_b = ExecutionAction(
+            action_type=ActionType.CANCEL,
+            symbol="BTCUSDT",
+            order_id="grinder_d_BTCUSDT_4_1000000_1",
+            reason="TP_SLOT_TAKEOVER",
+            correlation_id=corr_b,
+        )
+
+        # Use kill_switch to block PLACE_B but not PLACE_A:
+        # We need to make PLACE_B fail. Patch _process_action to fail on second PLACE.
+        original_process = engine._process_action
+        place_count = {"n": 0}
+
+        def patched_process(action: ExecutionAction, ts: int) -> Any:
+            if action.action_type == ActionType.PLACE and action.reason == "TP_CLOSE":
+                place_count["n"] += 1
+                if place_count["n"] == 2:
+                    # Simulate kill-switch blocking for second PLACE
+                    return LiveAction(
+                        action=action,
+                        status=LiveActionStatus.BLOCKED,
+                        block_reason=BlockReason.KILL_SWITCH_ACTIVE,
+                        intent=RiskIntent.INCREASE_RISK,
+                    )
+            return original_process(action, ts)
+
+        engine._process_action = patched_process  # type: ignore[method-assign]
+
+        mock_paper_engine.process_snapshot.return_value = MagicMock(
+            actions=[place_a, cancel_a, place_b, cancel_b]
+        )
+        output = engine.process_snapshot(self._snap())
+
+        # CANCEL_A: should NOT be blocked (PLACE_A succeeded)
+        la_cancel_a = [
+            la
+            for la in output.live_actions
+            if la.action.action_type == ActionType.CANCEL and la.action.correlation_id == corr_a
+        ]
+        assert len(la_cancel_a) == 1
+        assert la_cancel_a[0].status != LiveActionStatus.BLOCKED
+
+        # CANCEL_B: MUST be blocked (PLACE_B failed)
+        la_cancel_b = [
+            la
+            for la in output.live_actions
+            if la.action.action_type == ActionType.CANCEL and la.action.correlation_id == corr_b
+        ]
+        assert len(la_cancel_b) == 1
+        assert la_cancel_b[0].status == LiveActionStatus.BLOCKED
+        assert la_cancel_b[0].block_reason == BlockReason.TP_CLOSE_PLACE_FAILED
+
+    # --- Test 4: No correlation_id → CANCEL passthrough (backward compat) ---
+
+    def test_no_correlation_id_passthrough(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """TP_SLOT_TAKEOVER CANCEL without correlation_id → executed (backward compat)."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(), open_orders=(), ts=1000000, source="test"
+        )
+
+        # CANCEL with no correlation_id (pre-atomicity path)
+        cancel_action = ExecutionAction(
+            action_type=ActionType.CANCEL,
+            symbol="BTCUSDT",
+            order_id="grinder_d_BTCUSDT_5_1000000_1",
+            reason="TP_SLOT_TAKEOVER",
+        )
+
+        mock_paper_engine.process_snapshot.return_value = MagicMock(actions=[cancel_action])
+        output = engine.process_snapshot(self._snap())
+
+        cancel_results = [
+            la for la in output.live_actions if la.action.action_type == ActionType.CANCEL
+        ]
+        assert len(cancel_results) == 1
+        # Guard condition: correlation_id is None → guard doesn't fire → passthrough
+        assert cancel_results[0].status != LiveActionStatus.BLOCKED
+
+    # --- Test 5: cycle_layer always sets correlation_id ---
+
+    def test_cycle_layer_always_sets_correlation_id(self) -> None:
+        """CycleLayer on_snapshot with fill → all TP_CLOSE + TP_SLOT_TAKEOVER have correlation_id."""
+        cycle_layer = LiveCycleLayerV1(LiveCycleConfig(spacing_bps=10.0, tick_size=Decimal("0.10")))
+
+        buy_order = OpenOrderSnap(
+            order_id="grinder_d_BTCUSDT_2_1000000_1",
+            symbol="BTCUSDT",
+            side="BUY",
+            order_type="LIMIT",
+            price=Decimal("49900"),
+            qty=Decimal("0.002"),
+            filled_qty=Decimal("0"),
+            reduce_only=False,
+            status="NEW",
+            ts=1000000,
+        )
+        sell_1 = OpenOrderSnap(
+            order_id="grinder_d_BTCUSDT_3_1000000_2",
+            symbol="BTCUSDT",
+            side="SELL",
+            order_type="LIMIT",
+            price=Decimal("50100"),
+            qty=Decimal("0.002"),
+            filled_qty=Decimal("0"),
+            reduce_only=False,
+            status="NEW",
+            ts=1000000,
+        )
+        sell_2 = OpenOrderSnap(
+            order_id="grinder_d_BTCUSDT_4_1000000_3",
+            symbol="BTCUSDT",
+            side="SELL",
+            order_type="LIMIT",
+            price=Decimal("50200"),
+            qty=Decimal("0.002"),
+            filled_qty=Decimal("0"),
+            reduce_only=False,
+            status="NEW",
+            ts=1000000,
+        )
+
+        # Tick 1: seed _prev_orders with 3 orders (BUY + 2 SELLs)
+        cycle_layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(buy_order, sell_1, sell_2),
+            mid_price=Decimal("50000"),
+            ts_ms=1000000,
+            pos_qty=Decimal("0"),
+        )
+
+        # Tick 2: BUY disappeared → fill detected, TP generated
+        actions = cycle_layer.on_snapshot(
+            symbol="BTCUSDT",
+            open_orders=(sell_1, sell_2),
+            mid_price=Decimal("50000"),
+            ts_ms=2000000,
+            pos_qty=Decimal("0.002"),
+        )
+
+        tp_close = [a for a in actions if a.reason == "TP_CLOSE"]
+        tp_takeover = [a for a in actions if a.reason == "TP_SLOT_TAKEOVER"]
+
+        # At least 1 TP_CLOSE should be generated from the fill
+        assert len(tp_close) >= 1, f"Expected TP_CLOSE, got {actions}"
+        for a in tp_close:
+            assert a.correlation_id is not None, f"TP_CLOSE missing correlation_id: {a}"
+
+        # If takeover was generated, it must also have correlation_id
+        for a in tp_takeover:
+            assert a.correlation_id is not None, f"TP_SLOT_TAKEOVER missing correlation_id: {a}"
+
+    # --- Test 6: pending_cancel unregistered on skip ---
+
+    def test_pending_cancel_unregistered_on_skip(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """When CANCEL is skipped, cycle_layer.unregister_pending_cancel is called."""
+        engine = self._make_engine_with_cycle(mock_paper_engine, noop_port, monkeypatch)
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(), open_orders=(), ts=1000000, source="test"
+        )
+
+        corr = "grinder_tp_BTCUSDT_1_2000000_1"
+        order_id = "grinder_d_BTCUSDT_5_1000000_1"
+        place_action = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            price=Decimal("50100"),
+            quantity=Decimal("0.002"),
+            reason="TP_CLOSE",
+            reduce_only=True,
+            client_order_id=corr,
+            correlation_id=corr,
+        )
+        cancel_action = ExecutionAction(
+            action_type=ActionType.CANCEL,
+            symbol="BTCUSDT",
+            order_id=order_id,
+            reason="TP_SLOT_TAKEOVER",
+            correlation_id=corr,
+        )
+
+        # Pre-register the pending cancel (as cycle_layer would)
+        assert engine._cycle_layer is not None
+        engine._cycle_layer._pending_cancels[order_id] = 1000000
+
+        # Block PLACE via kill-switch
+        engine._config.kill_switch_active = True
+        mock_paper_engine.process_snapshot.return_value = MagicMock(
+            actions=[place_action, cancel_action]
+        )
+        engine.process_snapshot(self._snap())
+
+        # After skip, pending cancel entry should be removed
+        assert order_id not in engine._cycle_layer._pending_cancels
+
+    # --- Test 7: natural fill not suppressed after skip (behavioral) ---
+
+    def test_natural_fill_not_suppressed_after_skip(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Full behavioral proof: skipped CANCEL → engine unregisters → next-tick fill detected.
+
+        Tick N-1: seed cycle_layer with BUY_L2 + SELL_L3 + SELL_L4
+        Tick N:   BUY_L2 disappears → cycle_layer emits TP_CLOSE SELL + TP_SLOT_TAKEOVER
+                  CANCEL(SELL_L4). Engine kill-switch blocks PLACE → atomicity guard
+                  skips CANCEL → engine calls unregister_pending_cancel(SELL_L4).
+        Tick N+1: SELL_L4 disappears naturally → cycle_layer detects as fill (NOT
+                  suppressed by stale _pending_cancels) → emits TP_CLOSE BUY.
+
+        Without unregister_pending_cancel, SELL_L4 would remain in _pending_cancels
+        (added by cycle_layer during TP_SLOT_TAKEOVER generation) and the fill would
+        be silently suppressed as "skipped_pending_cancel".
+        """
+        # Engine with planner + cycle_layer (_is_cycle_layer_enabled requires planner).
+        # Mock _plan_grid to return [] so planner doesn't generate interfering actions.
+        engine = self._make_engine_with_cycle(mock_paper_engine, noop_port, monkeypatch)
+        engine._plan_grid = lambda _snap: []  # type: ignore[assignment]
+
+        # Grid orders
+        buy_l2 = OpenOrderSnap(
+            order_id="grinder_d_BTCUSDT_2_1000000_1",
+            symbol="BTCUSDT",
+            side="BUY",
+            order_type="LIMIT",
+            price=Decimal("49900"),
+            qty=Decimal("0.002"),
+            filled_qty=Decimal("0"),
+            reduce_only=False,
+            status="NEW",
+            ts=1000000,
+        )
+        sell_l3 = OpenOrderSnap(
+            order_id="grinder_d_BTCUSDT_3_1000000_2",
+            symbol="BTCUSDT",
+            side="SELL",
+            order_type="LIMIT",
+            price=Decimal("50100"),
+            qty=Decimal("0.002"),
+            filled_qty=Decimal("0"),
+            reduce_only=False,
+            status="NEW",
+            ts=1000000,
+        )
+        sell_l4 = OpenOrderSnap(
+            order_id="grinder_d_BTCUSDT_4_1000000_3",
+            symbol="BTCUSDT",
+            side="SELL",
+            order_type="LIMIT",
+            price=Decimal("50200"),
+            qty=Decimal("0.002"),
+            filled_qty=Decimal("0"),
+            reduce_only=False,
+            status="NEW",
+            ts=1000000,
+        )
+
+        # --- Tick N-1: seed cycle_layer _prev_orders ---
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(),
+            open_orders=(buy_l2, sell_l3, sell_l4),
+            ts=1000000,
+            source="test",
+        )
+        engine.process_snapshot(self._snap(ts=1000000))
+
+        # --- Tick N: BUY_L2 fills → atomicity guard test ---
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(),
+            open_orders=(sell_l3, sell_l4),
+            ts=2000000,
+            source="test",
+        )
+        engine._config.kill_switch_active = True
+        output_n = engine.process_snapshot(self._snap(ts=2000000))
+
+        # Verify: cycle_layer detected BUY_L2 fill, generated TP_CLOSE + TP_SLOT_TAKEOVER
+        tp_close_n = [la for la in output_n.live_actions if la.action.reason == "TP_CLOSE"]
+        tp_takeover_n = [
+            la for la in output_n.live_actions if la.action.reason == "TP_SLOT_TAKEOVER"
+        ]
+        assert len(tp_close_n) >= 1, (
+            f"Expected TP_CLOSE, got: {[la.action.reason for la in output_n.live_actions]}"
+        )
+        assert tp_close_n[0].status == LiveActionStatus.BLOCKED
+        assert len(tp_takeover_n) >= 1, (
+            f"Expected TP_SLOT_TAKEOVER, got: {[la.action.reason for la in output_n.live_actions]}"
+        )
+        assert tp_takeover_n[0].status == LiveActionStatus.BLOCKED
+        assert tp_takeover_n[0].block_reason == BlockReason.TP_CLOSE_PLACE_FAILED
+
+        # Verify: unregister_pending_cancel was called by engine (not by test)
+        assert engine._cycle_layer is not None
+        assert sell_l4.order_id not in engine._cycle_layer._pending_cancels
+
+        # --- Tick N+1: SELL_L4 disappears naturally → fill MUST be detected ---
+        engine._config.kill_switch_active = False
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(),
+            open_orders=(sell_l3,),
+            ts=3000000,
+            source="test",
+        )
+        output_n1 = engine.process_snapshot(self._snap(ts=3000000))
+
+        # Behavioral assertion: SELL_L4 fill detected → TP_CLOSE BUY generated and EXECUTED
+        tp_close_n1 = [
+            la
+            for la in output_n1.live_actions
+            if la.action.reason == "TP_CLOSE" and la.action.action_type == ActionType.PLACE
+        ]
+        assert len(tp_close_n1) >= 1, (
+            "SELL_L4 fill suppressed by stale _pending_cancels — "
+            f"expected TP_CLOSE BUY, got: "
+            f"{[(la.action.reason, la.action.action_type) for la in output_n1.live_actions]}"
+        )
+        assert tp_close_n1[0].action.side == OrderSide.BUY  # opposite of SELL fill
+        assert tp_close_n1[0].status == LiveActionStatus.EXECUTED
+
+    # --- Test 8: _extract_binance_error_code parser ---
+
+    def test_extract_binance_error_code(self) -> None:
+        """Unit test for _extract_binance_error_code regex parser."""
+        assert (
+            _extract_binance_error_code("Binance error -4118: ReduceOnly Order is rejected")
+            == -4118
+        )
+        assert _extract_binance_error_code("Binance error -2019: Margin is insufficient") == -2019
+        assert (
+            _extract_binance_error_code("Binance error -4014: Price not increased by tick size")
+            == -4014
+        )
+        assert _extract_binance_error_code("Order count limit reached") is None
+        assert _extract_binance_error_code(None) is None
+        assert _extract_binance_error_code("") is None
+
+    # --- Test 9: binance_port error format contract ---
+
+    def test_binance_port_error_format_contract(self) -> None:
+        """Verify map_binance_error produces format parseable by _extract_binance_error_code."""
+        with pytest.raises(ConnectorNonRetryableError) as exc_info:
+            map_binance_error(400, {"code": -4118, "msg": "ReduceOnly Order is rejected"})
+
+        error_msg = str(exc_info.value)
+        match = _BINANCE_ERROR_RE.search(error_msg)
+        assert match is not None, f"Error format not parseable: {error_msg}"
+        assert int(match.group(1)) == -4118
+
+    # --- Test 10: retry only -4118 ---
+
+    def test_retry_only_4118(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """TP_CLOSE fails with -4118 → queued. Fails with -2019 → NOT queued."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+
+        corr_retryable = "grinder_tp_BTCUSDT_1_2000000_1"
+        corr_terminal = "grinder_tp_BTCUSDT_2_2000000_2"
+
+        action_retryable = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            price=Decimal("50100"),
+            quantity=Decimal("0.002"),
+            reason="TP_CLOSE",
+            reduce_only=True,
+            client_order_id=corr_retryable,
+            correlation_id=corr_retryable,
+        )
+        action_terminal = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            price=Decimal("50200"),
+            quantity=Decimal("0.002"),
+            reason="TP_CLOSE",
+            reduce_only=True,
+            client_order_id=corr_terminal,
+            correlation_id=corr_terminal,
+        )
+
+        # -4118: retryable
+        la_4118 = LiveAction(
+            action=action_retryable,
+            status=LiveActionStatus.FAILED,
+            error="Binance error -4118: ReduceOnly Order is rejected",
+        )
+        assert engine._is_tp_close_retryable(la_4118) is True
+        engine._enqueue_tp_close_retry(action_retryable, 1000)
+        assert corr_retryable in engine._tp_close_retries
+
+        # -2019: terminal
+        la_2019 = LiveAction(
+            action=action_terminal,
+            status=LiveActionStatus.FAILED,
+            error="Binance error -2019: Margin is insufficient",
+        )
+        assert engine._is_tp_close_retryable(la_2019) is False
+        # Not enqueued → should NOT be in retry queue
+        assert corr_terminal not in engine._tp_close_retries
+
+    # --- Test 11: retry succeeds on second tick ---
+
+    def test_retry_succeeds_on_second_tick(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Enqueue at ts=1000, second tick at ts=12000 (> 10s cooldown) → retry succeeds."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(), open_orders=(), ts=1000, source="test"
+        )
+
+        corr = "grinder_tp_BTCUSDT_1_1000_1"
+        action = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            price=Decimal("50100"),
+            quantity=Decimal("0.002"),
+            reason="TP_CLOSE",
+            reduce_only=True,
+            client_order_id=corr,
+            correlation_id=corr,
+        )
+
+        # Enqueue at ts=1000
+        engine._enqueue_tp_close_retry(action, 1000)
+        assert corr in engine._tp_close_retries
+        assert engine._tp_close_retries[corr][1] == 0  # retry_count=0
+
+        # Tick at ts=5000: cooldown not elapsed (5s < 10s)
+        results = engine._process_tp_close_retries("BTCUSDT", 5000)
+        assert len(results) == 0
+        assert corr in engine._tp_close_retries  # still queued
+
+        # Tick at ts=12000: cooldown elapsed (12s > 10s) → retry executes
+        results = engine._process_tp_close_retries("BTCUSDT", 12000)
+        assert len(results) == 1
+        assert results[0].status == LiveActionStatus.EXECUTED
+        assert corr not in engine._tp_close_retries  # cleared on success
+
+    # --- Test 12: retry exhausted after 3 ---
+
+    def test_retry_exhausted_after_3(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """3 retries all fail → EXHAUSTED, queue cleared."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._last_account_snapshot = AccountSnapshot(
+            positions=(), open_orders=(), ts=1000, source="test"
+        )
+
+        corr = "grinder_tp_BTCUSDT_1_1000_1"
+        action = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            price=Decimal("50100"),
+            quantity=Decimal("0.002"),
+            reason="TP_CLOSE",
+            reduce_only=True,
+            client_order_id=corr,
+            correlation_id=corr,
+        )
+
+        # Block all PLACEs via kill-switch (so retries fail as BLOCKED, not EXECUTED)
+        engine._config.kill_switch_active = True
+
+        # Enqueue with initial retry_count of 0
+        engine._enqueue_tp_close_retry(action, 1000)
+
+        # Retry 1: ts=12000 → retry_count 0→attempt, fails → count becomes 1
+        results = engine._process_tp_close_retries("BTCUSDT", 12000)
+        assert len(results) == 1
+        assert results[0].status == LiveActionStatus.BLOCKED
+        assert corr in engine._tp_close_retries
+        assert engine._tp_close_retries[corr][1] == 1
+
+        # Retry 2: ts=23000 → retry_count 1→attempt, fails → count becomes 2
+        results = engine._process_tp_close_retries("BTCUSDT", 23000)
+        assert len(results) == 1
+        assert corr in engine._tp_close_retries
+        assert engine._tp_close_retries[corr][1] == 2
+
+        # Retry 3: ts=34000 → retry_count 2→attempt, fails → count becomes 3
+        results = engine._process_tp_close_retries("BTCUSDT", 34000)
+        assert len(results) == 1
+        assert corr in engine._tp_close_retries
+        assert engine._tp_close_retries[corr][1] == 3
+
+        # Next tick: retry_count=3 >= MAX_RETRIES(3) → EXHAUSTED, cleared
+        results = engine._process_tp_close_retries("BTCUSDT", 45000)
+        assert len(results) == 0  # No retry attempt, just cleanup
+        assert corr not in engine._tp_close_retries  # Cleared

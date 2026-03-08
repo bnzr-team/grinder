@@ -1332,6 +1332,12 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - Cancelled order registered in `_pending_cancels` (prevents false fill detection on next tick)
   - Only targets grid orders (`strategy_id="d"`); TP orders never eligible
   - Log: `TP_SLOT_TAKEOVER` / `TP_SLOT_TAKEOVER_SKIP`
+- **TP_CLOSE atomicity** (PR-P0-TP-CLOSE-ATOMIC):
+  - TP_SLOT_TAKEOVER CANCEL only executes if paired TP_CLOSE PLACE succeeded (linked by `correlation_id` on ExecutionAction)
+  - Prevents grid shrinkage on `-4118 ReduceOnly Order Failed` race condition
+  - Failed TP PLACEs retried 3x (10s cooldown, `-4118` only) via engine retry queue
+  - Known limitation: successful retry does not fire compensating CANCEL. Extra grid order may be reconciled by planner on unfreeze under existing planner behavior; not guaranteed by this PR. Follow-up live evidence required
+  - Non-goal: no Prometheus counters - logs only (`TP_SLOT_TAKEOVER_SKIPPED`, `TP_CLOSE_RETRY_QUEUED`, `_OK`, `_EXHAUSTED`). Counters deferred to observability PR
 - **Verification knobs** (PR-VERIF-KNOBS-1):
   - `GRINDER_LIVE_ADAPTIVE_SPACING_ENABLED` (bool, default True): disables NATR-driven spacing when False
   - `GRINDER_LIVE_MAX_LEVEL_DISTANCE_BPS` (int, default 0=None): cap max distance from mid; levels beyond are skipped (not clamped)

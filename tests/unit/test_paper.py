@@ -28,7 +28,7 @@ FIXTURE_ALLOWED_DIR = Path(__file__).parent.parent / "fixtures" / "sample_day_al
 # v1 schema: includes fills and pnl_snapshot in output
 # v1.1: crossing/touch fill model (PR-ASM-P0-01)
 EXPECTED_PAPER_DIGEST_SAMPLE_DAY = "66b29a4e92192f8f"  # 0 fills (blocked by gating)
-EXPECTED_PAPER_DIGEST_ALLOWED = "887812017a697c8a"  # 10 fills with crossing/touch model
+EXPECTED_PAPER_DIGEST_ALLOWED = "e6883696070ba349"  # v1.3 + correlation_id field
 
 
 class TestPaperOutput:

@@ -305,9 +305,9 @@ class TestControllerIntegration:
         """
         expected = {
             "sample_day": "66b29a4e92192f8f",  # blocked by gating, 0 fills
-            "sample_day_allowed": "887812017a697c8a",  # v1.2 + reduce_only/client_order_id fields
-            "sample_day_toxic": "97c8b0d37cae3ce3",  # v1.2 + reduce_only/client_order_id fields
-            "sample_day_multisymbol": "b605159aac9c0aac",  # v1.2 + reduce_only/client_order_id fields
+            "sample_day_allowed": "e6883696070ba349",  # v1.3 + correlation_id field
+            "sample_day_toxic": "bd7c6c6db1a791e6",  # v1.3 + correlation_id field
+            "sample_day_multisymbol": "3121739903ae1e40",  # v1.3 + correlation_id field
         }
 
         for fixture, expected_digest in expected.items():
