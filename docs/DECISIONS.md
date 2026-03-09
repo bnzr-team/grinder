@@ -4148,3 +4148,22 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
   - `ExchangePort` protocol gains `orders_remaining() -> int | None` method.
   - Run #18 scenario: budget usage drops from 100+ (exhausted) to ~36 (stable grid).
 - **SSOT:** `src/grinder/live/engine.py` (`_apply_convergence_guards`, `_InflightShift`), `src/grinder/execution/port.py` (`orders_remaining`)
+
+## ADR-085: Rolling Infinite Grid (PR-ROLLING-INFINITE-GRID-SPEC)
+
+- **Date:** 2026-03-09
+- **Status:** Draft (spec only, no implementation)
+- **Context:** LiveGridPlannerV1 (doc-25) rebuilds the entire grid on every mid-price movement: 20 actions per shift for N=5. Grid fills don't advance the ladder -- they get swallowed by the next recenter. Run #18 burned 100-order budget in 2 minutes; PR-P0-RACE-1 mitigated budget burn but didn't solve the root cause (grid anchored to moving mid_price). Run #19 confirmed guards work (131 `GRID_SHIFT_DEFERRED` in 900s) but the planner still constantly wants to rebuild.
+- **Decision:** Replace mid-anchored grid with rolling infinite ladder:
+  1. Grid fills shift `effective_center` by `+/- step_price` (discrete, not continuous). `step_price` fixed per session.
+  2. No mid-price tracking for level computation -- grid anchored to rolling state (`anchor_price + net_offset * step_price`).
+  3. Fill produces 3 actions (1 CANCEL + 2 PLACE), not full rebuild (O(1) vs O(N)).
+  4. TP fills don't shift ladder -- planner diff restores grid levels naturally.
+  5. Price-based order matching (not level_id) -- prevents false mismatches after shift.
+  6. Volatile state (in-memory), re-anchor on restart (exchange-truth reconciliation).
+  7. Replenish mechanisms (PR-INV-4, TP_FILL_REPLENISH) become obsolete -- planner diff handles all level restoration.
+- **Feature flag:** `GRINDER_LIVE_ROLLING_GRID` (bool, default `False`, safe-by-default).
+- **Spec:** `docs/26_ROLLING_INFINITE_GRID_SPEC.md`
+- **Migration:** spec PR (this) -> implementation PR -> live verification PR -> cleanup PR.
+- **Open questions:** adaptive spacing refresh, max offset threshold, grid freeze interaction, fill detection ordering.
+- **SSOT:** `docs/26_ROLLING_INFINITE_GRID_SPEC.md`
