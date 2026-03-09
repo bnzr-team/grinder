@@ -4152,7 +4152,7 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
 ## ADR-085: Rolling Infinite Grid (PR-ROLLING-INFINITE-GRID-SPEC)
 
 - **Date:** 2026-03-09
-- **Status:** Draft (spec only, no implementation)
+- **Status:** Phase A implemented (planner building blocks only, not engine-wired yet)
 - **Context:** LiveGridPlannerV1 (doc-25) rebuilds the entire grid on every mid-price movement: 20 actions per shift for N=5. Grid fills don't advance the ladder -- they get swallowed by the next recenter. Run #18 burned 100-order budget in 2 minutes; PR-P0-RACE-1 mitigated budget burn but didn't solve the root cause (grid anchored to moving mid_price). Run #19 confirmed guards work (131 `GRID_SHIFT_DEFERRED` in 900s) but the planner still constantly wants to rebuild.
 - **Decision:** Replace mid-anchored grid with rolling infinite ladder:
   1. Grid fills shift `effective_center` by `+/- step_price` (discrete, not continuous). `step_price` fixed per session.
@@ -4164,6 +4164,13 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
   7. Replenish mechanisms (PR-INV-4, TP_FILL_REPLENISH) become obsolete -- planner diff handles all level restoration.
 - **Feature flag:** `GRINDER_LIVE_ROLLING_GRID` (bool, default `False`, safe-by-default).
 - **Spec:** `docs/26_ROLLING_INFINITE_GRID_SPEC.md`
-- **Migration:** spec PR (this) -> implementation PR -> live verification PR -> cleanup PR.
-- **Open questions:** adaptive spacing refresh, max offset threshold, grid freeze interaction, fill detection ordering.
+- **Migration:** spec PR -> Phase A (planner, this) -> Phase B (engine wiring) -> live verification -> cleanup.
+- **Implementation Phase A** (PR-ROLLING-GRID-V1A):
+  - `_RollingLadderState` dataclass in `grid_planner.py` (anchor_price, step_price, net_offset)
+  - Additive level formula: `ec +/- i * step_price` (vs multiplicative in doc-25)
+  - Price-based order matching: `_match_orders_by_price()` (replaces level_id matching in rolling mode)
+  - `plan(rolling_mode=True)` new code path -- NOT called by engine yet (no env var, no behavioral change)
+  - Phase A does NOT change runtime behavior. Engine does not call rolling mode.
+- **Phase B** (planned, PR-ROLLING-GRID-V1B): engine wiring, fill detection pipeline, freeze/replenish bypass.
+- **Open questions:** adaptive spacing refresh, max offset threshold, fill detection ordering (V1B).
 - **SSOT:** `docs/26_ROLLING_INFINITE_GRID_SPEC.md`

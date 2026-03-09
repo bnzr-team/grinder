@@ -1355,16 +1355,18 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - Wired into `LiveGridConfig.adaptive_enabled` and `LiveGridConfig.max_level_distance_bps`
   - Cap logic in `_build_desired_grid()`: reduces `desired_count` naturally
   - Backward-compatible: defaults preserve existing behavior
-- **Rolling Infinite Grid** (PR-ROLLING-INFINITE-GRID-SPEC, ADR-085):
-  - **Status:** SPEC ONLY (draft). No implementation yet.
+- **Rolling Infinite Grid** (ADR-085):
+  - **Status:** V1A implemented -- planner building blocks only, NOT engine-wired yet. No runtime behavior change.
   - **Spec:** `docs/26_ROLLING_INFINITE_GRID_SPEC.md`
   - **Problem:** Current mid-anchored grid rebuilds entirely on price movement (20 actions/shift, budget burn). Grid fills don't advance the ladder.
   - **Solution:** Rolling infinite ladder where grid fills shift `effective_center` by `+/- step_price`. Fill produces 3 actions (1 CANCEL + 2 PLACE) instead of full rebuild.
   - **Key invariants:** cardinality (N_buy + N_sell constant), spacing (uniform step_price), rolling shift (net_offset tracks fill direction), no global rebuild on fill, TP isolation (TP fills don't shift).
   - **State model:** `_RollingLadderState(anchor_price, step_price, net_offset)` -- volatile, re-anchor on restart.
-  - **Feature flag:** `GRINDER_LIVE_ROLLING_GRID` (bool, default `False`, safe-by-default).
+  - **Feature flag:** `GRINDER_LIVE_ROLLING_GRID` (bool, default `False`, safe-by-default). Not wired yet (V1B).
+  - **V1A (planner):** `_RollingLadderState`, `_build_rolling_grid()`, `_match_orders_by_price()`, `plan(rolling_mode=True)`. Planner-only, 18 tests. Engine does NOT call rolling mode yet.
+  - **V1B (engine wiring):** planned -- fill detection pipeline, freeze/replenish bypass, env var integration.
   - **Obsoletes in rolling mode:** cycle-layer replenish, TP_FILL_REPLENISH, mid-driven GRID_SHIFT, most anti-churn logic.
-  - **Migration:** spec (this PR) -> implementation -> live verification -> cleanup.
+  - **Migration:** spec -> V1A planner (this) -> V1B engine -> live verification -> cleanup.
 
 - **AccountSync visibility instrumentation** (PR-P0-2):
   - `GRINDER_ACCOUNT_SYNC_DEBUG_OPEN_ORDERS=1` (default 0): one flag enables both raw logging + correlation
