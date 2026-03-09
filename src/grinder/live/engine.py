@@ -91,7 +91,7 @@ from grinder.risk.emergency_exit import EmergencyExitExecutor
 from grinder.risk.emergency_exit_metrics import get_emergency_exit_metrics
 
 if TYPE_CHECKING:
-    from grinder.account.contracts import AccountSnapshot
+    from grinder.account.contracts import AccountSnapshot, OpenOrderSnap
     from grinder.contracts import Snapshot
     from grinder.execution.port import ExchangePort
     from grinder.features.engine import FeatureEngine
@@ -490,6 +490,13 @@ class LiveEngineV0:
         )
         self._inflight_shift: dict[str, _InflightShift] = {}
         self._account_sync_generation: int = 0
+        # PR-ROLLING-GRID-V1B: rolling grid mode (doc-26, safe-by-default)
+        self._rolling_grid_enabled = parse_bool(
+            "GRINDER_LIVE_ROLLING_GRID", default=False, strict=False
+        )
+        # Rolling fill detection state (engine-owned, no cycle_layer private access)
+        self._prev_rolling_orders: dict[str, dict[str, OpenOrderSnap]] = {}
+        self._rolling_pending_cancels: dict[str, int] = {}  # order_id -> ts_ms
         if self._emergency_exit_enabled:
             # Duck-type check: port must have cancel_all_orders + place_market_order + get_positions
             port = self._exchange_port
@@ -512,6 +519,10 @@ class LiveEngineV0:
         logger.info(
             "Reduce-only enforcement: %s",
             "enabled" if self._reduce_only_enforcement else "disabled",
+        )
+        logger.info(
+            "Rolling grid mode: %s",
+            "enabled" if self._rolling_grid_enabled else "disabled",
         )
 
     def _resolve_auto_threshold(self) -> None:
@@ -639,8 +650,16 @@ class LiveEngineV0:
                 kill_switch_active=self._config.kill_switch_active,
             )
 
+        # PR-ROLLING-GRID-V1B: compute effective rolling mode for this tick
+        rolling = self._rolling_grid_enabled and self._is_live_planner_enabled()
+
         # Freeze check: skip grid planner when position open (prevents GRID_SHIFT churn)
-        grid_frozen = self._freeze_grid_in_position and self._has_open_position(snapshot.symbol)
+        # In rolling mode, freeze is disabled — fill-driven shifts must pass through.
+        # Safety: rolling planner's additive formula is bounded (no mid-driven rebuilds).
+        if rolling:
+            grid_frozen = False
+        else:
+            grid_frozen = self._freeze_grid_in_position and self._has_open_position(snapshot.symbol)
         if grid_frozen:
             logger.warning(
                 "GRID_FREEZE_IN_POSITION symbol=%s — skipping planner + replenish",
@@ -649,14 +668,16 @@ class LiveEngineV0:
 
         # PR-ANTI-CHURN-2: detect freeze→unfreeze transition, reset anchor so
         # anti-churn allows full grid rebuild on first tick after position closes.
-        was_frozen = self._was_grid_frozen.get(snapshot.symbol, False)
-        if was_frozen and not grid_frozen:
-            self._grid_anchor_mid.pop(snapshot.symbol, None)
-            logger.warning(
-                "GRID_UNFREEZE symbol=%s — anchor reset, planner will recenter grid",
-                snapshot.symbol,
-            )
-        self._was_grid_frozen[snapshot.symbol] = grid_frozen
+        # Not needed in rolling mode (no mid-anchor tracking).
+        if not rolling:
+            was_frozen = self._was_grid_frozen.get(snapshot.symbol, False)
+            if was_frozen and not grid_frozen:
+                self._grid_anchor_mid.pop(snapshot.symbol, None)
+                logger.warning(
+                    "GRID_UNFREEZE symbol=%s — anchor reset, planner will recenter grid",
+                    snapshot.symbol,
+                )
+            self._was_grid_frozen[snapshot.symbol] = grid_frozen
 
         # Budget exhaustion latch: skip planner when order budget is dead
         budget_dead = self._order_budget_exhausted
@@ -665,6 +686,23 @@ class LiveEngineV0:
                 "ORDER_BUDGET_EXHAUSTED symbol=%s — planner suppressed",
                 snapshot.symbol,
             )
+
+        # PR-ROLLING-GRID-V1B: detect grid fills and update rolling offset
+        # BEFORE planner runs, so planner uses updated effective_center.
+        if rolling and not budget_dead:
+            self._cleanup_rolling_pending_cancels(snapshot.ts)
+            grid_fills = self._detect_grid_fills_for_rolling(snapshot.symbol)
+            planner = self._grid_planners.get(snapshot.symbol) if self._grid_planners else None
+            if planner and grid_fills:
+                for _oid, side in grid_fills:
+                    planner.apply_fill_offset(snapshot.symbol, side)
+                rs = planner.get_rolling_state(snapshot.symbol)
+                logger.info(
+                    "ROLLING_FILL_OFFSET symbol=%s fills=%d net_offset=%s",
+                    snapshot.symbol,
+                    len(grid_fills),
+                    rs.net_offset if rs else "N/A",
+                )
 
         # Step 1: Get actions -- either from LiveGridPlannerV1 or PaperEngine
         if grid_frozen or budget_dead:
@@ -676,10 +714,14 @@ class LiveEngineV0:
         elif self._is_live_planner_enabled():
             # PR-L2: Exchange-truth grid planner replaces PaperEngine for action generation.
             # PaperEngine is NOT called (avoids ghost state mutation, doc-25 I1).
-            plan_result = self._plan_grid(snapshot)
+            plan_result = self._plan_grid(snapshot, rolling_mode=rolling)
             raw_actions = plan_result.actions
             # Anti-churn: suppress GRID_SHIFT if mid hasn't moved enough from anchor
-            raw_actions = self._filter_grid_shift(snapshot.symbol, snapshot.mid_price, raw_actions)
+            # Skipped in rolling mode — no mid-driven shifts to suppress.
+            if not rolling:
+                raw_actions = self._filter_grid_shift(
+                    snapshot.symbol, snapshot.mid_price, raw_actions
+                )
             # PR-P0-RACE-1: convergence guards (sync-gate, cancel-first, budget)
             # Scoped to planner path ONLY — cycle layer (TP/replenish) appended AFTER.
             raw_actions = self._apply_convergence_guards(
@@ -706,8 +748,9 @@ class LiveEngineV0:
                 ts_ms=snapshot.ts,
                 pos_qty=pos_qty,
             )
-            # Filter out replenish when grid frozen (TP reduce-only still allowed)
-            if grid_frozen and cycle_actions:
+            # Filter out replenish when grid frozen OR rolling mode
+            # Rolling: planner diff handles level restoration, replenish would duplicate.
+            if (grid_frozen or rolling) and cycle_actions:
                 cycle_actions = [a for a in cycle_actions if a.reason != "REPLENISH"]
             if cycle_actions:
                 logger.info("Cycle layer %s: %d TP actions", snapshot.symbol, len(cycle_actions))
@@ -716,8 +759,18 @@ class LiveEngineV0:
                     ts=snapshot.ts, symbol=snapshot.symbol, actions=raw_actions
                 )
 
+        # PR-ROLLING-GRID-V1B: register ALL cancels for rolling fill detection
+        # Must run AFTER cycle_layer to capture TP_SLOT_TAKEOVER CANCELs.
+        if rolling:
+            self._register_rolling_cancels(raw_actions, snapshot.ts)
+
         # Replenish-on-TP-fill: detect position decrease → add BUY below + SELL above
-        if self._is_cycle_layer_enabled() and self._last_account_snapshot is not None:
+        # Bypassed in rolling mode — planner diff handles slot restoration.
+        if (
+            self._is_cycle_layer_enabled()
+            and self._last_account_snapshot is not None
+            and not rolling
+        ):
             pos_qty_for_anchor = self._get_position_qty(snapshot.symbol)
             self._update_grid_anchors(snapshot.symbol, pos_qty_for_anchor)
             tp_fill_event = self._detect_tp_fill_event(snapshot.symbol, pos_qty_for_anchor)
@@ -1004,7 +1057,72 @@ class LiveEngineV0:
             return False
         return self._is_live_planner_enabled()
 
-    def _plan_grid(self, snapshot: Snapshot) -> GridPlanResult:
+    # --- Rolling grid fill detection (PR-ROLLING-GRID-V1B) ---
+
+    _ROLLING_CANCEL_TTL_MS = 30_000  # 30s, same as cycle_layer._CANCEL_TTL_MS
+
+    def _detect_grid_fills_for_rolling(self, symbol: str) -> list[tuple[str, str]]:
+        """Detect grid fills by snapshot diff for rolling offset update.
+
+        Rolling fill classification contract:
+        - Fill = grid order (strategy_id="d") in prev but not current
+          AND not in pending cancels.
+        - Not fill = our cancel, TP_SLOT_TAKEOVER cancel, TP order,
+          non-grid strategy order, restart bootstrap.
+        - Limitation: disappearance heuristic, not trade evidence check.
+
+        Returns list of (order_id, side) for each detected grid fill.
+        Does NOT generate TP actions — cycle layer handles that separately.
+        """
+        snap = self._last_account_snapshot
+        if snap is None:
+            return []
+
+        current: dict[str, OpenOrderSnap] = {}
+        for o in snap.open_orders:
+            if o.symbol != symbol:
+                continue
+            parsed = parse_client_order_id(o.order_id)
+            if parsed is None:
+                continue
+            # Only grid orders (strategy_id="d") participate in rolling offset.
+            # TP orders (strategy_id="tp") and any future non-grid strategies
+            # are excluded — their disappearance must NOT shift net_offset.
+            if parsed.strategy_id != DEFAULT_STRATEGY_ID:
+                continue
+            current[o.order_id] = o
+
+        prev = self._prev_rolling_orders.get(symbol, {})
+        fills: list[tuple[str, str]] = []
+
+        for oid, snap_order in prev.items():
+            if oid in current:
+                continue  # still open
+            if oid in self._rolling_pending_cancels:
+                del self._rolling_pending_cancels[oid]  # consumed
+                continue
+            fills.append((oid, snap_order.side))
+
+        self._prev_rolling_orders[symbol] = current
+        return fills
+
+    def _register_rolling_cancels(self, actions: list[ExecutionAction], ts_ms: int) -> None:
+        """Register CANCEL actions as pending for rolling fill detection."""
+        for a in actions:
+            if a.action_type == ActionType.CANCEL and a.order_id:
+                self._rolling_pending_cancels[a.order_id] = ts_ms
+
+    def _cleanup_rolling_pending_cancels(self, ts_ms: int) -> None:
+        """Remove expired pending cancel entries (30s TTL, same as cycle_layer)."""
+        expired = [
+            oid
+            for oid, reg_ts in self._rolling_pending_cancels.items()
+            if ts_ms - reg_ts > self._ROLLING_CANCEL_TTL_MS
+        ]
+        for oid in expired:
+            del self._rolling_pending_cancels[oid]
+
+    def _plan_grid(self, snapshot: Snapshot, rolling_mode: bool = False) -> GridPlanResult:
         """Generate grid actions from LiveGridPlannerV1 (PR-L2).
 
         Uses last AccountSync snapshot for exchange truth.
@@ -1057,6 +1175,7 @@ class LiveEngineV0:
             natr_bps=natr_bps,
             natr_last_ts=natr_last_ts,
             suppress_increase=suppress_increase,
+            rolling_mode=rolling_mode,
         )
 
         if plan_result.actions:

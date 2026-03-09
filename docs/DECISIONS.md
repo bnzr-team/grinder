@@ -4152,7 +4152,7 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
 ## ADR-085: Rolling Infinite Grid (PR-ROLLING-INFINITE-GRID-SPEC)
 
 - **Date:** 2026-03-09
-- **Status:** Phase A implemented (planner building blocks only, not engine-wired yet)
+- **Status:** Phase B implemented (planner + engine wiring complete, ready for live verification)
 - **Context:** LiveGridPlannerV1 (doc-25) rebuilds the entire grid on every mid-price movement: 20 actions per shift for N=5. Grid fills don't advance the ladder -- they get swallowed by the next recenter. Run #18 burned 100-order budget in 2 minutes; PR-P0-RACE-1 mitigated budget burn but didn't solve the root cause (grid anchored to moving mid_price). Run #19 confirmed guards work (131 `GRID_SHIFT_DEFERRED` in 900s) but the planner still constantly wants to rebuild.
 - **Decision:** Replace mid-anchored grid with rolling infinite ladder:
   1. Grid fills shift `effective_center` by `+/- step_price` (discrete, not continuous). `step_price` fixed per session.
@@ -4171,6 +4171,15 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
   - Price-based order matching: `_match_orders_by_price()` (replaces level_id matching in rolling mode)
   - `plan(rolling_mode=True)` new code path -- NOT called by engine yet (no env var, no behavioral change)
   - Phase A does NOT change runtime behavior. Engine does not call rolling mode.
-- **Phase B** (planned, PR-ROLLING-GRID-V1B): engine wiring, fill detection pipeline, freeze/replenish bypass.
-- **Open questions:** adaptive spacing refresh, max offset threshold, fill detection ordering (V1B).
+- **Implementation Phase B** (PR-ROLLING-GRID-V1B):
+  - `GRINDER_LIVE_ROLLING_GRID` env flag wired in `engine.py` `__init__`, gating rolling mode in `process_snapshot()`.
+  - Rolling fill detection: engine-owned snapshot diff (`_prev_rolling_orders`, `_rolling_pending_cancels`) detects grid order disappearances before planner runs. Each fill calls `planner.apply_fill_offset()` to shift `effective_center`.
+  - Fill classification: disappearance heuristic (not trade evidence check). Rolling fill = disappeared order with `strategy_id="d"` (grid) AND not in pending cancels. TP orders (`strategy_id="tp"`) and all non-grid strategies do NOT shift offset. **Limitation:** exchange-side non-trade cancels of grid orders (ADL, margin liquidation) treated as fills (rare, offset resets on restart).
+  - Freeze disabled in rolling mode: planner's additive formula (`ec +/- i * step_price`) is bounded (no mid-driven rebuilds), replacing freeze as safety mechanism.
+  - Replenish bypassed: both cycle-layer REPLENISH and TP_FILL_REPLENISH filtered in rolling mode. Planner diff is sole level restoration path.
+  - Anti-churn (`_filter_grid_shift`) bypassed: no mid-driven shifts to suppress.
+  - Pending cancel TTL: 30s, matching `cycle_layer._CANCEL_TTL_MS`. Both mechanisms agree on fill/cancel classification.
+  - Convergence guards: unchanged, still apply in rolling mode.
+  - 17 engine integration tests in `test_rolling_grid.py` (35 total with V1A planner tests).
+- **Open questions:** adaptive spacing refresh, max offset threshold, cleanup of mid-anchored path.
 - **SSOT:** `docs/26_ROLLING_INFINITE_GRID_SPEC.md`

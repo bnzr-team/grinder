@@ -1356,17 +1356,18 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - Cap logic in `_build_desired_grid()`: reduces `desired_count` naturally
   - Backward-compatible: defaults preserve existing behavior
 - **Rolling Infinite Grid** (ADR-085):
-  - **Status:** V1A implemented -- planner building blocks only, NOT engine-wired yet. No runtime behavior change.
+  - **Status:** V1B implemented -- planner + engine wiring complete, ready for live verification.
   - **Spec:** `docs/26_ROLLING_INFINITE_GRID_SPEC.md`
   - **Problem:** Current mid-anchored grid rebuilds entirely on price movement (20 actions/shift, budget burn). Grid fills don't advance the ladder.
   - **Solution:** Rolling infinite ladder where grid fills shift `effective_center` by `+/- step_price`. Fill produces 3 actions (1 CANCEL + 2 PLACE) instead of full rebuild.
   - **Key invariants:** cardinality (N_buy + N_sell constant), spacing (uniform step_price), rolling shift (net_offset tracks fill direction), no global rebuild on fill, TP isolation (TP fills don't shift).
   - **State model:** `_RollingLadderState(anchor_price, step_price, net_offset)` -- volatile, re-anchor on restart.
-  - **Feature flag:** `GRINDER_LIVE_ROLLING_GRID` (bool, default `False`, safe-by-default). Not wired yet (V1B).
-  - **V1A (planner):** `_RollingLadderState`, `_build_rolling_grid()`, `_match_orders_by_price()`, `plan(rolling_mode=True)`. Planner-only, 18 tests. Engine does NOT call rolling mode yet.
-  - **V1B (engine wiring):** planned -- fill detection pipeline, freeze/replenish bypass, env var integration.
-  - **Obsoletes in rolling mode:** cycle-layer replenish, TP_FILL_REPLENISH, mid-driven GRID_SHIFT, most anti-churn logic.
-  - **Migration:** spec -> V1A planner (this) -> V1B engine -> live verification -> cleanup.
+  - **Feature flag:** `GRINDER_LIVE_ROLLING_GRID` (bool, default `False`, safe-by-default). Wired in engine.
+  - **V1A (planner):** `_RollingLadderState`, `_build_rolling_grid()`, `_match_orders_by_price()`, `plan(rolling_mode=True)`. Planner-only, 18 tests.
+  - **V1B (engine wiring):** `GRINDER_LIVE_ROLLING_GRID` env var gates rolling mode. Engine-owned fill detection (`_prev_rolling_orders`, `_rolling_pending_cancels`). Freeze/replenish/anti-churn bypassed. 17 engine integration tests (35 total).
+  - **Fill detection:** Rolling fill = disappeared order with `strategy_id="d"` (grid) AND not in pending cancels. TP (`strategy_id="tp"`) and all non-grid strategies do NOT shift offset. Disappearance heuristic (not trade evidence). Known limitation: exchange-side non-trade cancels of grid orders (ADL, margin) treated as fills. Resets on restart.
+  - **Obsoletes in rolling mode:** cycle-layer replenish, TP_FILL_REPLENISH, mid-driven GRID_SHIFT, anti-churn, grid freeze.
+  - **Migration:** spec -> V1A planner -> V1B engine (this) -> live verification -> cleanup.
 
 - **AccountSync visibility instrumentation** (PR-P0-2):
   - `GRINDER_ACCOUNT_SYNC_DEBUG_OPEN_ORDERS=1` (default 0): one flag enables both raw logging + correlation

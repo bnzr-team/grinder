@@ -4953,7 +4953,7 @@ class TestTPCloseAtomicity:
         # Engine with planner + cycle_layer (_is_cycle_layer_enabled requires planner).
         # Mock _plan_grid to return empty GridPlanResult so planner doesn't generate interfering actions.
         engine = self._make_engine_with_cycle(mock_paper_engine, noop_port, monkeypatch)
-        engine._plan_grid = lambda _snap: GridPlanResult()  # type: ignore[assignment]
+        engine._plan_grid = lambda _snap, **_kw: GridPlanResult()  # type: ignore[method-assign]
 
         # Grid orders
         buy_l2 = OpenOrderSnap(
