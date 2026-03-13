@@ -1356,18 +1356,25 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - Cap logic in `_build_desired_grid()`: reduces `desired_count` naturally
   - Backward-compatible: defaults preserve existing behavior
 - **Rolling Infinite Grid** (ADR-085):
-  - **Status:** V1B implemented -- planner + engine wiring complete, ready for live verification.
+  - **Status:** V1C implemented -- TP slot ownership (INV-9) added. Planner + engine wiring complete.
   - **Spec:** `docs/26_ROLLING_INFINITE_GRID_SPEC.md`
   - **Problem:** Current mid-anchored grid rebuilds entirely on price movement (20 actions/shift, budget burn). Grid fills don't advance the ladder.
-  - **Solution:** Rolling infinite ladder where grid fills shift `effective_center` by `+/- step_price`. Fill produces 3 actions (1 CANCEL + 2 PLACE) instead of full rebuild.
-  - **Key invariants:** cardinality (N_buy + N_sell constant), spacing (uniform step_price), rolling shift (net_offset tracks fill direction), no global rebuild on fill, TP isolation (TP fills don't shift).
+  - **Solution:** Rolling infinite ladder where grid fills shift `effective_center` by `+/- step_price`. Fill produces 2 grid actions (1 CANCEL + 1 PLACE, inner level reserved for TP) instead of full rebuild.
+  - **Key invariants:** cardinality (N_buy + N_sell constant), spacing (uniform step_price), rolling shift (net_offset tracks fill direction), no global rebuild on fill, TP isolation (TP fills don't shift), TP slot exclusion (INV-9).
   - **State model:** `_RollingLadderState(anchor_price, step_price, net_offset)` -- volatile, re-anchor on restart.
   - **Feature flag:** `GRINDER_LIVE_ROLLING_GRID` (bool, default `False`, safe-by-default). Wired in engine.
   - **V1A (planner):** `_RollingLadderState`, `_build_rolling_grid()`, `_match_orders_by_price()`, `plan(rolling_mode=True)`. Planner-only, 18 tests.
   - **V1B (engine wiring):** `GRINDER_LIVE_ROLLING_GRID` env var gates rolling mode. Engine-owned fill detection (`_prev_rolling_orders`, `_rolling_pending_cancels`). Freeze/replenish/anti-churn bypassed. 17 engine integration tests (35 total).
+  - **V1C (TP slot ownership, ADR-086, INV-9):** Planner-side per-tick reservation prevents TP/grid overlap at same price. Reservation lifecycle: created in `apply_fill_offset()`, consumed in `_build_rolling_grid()`, cleared after `plan()`. Exchange-truth matching is SSOT after fill tick.
+    - **INV-9 formula:** `desired_grid_count = (N - sell_reservation) + (N - buy_reservation)` on fill ticks.
+    - **Slot state model:** `{grid, tp, reserved, vacant}`. Ownership applies only to occupied slots.
+    - **Convergence target:** `grid + tp = 2*N` (not absolute runtime invariant — transient deviation expected).
+    - **Saturation:** reservation clamps at `min(fill_count, N)` per side. Excess TPs self-heal via TTL.
+    - **Defense-in-depth:** `_filter_tp_grid_overlap()` in engine. Anomaly guard (expected fire count: ZERO). Uses `reduce_only` discriminator. Fail-open when config missing.
+    - 17 slot ownership tests (T21-T37), 61 rolling grid tests total.
   - **Fill detection:** Rolling fill = disappeared order with `strategy_id="d"` (grid) AND not in pending cancels. TP (`strategy_id="tp"`) and all non-grid strategies do NOT shift offset. Disappearance heuristic (not trade evidence). Known limitation: exchange-side non-trade cancels of grid orders (ADL, margin) treated as fills. Resets on restart.
   - **Obsoletes in rolling mode:** cycle-layer replenish, TP_FILL_REPLENISH, mid-driven GRID_SHIFT, anti-churn, grid freeze.
-  - **Migration:** spec -> V1A planner -> V1B engine (this) -> live verification -> cleanup.
+  - **Migration:** spec -> V1A planner -> V1B engine -> V1C slot ownership (this) -> live verification -> cleanup.
 
 - **AccountSync visibility instrumentation** (PR-P0-2):
   - `GRINDER_ACCOUNT_SYNC_DEBUG_OPEN_ORDERS=1` (default 0): one flag enables both raw logging + correlation

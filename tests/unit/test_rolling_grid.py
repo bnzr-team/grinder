@@ -124,7 +124,11 @@ class TestRollingGridPlanner:
     """Planner-only rolling grid tests (T1-T10, T16-T17, T19-T20)."""
 
     def test_t1_buy_fill_cardinality(self) -> None:
-        """T1 (INV-1): After 1 BUY fill, desired has N_buy + N_sell levels."""
+        """T1 (INV-1 + INV-9): After 1 BUY fill, desired_grid = 2*N - 1 on fill tick.
+
+        INV-9 reserves 1 SELL slot for TP. Grid levels = N BUY + (N-1) SELL.
+        Total with TP = 2*N (steady_state_open_count_target).
+        """
         planner = _make_planner(levels=3)
         orders = _build_full_grid_orders(planner)
 
@@ -138,11 +142,14 @@ class TestRollingGridPlanner:
             open_orders=orders,
             rolling_mode=True,
         )
-        # 3 BUY + 3 SELL = 6 desired levels
-        assert result.desired_count == 6
+        # INV-9: 3 BUY + 2 SELL = 5 desired grid levels (1 SELL reserved for TP)
+        assert result.desired_count == 5
 
     def test_t2_sell_fill_cardinality(self) -> None:
-        """T2 (INV-1): After 1 SELL fill, N_buy + N_sell preserved."""
+        """T2 (INV-1 + INV-9): After 1 SELL fill, desired_grid = 2*N - 1 on fill tick.
+
+        INV-9 reserves 1 BUY slot for TP. Grid levels = (N-1) BUY + N SELL.
+        """
         planner = _make_planner(levels=3)
         orders = _build_full_grid_orders(planner)
 
@@ -155,7 +162,8 @@ class TestRollingGridPlanner:
             open_orders=orders,
             rolling_mode=True,
         )
-        assert result.desired_count == 6
+        # INV-9: 2 BUY + 3 SELL = 5 desired grid levels (1 BUY reserved for TP)
+        assert result.desired_count == 5
 
     def test_t3_spacing_uniform(self) -> None:
         """T3 (INV-2): Adjacent desired levels differ by exactly step_price."""
@@ -254,9 +262,11 @@ class TestRollingGridPlanner:
             assert p.price != ec, f"PLACE at center {ec} — should be at frontier"
 
     def test_t8_fill_action_count(self) -> None:
-        """T8 (INV-5): Single fill in steady-state → 1 CANCEL + 2 PLACE = 3 actions.
+        """T8 (INV-5 + INV-9): Single fill → 1 CANCEL + 1 PLACE = 2 grid actions.
 
-        Steady-state = full grid established, no budget/guard interference.
+        INV-9: inner SELL L1 is reserved for TP (planner skips it).
+        Grid actions: 1 CANCEL (farthest SELL extra) + 1 PLACE (new frontier BUY).
+        Cycle layer adds TP PLACE separately (not tested here — planner scope).
         """
         planner = _make_planner(levels=3)
         # Build full grid at offset=0
@@ -281,9 +291,10 @@ class TestRollingGridPlanner:
         cancels = [a for a in result.actions if a.action_type == ActionType.CANCEL]
         places = [a for a in result.actions if a.action_type == ActionType.PLACE]
 
-        # 1 CANCEL (farthest SELL now extra) + 2 PLACE (new frontier BUY + inner SELL)
+        # INV-9: 1 CANCEL (farthest SELL extra) + 1 PLACE (new frontier BUY)
+        # Inner SELL reserved for TP — planner does not PLACE it.
         assert len(cancels) == 1, f"Expected 1 CANCEL, got {len(cancels)}"
-        assert len(places) == 2, f"Expected 2 PLACE, got {len(places)}"
+        assert len(places) == 1, f"Expected 1 PLACE, got {len(places)}"
 
     def test_t9_tp_fill_no_offset_change(self) -> None:
         """T9 (INV-6): TP fill does NOT change net_offset.
@@ -897,6 +908,673 @@ class TestRollingGridEngineIntegration:
         assert st.net_offset == 0, (
             f"Non-grid strategy disappearance should not shift offset, got {st.net_offset}"
         )
+
+
+class TestTPSlotOwnership:
+    """INV-9: TP slot reservation tests (T21-T37).
+
+    Slot state model: {grid, tp, reserved, vacant}.
+    Reservation is planner-local, one-tick only.
+    Subsequent ownership SSOT = exchange-truth matching.
+    """
+
+    # --- T21-T24: Planner reservation basics ---
+
+    def test_t21_buy_fill_reserves_sell_slot(self) -> None:
+        """T21 (INV-9): BUY fill → desired_grid_count = 2*N - 1. SELL has N-1 levels."""
+        planner = _make_planner(levels=3)
+        planner.init_rolling_state(SYMBOL, ANCHOR, SPACING_BPS)
+
+        planner.apply_fill_offset(SYMBOL, "BUY")
+
+        levels = planner._build_rolling_grid(SYMBOL)
+        sell_levels = [lv for lv in levels if lv.side == OrderSide.SELL]
+        buy_levels = [lv for lv in levels if lv.side == OrderSide.BUY]
+
+        assert len(sell_levels) == 2, f"Expected N-1=2 SELL levels, got {len(sell_levels)}"
+        assert len(buy_levels) == 3, f"Expected N=3 BUY levels, got {len(buy_levels)}"
+        assert len(levels) == 5, f"Expected 2*N-1=5 desired, got {len(levels)}"
+
+    def test_t22_sell_fill_reserves_buy_slot(self) -> None:
+        """T22 (INV-9): SELL fill → desired_grid_count = 2*N - 1. BUY has N-1 levels."""
+        planner = _make_planner(levels=3)
+        planner.init_rolling_state(SYMBOL, ANCHOR, SPACING_BPS)
+
+        planner.apply_fill_offset(SYMBOL, "SELL")
+
+        levels = planner._build_rolling_grid(SYMBOL)
+        sell_levels = [lv for lv in levels if lv.side == OrderSide.SELL]
+        buy_levels = [lv for lv in levels if lv.side == OrderSide.BUY]
+
+        assert len(buy_levels) == 2, f"Expected N-1=2 BUY levels, got {len(buy_levels)}"
+        assert len(sell_levels) == 3, f"Expected N=3 SELL levels, got {len(sell_levels)}"
+        assert len(levels) == 5, f"Expected 2*N-1=5 desired, got {len(levels)}"
+
+    def test_t23_mixed_multi_fill_reservation(self) -> None:
+        """T23 (INV-9): Mixed multi-fill (2 BUY + 1 SELL) → desired = 2*N - 3."""
+        planner = _make_planner(levels=3)
+        planner.init_rolling_state(SYMBOL, ANCHOR, SPACING_BPS)
+
+        planner.apply_fill_offset(SYMBOL, "BUY")
+        planner.apply_fill_offset(SYMBOL, "BUY")
+        planner.apply_fill_offset(SYMBOL, "SELL")
+
+        levels = planner._build_rolling_grid(SYMBOL)
+        sell_levels = [lv for lv in levels if lv.side == OrderSide.SELL]
+        buy_levels = [lv for lv in levels if lv.side == OrderSide.BUY]
+
+        # sell_reservation=2 (from 2 BUY fills), buy_reservation=1 (from 1 SELL fill)
+        assert len(sell_levels) == 1, f"Expected N-2=1 SELL levels, got {len(sell_levels)}"
+        assert len(buy_levels) == 2, f"Expected N-1=2 BUY levels, got {len(buy_levels)}"
+        assert len(levels) == 3, f"Expected 2*N-3=3 desired, got {len(levels)}"
+
+    def test_t24_next_tick_reservation_cleared(self) -> None:
+        """T24 (INV-9): Next tick (no fill) → desired = 2*N (reservation cleared)."""
+        planner = _make_planner(levels=3)
+        orders = _build_full_grid_orders(planner)
+
+        # Tick 1: BUY fill → reservation active
+        planner.apply_fill_offset(SYMBOL, "BUY")
+        result1 = planner.plan(
+            symbol=SYMBOL,
+            mid_price=ANCHOR,
+            ts_ms=1_000_000,
+            open_orders=orders,
+            rolling_mode=True,
+        )
+        assert result1.desired_count == 5  # 2*3 - 1
+
+        # Tick 2: no fill → reservation cleared
+        result2 = planner.plan(
+            symbol=SYMBOL,
+            mid_price=ANCHOR,
+            ts_ms=2_000_000,
+            open_orders=orders,
+            rolling_mode=True,
+        )
+        assert result2.desired_count == 6  # 2*3
+
+    # --- T25-T29: Integration / overlap prevention ---
+
+    def test_t25_tp_on_exchange_matches_desired(self) -> None:
+        """T25 (INV-9): TP on exchange at slot price → matched by planner → no redundant PLACE."""
+        planner = _make_planner(levels=3)
+        planner.init_rolling_state(SYMBOL, ANCHOR, SPACING_BPS)
+
+        # After 1 BUY fill: ec = ANCHOR - STEP = 65934
+        # Desired SELL:L1 = ec + STEP = 66000
+        planner.apply_fill_offset(SYMBOL, "BUY")
+
+        # Clear reservation (simulating next tick — reservation was consumed)
+        planner._tp_slot_reservations.pop(SYMBOL, None)
+
+        # Exchange has: TP at 66000 (SELL), grid at 66066, 66132 (SELL), BUY grid at 3 levels
+        ec = ANCHOR - STEP  # 65934
+        tp_sell = _make_order("grinder_tp_BTCUSDT_1_1000000_1", SYMBOL, "SELL", str(ec + STEP))
+        grid_sells = [
+            _make_order(
+                f"grinder_d_{SYMBOL}_{i}_{1000000}_{i + 100}", SYMBOL, "SELL", str(ec + i * STEP)
+            )
+            for i in range(2, 4)
+        ]
+        grid_buys = [
+            _make_order(f"grinder_d_{SYMBOL}_{i}_{1000000}_{i}", SYMBOL, "BUY", str(ec - i * STEP))
+            for i in range(1, 4)
+        ]
+        exchange_orders = (tp_sell, *grid_sells, *grid_buys)
+
+        result = planner.plan(
+            symbol=SYMBOL,
+            mid_price=ANCHOR,
+            ts_ms=2_000_000,
+            open_orders=exchange_orders,
+            rolling_mode=True,
+        )
+        # TP matches SELL:L1, grid matches SELL:L2/L3 and BUY:L1/L2/L3
+        # No redundant PLACE should be emitted
+        places = [a for a in result.actions if a.action_type == ActionType.PLACE]
+        assert len(places) == 0, f"Expected 0 PLACEs (TP matched), got {len(places)}: {places}"
+
+    def test_t26_buy_fill_no_grid_sell_overlap(self) -> None:
+        """T26 (INV-9): BUY fill → no grid SELL PLACE within epsilon of TP SELL price."""
+        planner = _make_planner(levels=3)
+        orders = _build_full_grid_orders(planner)
+
+        # BUY fill: reservation skips innermost SELL
+        planner.apply_fill_offset(SYMBOL, "BUY")
+
+        result = planner.plan(
+            symbol=SYMBOL,
+            mid_price=ANCHOR,
+            ts_ms=1_000_000,
+            open_orders=orders,
+            rolling_mode=True,
+        )
+
+        # ec after fill = ANCHOR - STEP = 65934. TP would be at ~66000 (= ec + STEP).
+        ec = ANCHOR - STEP
+        tp_approx_price = ec + STEP  # 66000 — the slot reserved for TP
+
+        sell_places = [
+            a
+            for a in result.actions
+            if a.action_type == ActionType.PLACE and a.side == OrderSide.SELL
+        ]
+        for sp in sell_places:
+            assert sp.price is not None
+            delta_bps = float(abs(sp.price - tp_approx_price) / ANCHOR) * 10000
+            assert delta_bps > 0.5, (
+                f"Grid SELL PLACE at {sp.price} overlaps TP zone ~{tp_approx_price} "
+                f"(delta={delta_bps:.2f} bps)"
+            )
+
+    def test_t27_sell_fill_no_grid_buy_overlap(self) -> None:
+        """T27 (INV-9): SELL fill → no grid BUY PLACE within epsilon of TP BUY price."""
+        planner = _make_planner(levels=3)
+        orders = _build_full_grid_orders(planner)
+
+        planner.apply_fill_offset(SYMBOL, "SELL")
+
+        result = planner.plan(
+            symbol=SYMBOL,
+            mid_price=ANCHOR,
+            ts_ms=1_000_000,
+            open_orders=orders,
+            rolling_mode=True,
+        )
+
+        # ec after fill = ANCHOR + STEP = 66066. TP would be at ~66000 (= ec - STEP).
+        ec = ANCHOR + STEP
+        tp_approx_price = ec - STEP  # 66000
+
+        buy_places = [
+            a
+            for a in result.actions
+            if a.action_type == ActionType.PLACE and a.side == OrderSide.BUY
+        ]
+        for bp in buy_places:
+            assert bp.price is not None
+            delta_bps = float(abs(bp.price - tp_approx_price) / ANCHOR) * 10000
+            assert delta_bps > 0.5, (
+                f"Grid BUY PLACE at {bp.price} overlaps TP zone ~{tp_approx_price} "
+                f"(delta={delta_bps:.2f} bps)"
+            )
+
+    def test_t28_fill_tick_applied_cardinality(self) -> None:
+        """T28 (INV-9): Post-action application model (unit test only, NOT live invariant).
+
+        After applying all actions from planner + TP to exchange state,
+        grid_count + tp_count = 2*N.
+        """
+        planner = _make_planner(levels=3)
+        orders = _build_full_grid_orders(planner)
+
+        # BUY fill: remove one BUY order (simulate fill)
+        buy_orders = [o for o in orders if o.side == "BUY"]
+        remaining = tuple(o for o in orders if o != buy_orders[0])
+
+        planner.apply_fill_offset(SYMBOL, "BUY")
+        result = planner.plan(
+            symbol=SYMBOL,
+            mid_price=ANCHOR,
+            ts_ms=1_000_000,
+            open_orders=remaining,
+            rolling_mode=True,
+        )
+
+        # Apply planner actions to remaining orders (remaining - cancels + places)
+        cancels = sum(1 for a in result.actions if a.action_type == ActionType.CANCEL)
+        grid_places = sum(1 for a in result.actions if a.action_type == ActionType.PLACE)
+        tp_count = 1  # cycle layer would add 1 TP
+
+        # Remaining = 2*N - 1 (one BUY filled). Planner: -cancels + grid_places.
+        grid_after = len(remaining) - cancels + grid_places
+        total = grid_after + tp_count
+        assert total == 6, f"Post-action grid({grid_after})+tp({tp_count})={total}, expected 2*N=6"
+
+    def test_t29_no_same_side_overlap_in_actions(self) -> None:
+        """T29 (INV-9): No same-side TP/grid overlap within epsilon in planner output."""
+        planner = _make_planner(levels=3)
+        orders = _build_full_grid_orders(planner)
+
+        planner.apply_fill_offset(SYMBOL, "BUY")
+        result = planner.plan(
+            symbol=SYMBOL,
+            mid_price=ANCHOR,
+            ts_ms=1_000_000,
+            open_orders=orders,
+            rolling_mode=True,
+        )
+
+        sell_place_prices = [
+            a.price
+            for a in result.actions
+            if a.action_type == ActionType.PLACE and a.side == OrderSide.SELL and a.price
+        ]
+        buy_place_prices = [
+            a.price
+            for a in result.actions
+            if a.action_type == ActionType.PLACE and a.side == OrderSide.BUY and a.price
+        ]
+
+        # Check no two SELL PLACEs within epsilon of each other
+        for i in range(len(sell_place_prices)):
+            for j in range(i + 1, len(sell_place_prices)):
+                delta = float(abs(sell_place_prices[i] - sell_place_prices[j]) / ANCHOR) * 10000
+                assert delta > 0.5, (
+                    f"SELL overlap: {sell_place_prices[i]} vs {sell_place_prices[j]}"
+                )
+
+        # Same for BUY
+        for i in range(len(buy_place_prices)):
+            for j in range(i + 1, len(buy_place_prices)):
+                delta = float(abs(buy_place_prices[i] - buy_place_prices[j]) / ANCHOR) * 10000
+                assert delta > 0.5, f"BUY overlap: {buy_place_prices[i]} vs {buy_place_prices[j]}"
+
+    # --- T30: Live-style integration ---
+
+    def test_t30_live_sequence_overlap_prevented(self) -> None:
+        """T30 (INV-9): Exact failing-log sequence reproduced, overlap prevented.
+
+        BUY fill → TP SELL + grid SELL at similar prices. INV-9 reservation
+        prevents the grid SELL from being emitted.
+        """
+        # Use numbers close to the real failure: BUY fill near 67768,
+        # TP SELL and grid SELL both near 67836. Using anchor=67800, step=68.
+        cfg = _make_config(levels=3, spacing_bps=10.0, tick_size="0.10")
+        planner = LiveGridPlannerV1(cfg)
+        anchor = Decimal("67800")
+
+        planner.init_rolling_state(SYMBOL, anchor, 10.0)
+        st = planner.get_rolling_state(SYMBOL)
+        assert st is not None
+
+        # Start at offset=-1 (one prior BUY fill already happened)
+        st.net_offset = -1
+
+        # Build exchange orders matching offset=-1 state
+        ec1 = anchor + (-1) * st.step_price
+        exchange_orders = tuple(
+            _make_order(
+                f"grinder_d_{SYMBOL}_{i}_{1000000}_{base}",
+                SYMBOL,
+                side,
+                str(ec1 + (i if side == "SELL" else -i) * st.step_price),
+            )
+            for i in range(1, 4)
+            for side, base in [("BUY", i), ("SELL", i + 100)]
+        )
+
+        # New BUY fill: offset goes to -2
+        planner.apply_fill_offset(SYMBOL, "BUY")
+
+        result = planner.plan(
+            symbol=SYMBOL,
+            mid_price=anchor,
+            ts_ms=1_000_000,
+            open_orders=exchange_orders,
+            rolling_mode=True,
+        )
+
+        # TP would be placed at approximately ec_new + step (innermost SELL slot)
+        ec2 = anchor + (-2) * st.step_price
+        tp_zone = ec2 + st.step_price
+
+        sell_places = [
+            a
+            for a in result.actions
+            if a.action_type == ActionType.PLACE and a.side == OrderSide.SELL
+        ]
+        for sp in sell_places:
+            assert sp.price is not None
+            delta = float(abs(sp.price - tp_zone) / anchor) * 10000
+            assert delta > 0.5, (
+                f"Grid SELL at {sp.price} overlaps TP zone {tp_zone} (delta={delta:.2f} bps)"
+            )
+
+    # --- T31-T37: Edge cases and defense-in-depth ---
+
+    def test_t31_overlap_guard_suppress_and_self_heal(self) -> None:
+        """T31 (INV-9): Defense-in-depth guard suppresses grid PLACE overlapping TP PLACE.
+
+        After suppression, TP absent next tick → planner self-heals.
+        """
+        # Build actions simulating overlap (primary reservation bypassed somehow)
+        grid_place = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            price=Decimal("66000"),
+            quantity=Decimal("0.01"),
+            level_id=1,
+            reason="GRID_FILL",
+            reduce_only=False,
+        )
+        tp_place = ExecutionAction(
+            action_type=ActionType.PLACE,
+            symbol="BTCUSDT",
+            side=OrderSide.SELL,
+            price=Decimal("66000.50"),  # within epsilon
+            quantity=Decimal("0.01"),
+            level_id=1,
+            reason="TP_CLOSE",
+            reduce_only=True,
+            client_order_id="grinder_tp_BTCUSDT_1_1000000_1",
+        )
+        cancel = ExecutionAction(
+            action_type=ActionType.CANCEL,
+            order_id="grinder_d_BTCUSDT_3_1000000_103",
+            symbol="BTCUSDT",
+            reason="GRID_TRIM",
+        )
+
+        # Build engine to access the filter method
+        planner = LiveGridPlannerV1(
+            LiveGridConfig(
+                tick_size=Decimal("0.10"),
+                levels=3,
+                size_per_level=Decimal("0.01"),
+            )
+        )
+        mock_paper = MagicMock()
+        mock_paper.process_snapshot.return_value = MagicMock(actions=[])
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        engine = LiveEngineV0(
+            mock_paper,
+            NoOpExchangePort(),
+            config,
+            account_syncer=MagicMock(),
+            grid_planners={"BTCUSDT": planner},
+        )
+
+        filtered = engine._filter_tp_grid_overlap([cancel, grid_place, tp_place], "BTCUSDT")
+
+        # Grid PLACE suppressed, TP PLACE and CANCEL kept
+        action_types = [(a.action_type, a.reduce_only) for a in filtered]
+        assert (ActionType.PLACE, False) not in action_types, "Grid PLACE should be suppressed"
+        assert (ActionType.PLACE, True) in action_types, "TP PLACE should be kept"
+        assert len(filtered) == 2  # CANCEL + TP PLACE
+
+    def test_t32_tp_expiry_slot_recycled(self) -> None:
+        """T32 (INV-9): TP expiry → slot tp → vacant → grid next tick."""
+        planner = _make_planner(levels=3)
+        planner.init_rolling_state(SYMBOL, ANCHOR, SPACING_BPS)
+
+        # After BUY fill, TP placed at SELL:L1 zone
+        planner.apply_fill_offset(SYMBOL, "BUY")
+        ec = ANCHOR - STEP
+
+        # Tick 1 (fill tick): reservation active, desired has N-1=2 SELLs
+        result1 = planner.plan(
+            symbol=SYMBOL,
+            mid_price=ANCHOR,
+            ts_ms=1_000_000,
+            open_orders=(),
+            rolling_mode=True,
+        )
+        assert result1.desired_count == 5  # 3 BUY + 2 SELL
+
+        # Tick 2: TP on exchange at SELL:L1 price. No new fill.
+        tp_sell = _make_order("grinder_tp_BTCUSDT_1_1000000_1", SYMBOL, "SELL", str(ec + STEP))
+        grid_orders = tuple(
+            _make_order(
+                f"grinder_d_{SYMBOL}_{i}_{1000000}_{base}",
+                SYMBOL,
+                side,
+                str(ec + (i if side == "SELL" else -i) * STEP),
+            )
+            for i in range(2, 4)
+            for side, base in [("SELL", i + 100)]
+        ) + tuple(
+            _make_order(f"grinder_d_{SYMBOL}_{i}_{1000000}_{i}", SYMBOL, "BUY", str(ec - i * STEP))
+            for i in range(1, 4)
+        )
+        exchange_tick2 = (tp_sell, *grid_orders)
+
+        result2 = planner.plan(
+            symbol=SYMBOL,
+            mid_price=ANCHOR,
+            ts_ms=2_000_000,
+            open_orders=exchange_tick2,
+            rolling_mode=True,
+        )
+        assert result2.desired_count == 6  # full 2*N (reservation cleared)
+        places2 = [a for a in result2.actions if a.action_type == ActionType.PLACE]
+        assert len(places2) == 0, "TP matches L1 by price → no new PLACE"
+
+        # Tick 3: TP expired (gone). Slot becomes vacant → planner fills.
+        exchange_tick3 = grid_orders  # TP removed
+        result3 = planner.plan(
+            symbol=SYMBOL,
+            mid_price=ANCHOR,
+            ts_ms=3_000_000,
+            open_orders=exchange_tick3,
+            rolling_mode=True,
+        )
+        sell_places = [
+            a
+            for a in result3.actions
+            if a.action_type == ActionType.PLACE and a.side == OrderSide.SELL
+        ]
+        assert len(sell_places) == 1, (
+            f"Expected 1 grid SELL PLACE to fill vacant slot, got {len(sell_places)}"
+        )
+
+    def test_t33_saturation_clamp(self) -> None:
+        """T33 (INV-9): Saturation — 4 fills with N=3 → clamps, desired >= 0."""
+        planner = _make_planner(levels=3)
+        planner.init_rolling_state(SYMBOL, ANCHOR, SPACING_BPS)
+
+        # 4 BUY fills (pathological, normally max N=3)
+        for _ in range(4):
+            planner.apply_fill_offset(SYMBOL, "BUY")
+
+        levels = planner._build_rolling_grid(SYMBOL)
+        sell_levels = [lv for lv in levels if lv.side == OrderSide.SELL]
+        buy_levels = [lv for lv in levels if lv.side == OrderSide.BUY]
+
+        # sell_reservation=min(4,3)=3, all SELL skipped
+        assert len(sell_levels) == 0, f"Expected 0 SELL (saturated), got {len(sell_levels)}"
+        assert len(buy_levels) == 3, f"Expected 3 BUY (unreserved), got {len(buy_levels)}"
+        assert len(levels) >= 0, "desired count must never be negative"
+
+    def test_t34_tp_place_blocked_self_heal(self) -> None:
+        """T34 (INV-9): TP PLACE blocked → reserved → vacant → grid (self-heal)."""
+        planner = _make_planner(levels=3)
+        planner.init_rolling_state(SYMBOL, ANCHOR, SPACING_BPS)
+
+        # BUY fill → reservation
+        planner.apply_fill_offset(SYMBOL, "BUY")
+        ec = ANCHOR - STEP
+
+        # Tick 1 (fill tick): reservation skips SELL:L1
+        result1 = planner.plan(
+            symbol=SYMBOL,
+            mid_price=ANCHOR,
+            ts_ms=1_000_000,
+            open_orders=(),
+            rolling_mode=True,
+        )
+        assert result1.desired_count == 5  # 3 BUY + 2 SELL
+
+        # Tick 2: TP PLACE was blocked → no TP on exchange. No new fill.
+        # Planner sees full desired, SELL:L1 is missing → PLACE it
+        result2 = planner.plan(
+            symbol=SYMBOL,
+            mid_price=ANCHOR,
+            ts_ms=2_000_000,
+            open_orders=(),
+            rolling_mode=True,
+        )
+        assert result2.desired_count == 6  # full 2*N
+        sell_places = [
+            a
+            for a in result2.actions
+            if a.action_type == ActionType.PLACE and a.side == OrderSide.SELL
+        ]
+        # Planner tries to PLACE all 3 SELL levels (all missing since open_orders=())
+        sell_prices = sorted([a.price for a in sell_places if a.price])
+        assert len(sell_prices) == 3, f"Expected 3 SELL PLACEs (self-heal), got {len(sell_prices)}"
+        # Innermost SELL = ec + STEP should be among them
+        innermost = ec + STEP
+        assert innermost in sell_prices, (
+            f"Innermost SELL {innermost} not in PLACEs {sell_prices} (self-heal failed)"
+        )
+
+    def test_t35_tp_renew_no_overlap(self) -> None:
+        """T35 (INV-9): TP renewed → slot stays tp, no grid overlap."""
+        planner = _make_planner(levels=3)
+        planner.init_rolling_state(SYMBOL, ANCHOR, SPACING_BPS)
+        planner.apply_fill_offset(SYMBOL, "BUY")
+        ec = ANCHOR - STEP
+
+        # Clear reservation (simulating post-fill-tick)
+        planner._tp_slot_reservations.pop(SYMBOL, None)
+
+        # TP at SELL:L1 price (renewed — same price, different order ID)
+        tp_sell = _make_order("grinder_tp_BTCUSDT_1_2000000_5", SYMBOL, "SELL", str(ec + STEP))
+        grid_orders = tuple(
+            _make_order(
+                f"grinder_d_{SYMBOL}_{i}_{1000000}_{base}",
+                SYMBOL,
+                side,
+                str(ec + (i if side == "SELL" else -i) * STEP),
+            )
+            for i in range(2, 4)
+            for side, base in [("SELL", i + 100)]
+        ) + tuple(
+            _make_order(f"grinder_d_{SYMBOL}_{i}_{1000000}_{i}", SYMBOL, "BUY", str(ec - i * STEP))
+            for i in range(1, 4)
+        )
+        exchange = (tp_sell, *grid_orders)
+
+        result = planner.plan(
+            symbol=SYMBOL,
+            mid_price=ANCHOR,
+            ts_ms=3_000_000,
+            open_orders=exchange,
+            rolling_mode=True,
+        )
+        # Renewed TP still matches SELL:L1 by price → no overlap
+        places = [a for a in result.actions if a.action_type == ActionType.PLACE]
+        assert len(places) == 0, f"Expected 0 PLACEs (TP renewed, no overlap), got {len(places)}"
+
+    def test_t36_existing_tp_plus_new_fill(self) -> None:
+        """T36 (INV-9, Contract 2a): Existing TP at slot + new BUY fill.
+
+        Old TP migrates to shifted desired level, new reservation covers
+        new innermost. 5 explicit assertions per Contract 2a.
+        """
+        planner = _make_planner(levels=3)
+        planner.init_rolling_state(SYMBOL, ANCHOR, SPACING_BPS)
+
+        # After first BUY fill: offset=-1, ec=65934
+        planner.apply_fill_offset(SYMBOL, "BUY")
+        # Consume reservation from first fill
+        planner._tp_slot_reservations.pop(SYMBOL, None)
+        ec1 = ANCHOR - STEP  # 65934
+
+        # Exchange state: TP SELL at 66000 (old L1), grid SELL at 66066/66132, BUY grid
+        tp_sell = _make_order("grinder_tp_BTCUSDT_1_1000000_1", SYMBOL, "SELL", str(ec1 + STEP))
+        grid_sell_2 = _make_order(
+            "grinder_d_BTCUSDT_2_1000000_102", SYMBOL, "SELL", str(ec1 + 2 * STEP)
+        )
+        grid_sell_3 = _make_order(
+            "grinder_d_BTCUSDT_3_1000000_103", SYMBOL, "SELL", str(ec1 + 3 * STEP)
+        )
+        grid_buys = tuple(
+            _make_order(f"grinder_d_{SYMBOL}_{i}_{1000000}_{i}", SYMBOL, "BUY", str(ec1 - i * STEP))
+            for i in range(1, 4)
+        )
+        exchange = (tp_sell, grid_sell_2, grid_sell_3, *grid_buys)
+
+        # Second BUY fill: offset goes to -2
+        planner.apply_fill_offset(SYMBOL, "BUY")
+        ec2 = ANCHOR - 2 * STEP  # 65868
+
+        result = planner.plan(
+            symbol=SYMBOL,
+            mid_price=ANCHOR,
+            ts_ms=2_000_000,
+            open_orders=exchange,
+            rolling_mode=True,
+        )
+
+        # Contract 2a assertions:
+        # 1. Old TP at 66000 = ec2 + 2*STEP should be matched (not extra)
+        # 2. Old grid at 66066 = ec2 + 3*STEP should be matched
+        # Together: actual_count should reflect both matched
+        assert result.actual_count >= 2, (
+            f"Old TP + grid should be matched (actual_count={result.actual_count})"
+        )
+
+        # 3. Old grid at 66132 = ec2 + 4*STEP → extra → CANCEL
+        cancels = [a for a in result.actions if a.action_type == ActionType.CANCEL]
+        cancel_ids = [a.order_id for a in cancels]
+        assert grid_sell_3.order_id in cancel_ids, (
+            f"Farthest grid SELL at 66132 should be cancelled, got cancels: {cancel_ids}"
+        )
+
+        # 4. Desired SELL count = N - 1 = 2 (L2, L3; L1 reserved)
+        # desired_count = (3 - 1 sell_skip) + 3 BUY = 5
+        assert result.desired_count == 5, (
+            f"Expected 5 desired (N-1 SELL + N BUY), got {result.desired_count}"
+        )
+
+        # 5. No grid PLACE at ~65934 (ec2 + STEP, the reserved slot)
+        sell_places = [
+            a
+            for a in result.actions
+            if a.action_type == ActionType.PLACE and a.side == OrderSide.SELL
+        ]
+        reserved_price = ec2 + STEP  # 65934
+        for sp in sell_places:
+            assert sp.price is not None
+            delta = float(abs(sp.price - reserved_price) / ANCHOR) * 10000
+            assert delta > 0.5, f"Grid SELL at {sp.price} in reserved zone {reserved_price}"
+
+    def test_t37_overlap_guard_missing_planner(self) -> None:
+        """T37 (INV-9): Overlap guard with missing planner → returns unchanged, no crash."""
+        mock_paper = MagicMock()
+        mock_paper.process_snapshot.return_value = MagicMock(actions=[])
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        engine = LiveEngineV0(
+            mock_paper,
+            NoOpExchangePort(),
+            config,
+            account_syncer=MagicMock(),
+            grid_planners={},  # no planner for any symbol
+        )
+
+        actions = [
+            ExecutionAction(
+                action_type=ActionType.PLACE,
+                symbol="BTCUSDT",
+                side=OrderSide.SELL,
+                price=Decimal("66000"),
+                quantity=Decimal("0.01"),
+                reduce_only=False,
+                reason="GRID_FILL",
+            ),
+            ExecutionAction(
+                action_type=ActionType.PLACE,
+                symbol="BTCUSDT",
+                side=OrderSide.SELL,
+                price=Decimal("66000.50"),
+                quantity=Decimal("0.01"),
+                reduce_only=True,
+                reason="TP_CLOSE",
+                client_order_id="grinder_tp_BTCUSDT_1_1000000_1",
+            ),
+        ]
+
+        # Should return unchanged (fail-open), no crash
+        result = engine._filter_tp_grid_overlap(actions, "BTCUSDT")
+        assert len(result) == len(actions), "Fail-open: all actions should pass through"
+
+
+class TestRollingGridEngineIntegrationExtra(TestRollingGridEngineIntegration):
+    """Continuation of engine integration tests (inherited helpers)."""
 
     def test_restart_trim_does_not_shift_offset(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """First-tick GRID_TRIM cancels → not treated as fills on next tick."""

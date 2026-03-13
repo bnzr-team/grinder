@@ -755,6 +755,11 @@ class LiveEngineV0:
             if cycle_actions:
                 logger.info("Cycle layer %s: %d TP actions", snapshot.symbol, len(cycle_actions))
                 raw_actions = raw_actions + cycle_actions
+                # INV-9: defense-in-depth overlap guard (anomaly detector).
+                # Suppresses grid PLACEs that overlap with TP PLACEs on same side.
+                # Expected fire count: ZERO. Firing = bug evidence.
+                if rolling:
+                    raw_actions = self._filter_tp_grid_overlap(raw_actions, snapshot.symbol)
                 paper_output = _DeferredPaperOutput(
                     ts=snapshot.ts, symbol=snapshot.symbol, actions=raw_actions
                 )
@@ -1121,6 +1126,86 @@ class LiveEngineV0:
         ]
         for oid in expired:
             del self._rolling_pending_cancels[oid]
+
+    def _filter_tp_grid_overlap(
+        self, actions: list[ExecutionAction], symbol: str
+    ) -> list[ExecutionAction]:
+        """INV-9 defense-in-depth: suppress grid PLACEs overlapping TP PLACEs.
+
+        Anomaly guard. Expected fire count: ZERO. Firing in production is
+        bug evidence requiring investigation.
+
+        Detection uses reduce_only as structural discriminator:
+        - TP PLACE: reduce_only=True (cycle_layer.py:278)
+        - Grid PLACE: reduce_only=False (planner default)
+
+        Fail-open: if planner config unavailable, returns actions unchanged.
+        """
+        # Resolve epsilon from planner config (SSOT: LiveGridConfig.price_epsilon_bps)
+        planner = self._grid_planners.get(symbol) if self._grid_planners else None
+        if planner is None:
+            logger.warning(
+                "TP_GRID_OVERLAP_GUARD_SKIP symbol=%s reason=no_planner_config",
+                symbol,
+            )
+            return actions
+
+        epsilon_bps = planner._config.price_epsilon_bps
+
+        # Collect TP PLACE targets: (side, price)
+        tp_places: list[tuple[OrderSide, Decimal]] = []
+        for a in actions:
+            if (
+                a.action_type == ActionType.PLACE
+                and a.reduce_only
+                and a.side is not None
+                and a.price is not None
+                and a.symbol == symbol
+            ):
+                tp_places.append((a.side, a.price))
+
+        if not tp_places:
+            return actions
+
+        # Use mid_price as reference for bps calculation
+        ref_price = max(p for _, p in tp_places)  # safe nonzero approximation
+
+        filtered: list[ExecutionAction] = []
+        for a in actions:
+            if (
+                a.action_type == ActionType.PLACE
+                and not a.reduce_only
+                and a.side is not None
+                and a.price is not None
+                and a.symbol == symbol
+            ):
+                # Check overlap with any TP PLACE on same side
+                overlap = False
+                for tp_side, tp_price in tp_places:
+                    if a.side != tp_side:
+                        continue
+                    delta_bps = (
+                        float(abs(a.price - tp_price) / ref_price) * 10000
+                        if ref_price > 0
+                        else float("inf")
+                    )
+                    if delta_bps <= epsilon_bps:
+                        overlap = True
+                        logger.warning(
+                            "TP_GRID_OVERLAP_SUPPRESSED symbol=%s side=%s "
+                            "grid_price=%s tp_price=%s delta_bps=%.2f "
+                            "reason=DEFENSE_IN_DEPTH",
+                            symbol,
+                            a.side.value if a.side else "?",
+                            a.price,
+                            tp_price,
+                            delta_bps,
+                        )
+                        break
+                if overlap:
+                    continue
+            filtered.append(a)
+        return filtered
 
     def _plan_grid(self, snapshot: Snapshot, rolling_mode: bool = False) -> GridPlanResult:
         """Generate grid actions from LiveGridPlannerV1 (PR-L2).

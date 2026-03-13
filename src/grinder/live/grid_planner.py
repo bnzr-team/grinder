@@ -149,6 +149,9 @@ class LiveGridPlannerV1:
         self._last_plan_ts_ms: dict[str, int] = {}
         # Rolling ladder state: per-symbol (doc-26, PR-ROLLING-GRID-V1A)
         self._rolling_state: dict[str, _RollingLadderState] = {}
+        # INV-9: per-tick TP slot reservations (planner-local, one-tick only).
+        # symbol -> {"BUY": count, "SELL": count}. Cleared after plan().
+        self._tp_slot_reservations: dict[str, dict[str, int]] = {}
 
     def init_rolling_state(self, symbol: str, anchor_price: Decimal, spacing_bps: float) -> None:
         """Initialize rolling ladder state for symbol (doc-26 SS 4.1).
@@ -169,14 +172,23 @@ class LiveGridPlannerV1:
 
         BUY fill: net_offset -= 1.  SELL fill: net_offset += 1.
         No-op if rolling state not initialized for symbol.
+
+        INV-9: also reserves a slot on the opposite side for the TP order
+        that cycle layer will generate. Reservation is planner-local and
+        lives exactly one tick (cleared after plan() returns).
         """
         st = self._rolling_state.get(symbol)
         if st is None:
             return
         if side.upper() == "BUY":
             st.net_offset -= 1
+            tp_side = "SELL"
         else:
             st.net_offset += 1
+            tp_side = "BUY"
+        # INV-9: reserve slot for TP on opposite side
+        res = self._tp_slot_reservations.setdefault(symbol, {"BUY": 0, "SELL": 0})
+        res[tp_side] += 1
 
     def get_rolling_state(self, symbol: str) -> _RollingLadderState | None:
         """Read-only access to current rolling state (for tests/logging)."""
@@ -233,6 +245,9 @@ class LiveGridPlannerV1:
             if symbol not in self._rolling_state:
                 self.init_rolling_state(symbol, mid_price, effective_spacing_bps)
             desired = self._build_rolling_grid(symbol)
+            # INV-9: clear per-tick TP reservations after use.
+            # Subsequent ownership determined by exchange-truth matching.
+            self._tp_slot_reservations.pop(symbol, None)
             diff = self._match_orders_by_price(open_orders, desired, mid_price)
             # No hysteresis in rolling mode — grid doesn't track mid_price
         else:
@@ -437,12 +452,21 @@ class LiveGridPlannerV1:
             ec = anchor_price + net_offset * step_price
             BUY[i]  = round_to_tick(ec - i * step_price)
             SELL[i] = round_to_tick(ec + i * step_price)
+
+        INV-9: On fill ticks, innermost levels on the TP side are skipped
+        to reserve slots for TP orders. Reservation is per-tick and clamped
+        to [0, N]. desired_grid_count = (N - sell_skip) + (N - buy_skip).
         """
         cfg = self._config
         st = self._rolling_state[symbol]
         tick = cfg.tick_size or Decimal("0.01")
         ec = st.anchor_price + st.net_offset * st.step_price
         levels: list[_DesiredLevel] = []
+
+        # INV-9: read TP slot reservations (planner-local, one-tick)
+        res = self._tp_slot_reservations.get(symbol, {"BUY": 0, "SELL": 0})
+        buy_skip = min(res.get("BUY", 0), cfg.levels)
+        sell_skip = min(res.get("SELL", 0), cfg.levels)
 
         # Max level distance cap (PR-VERIF-KNOBS-1)
         cap_bps = cfg.max_level_distance_bps
@@ -464,12 +488,17 @@ class LiveGridPlannerV1:
             if cap_high is not None and sell_price > cap_high:
                 continue
 
-            levels.append(
-                _DesiredLevel(key=f"BUY:L{i}", side=OrderSide.BUY, level_id=i, price=buy_price)
-            )
-            levels.append(
-                _DesiredLevel(key=f"SELL:L{i}", side=OrderSide.SELL, level_id=i, price=sell_price)
-            )
+            # INV-9: skip innermost levels reserved for TP
+            if i > buy_skip:
+                levels.append(
+                    _DesiredLevel(key=f"BUY:L{i}", side=OrderSide.BUY, level_id=i, price=buy_price)
+                )
+            if i > sell_skip:
+                levels.append(
+                    _DesiredLevel(
+                        key=f"SELL:L{i}", side=OrderSide.SELL, level_id=i, price=sell_price
+                    )
+                )
 
         return levels
 

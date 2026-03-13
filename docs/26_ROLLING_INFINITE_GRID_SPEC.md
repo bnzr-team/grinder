@@ -28,7 +28,7 @@ A **rolling infinite ladder** where:
 - Grid fills advance the ladder in the fill direction.
 - The sell-side frontier follows the buy-side down (and vice versa).
 - Level count and spacing are preserved.
-- Each fill triggers minimal actions (1 CANCEL + 2 PLACE = 3), not a full rebuild.
+- Each fill triggers minimal grid actions (1 CANCEL + 1 PLACE = 2, inner level reserved for TP per INV-9), not a full rebuild.
 
 ---
 
@@ -80,7 +80,8 @@ opposite frontier.
 
 ### INV-5: No Global Rebuild on Fill
 
-An ordinary grid fill generates at most `1 CANCEL + 2 PLACE = 3 actions`.
+An ordinary grid fill generates at most `1 CANCEL + 1 grid PLACE = 2 grid actions`
+(inner level reserved for TP per INV-9; cycle layer places TP separately).
 Full `GRID_SHIFT` (cancel-all + place-all) is NEVER triggered by a fill event alone.
 
 ### INV-6: TP Isolation
@@ -104,6 +105,73 @@ After restart or AccountSync reconnect:
 4. Planner diffs desired grid against exchange orders.
 5. Orphaned orders cancelled via `GRID_TRIM`; missing levels placed via `GRID_FILL`.
 6. Rolling state begins fresh from new anchor.
+
+### INV-9: TP Slot Exclusion (ADR-086)
+
+On fill ticks, planner reserves innermost opposite-side slots for TP orders that cycle
+layer will generate. Reservation prevents TP/grid overlap at the same price.
+
+**Formula:**
+
+```
+desired_grid_count = (N - sell_reservation) + (N - buy_reservation)
+```
+
+Where:
+- `sell_reservation = count of BUY fills this tick` (clamped to `[0, N]`)
+- `buy_reservation = count of SELL fills this tick` (clamped to `[0, N]`)
+- Steady tick (no fills): `sell_reservation = buy_reservation = 0`, `desired_grid_count = 2*N`
+
+**Slot state model:**
+
+| State | Definition |
+|-------|-----------|
+| `grid` | Occupied by `strategy_id="d"` |
+| `tp` | Occupied by `strategy_id="tp"` |
+| `reserved` | Planner withholds for TP, one tick only |
+| `vacant` | No order at this level |
+
+Ownership applies only to occupied slots (`grid` or `tp`). `reserved` and `vacant` are
+transient non-ownership states.
+
+**Reservation lifecycle (MUST rules):**
+
+1. Reservation is planner-local. Stored in `LiveGridPlannerV1._tp_slot_reservations`.
+   Not shared with cycle layer or engine.
+2. Reservation lives exactly one tick. Created in `apply_fill_offset()`, consumed in
+   `_build_rolling_grid()`, cleared after `plan()` returns.
+3. Subsequent ownership SSOT = exchange-truth matching. After the fill tick, slot
+   ownership is determined solely by which exchange orders match desired levels
+   by price in `_match_orders_by_price()`.
+4. Reservation does not create TP. It only withholds grid placement. TP generation
+   is cycle layer's responsibility.
+
+**Convergence target:**
+
+```
+steady_state_open_count_target = 2 * N    (grid + tp)
+```
+
+This is a convergence target, NOT an absolute runtime invariant. Transient deviation
+within one reconciliation cycle is expected (async propagation, rejected PLACEs,
+delayed CANCELs).
+
+**Saturation policy (fill_count > N same side):**
+
+Reservation clamps at `min(fill_count, N)` per side. Planner never produces negative
+level count. Cycle layer generates one TP per detected fill regardless. If fills > N,
+cycle layer may generate more TPs than grid capacity on that side. Excess TPs
+self-heal via TP TTL. Known limitation, same category as ADR-085 exchange-side
+non-trade cancels.
+
+**Defense-in-depth (`_filter_tp_grid_overlap`):**
+
+Anomaly guard in engine.py. Expected fire count: ZERO. Firing in production is bug
+evidence requiring investigation. Uses `reduce_only` as structural discriminator
+(TP=True, grid=False). Fail-open when planner config unavailable.
+
+**Tie-break:** Within epsilon, closest `price_diff_bps` to desired level wins. On
+exact tie, first in exchange snapshot iteration order wins.
 
 ---
 
@@ -231,7 +299,9 @@ Using the example from 5.3 (center was 66000, now 65934 after BUY fill at 65934)
 | BUY 65802 | BUY 65802 | MATCH |
 | BUY 65736 | -- | MISSING: PLACE |
 
-**Actions:** 1 CANCEL + 2 PLACE = 3 actions.
+**Grid actions:** 1 CANCEL + 1 PLACE = 2 grid actions.
+(INV-9: inner SELL at 66000 is reserved for TP — planner does not PLACE it. Cycle layer
+places TP SELL separately.)
 
 ### 6.2 Grid SELL Fill
 
@@ -241,8 +311,8 @@ Using the example from 5.3 (center was 66000, now 65934 after BUY fill at 65934)
 net_offset += 1     # effective_center moves up by step_price
 ```
 
-**Actions:** CANCEL lowest BUY + PLACE new SELL at top frontier + PLACE new BUY at
-inner frontier. 3 actions total.
+**Grid actions:** CANCEL lowest BUY + PLACE new SELL at top frontier. 2 grid actions.
+(INV-9: inner BUY reserved for TP — planner does not PLACE it.)
 
 ### 6.3 Multiple Grid Fills (Same Snapshot)
 
@@ -252,9 +322,10 @@ If `k` grid BUY fills detected in one snapshot:
 net_offset -= k
 ```
 
-**Actions:** `k` CANCEL + `2k` PLACE = `3k` actions. Linear in fill count.
+**Grid actions:** `k` CANCEL + `k` PLACE = `2k` grid actions. Linear in fill count.
+(INV-9: `k` inner levels reserved for TPs.)
 
-For N=5, 2 fills: 6 actions (vs 20 for full rebuild). For N=5, 1 fill: 3 actions (vs 20).
+For N=5, 2 fills: 4 grid actions + 2 TP PLACEs (vs 20 for full rebuild). For N=5, 1 fill: 2 grid actions + 1 TP PLACE (vs 20).
 
 ### 6.4 TP Fill
 
@@ -522,8 +593,8 @@ If AccountSync loses connection and reconnects (no engine restart):
 
 | Event | `net_offset` | Ladder shift | Planner actions |
 |-------|-------------|--------------|-----------------|
-| Grid BUY fill | `-1` | Down by `step_price` | 1 CANCEL + 2 PLACE |
-| Grid SELL fill | `+1` | Up by `step_price` | 1 CANCEL + 2 PLACE |
+| Grid BUY fill | `-1` | Down by `step_price` | 1 CANCEL + 1 grid PLACE (INV-9: inner reserved for TP) |
+| Grid SELL fill | `+1` | Up by `step_price` | 1 CANCEL + 1 grid PLACE (INV-9: inner reserved for TP) |
 | TP fill | unchanged | None | 0-1 PLACE (restore slot) |
 
 ---
@@ -555,7 +626,7 @@ If AccountSync loses connection and reconnects (no engine restart):
 | T5 | After k BUY fills: effective_center decreased by k * step_price | INV-3 |
 | T6 | After 1 SELL fill: effective_center increased by step_price | INV-3 |
 | T7 | New orders at frontier, not at center | INV-4 |
-| T8 | Fill generates exactly 1 CANCEL + 2 PLACE = 3 actions | INV-5 |
+| T8 | Fill generates 1 CANCEL + 1 grid PLACE = 2 grid actions (inner reserved for TP, INV-9) | INV-5, INV-9 |
 | T9 | TP fill does NOT change net_offset | INV-6 |
 | T10 | BUY fill path mirrors SELL fill path | INV-7 |
 | T11 | After restart: anchor=mid, offset=0, grid rebuilt | INV-8 |
@@ -571,6 +642,28 @@ If AccountSync loses connection and reconnects (no engine restart):
 | T16 | Price-based matching: correct price, wrong level_id -> MATCH | New matching |
 | T17 | Mid-price drift produces 0 planner actions | No mid-shift |
 | T18 | TP fill restores slot-takeover'd level via GRID_FILL | TP restoration |
+
+### TP Slot Ownership Tests (INV-9, ADR-086)
+
+| ID | Test | Verifies |
+|----|------|----------|
+| T21 | BUY fill → desired_grid_count = 2*N - 1, SELL side has N-1 levels | Reservation |
+| T22 | SELL fill → desired_grid_count = 2*N - 1, BUY side has N-1 levels | Reservation |
+| T23 | Mixed (2 BUY + 1 SELL) → desired_grid_count = 2*N - 3 | Multi-fill reservation |
+| T24 | Next tick (no fill): desired_grid_count = 2*N (reservation cleared) | One-tick lifecycle |
+| T25 | TP on exchange matches desired level by price → no redundant grid PLACE | Exchange-truth SSOT |
+| T26 | BUY fill + action merge: no grid SELL PLACE within epsilon of TP SELL PLACE | Overlap prevention |
+| T27 | SELL fill + action merge: no grid BUY PLACE within epsilon of TP BUY PLACE | Overlap prevention |
+| T28 | Fill tick post-action model (unit test only): applied_grid + applied_tp = 2*N | Post-action model |
+| T29 | No same-side TP/grid overlap within epsilon in post-action snapshot | No overlap |
+| T30 | Live-style: BUY@67768.30 → TP_SELL@67836 → grid_SELL@67836.20, overlap prevented | Integration |
+| T31 | Overlap guard suppresses grid PLACE; TP absent next tick → self-heal | Self-heal |
+| T32 | TP expiry → slot vacant → grid PLACE next tick | TP lifecycle |
+| T33 | Saturation: 4 fills with N=3 → reservation clamps at 3, per-side >= 0 | Saturation |
+| T34 | TP PLACE blocked → reserved → vacant → grid (self-heal) | Blocked TP |
+| T35 | TP renew → slot stays tp, no grid overlap | TP renewal |
+| T36 | Existing TP + new BUY fill (Contract 2a): old TP matched, farthest cancelled, new reserved | Contract 2a |
+| T37 | Overlap guard with missing planner config → returns unchanged, no crash | Fail-open |
 
 ### Backward Compatibility
 
