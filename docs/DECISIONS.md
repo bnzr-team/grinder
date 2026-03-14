@@ -4212,4 +4212,23 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
   - Cycle layer owns all slots: contradicts planner-as-SSOT for grid levels.
   - Post-merge dedup only: doesn't prevent the planner from generating the conflicting PLACE in the first place.
   - TP-visibility reservation clearing: clears reservation when TP visible in open_orders. Rejected: false-clears in multi-fill case (existing TP from prior fill triggers clearing of new reservation for different slot, Contract 2a).
+- **`diff_extra_tp` follow-up (INV-9b):** Live run6 exposed convergence deadlock: TP in extras → `diff_extra > 0` → Guard 2 blocked all PLACEs → 50-tick spin. Fix: `GridPlanResult.diff_extra_tp` counts TP orders in extras. Convergence guard uses `non_tp_extras = diff_extra - diff_extra_tp`. TP extras are intentional (not cancelled). T43 validates.
 - **SSOT:** `docs/26_ROLLING_INFINITE_GRID_SPEC.md` section INV-9
+
+## ADR-087: Convergence guard fixes — BUG-3 + BUG-4
+
+- **Date:** 2026-03-14
+- **Status:** accepted
+- **Context:** Live run8 (commit 44ce8c2, INV-9b) exposed two operational bugs:
+  - **BUG-3 (GRID_SHIFT_DEFERRED churn):** 8,116 GRID_SHIFT_DEFERRED entries in one run. Mechanism: PLACE → latch(gen=N) → sync → latch clears → planner SHIFT → new latch(gen=N+1) → repeat. Each latch cycle blocks ~100 WS ticks (~5s sync interval). Root cause: inflight latch re-created after every convergence clear, even for pure price-shift actions (1 CANCEL + 1 PLACE).
+  - **BUG-4 (CANCEL_2011 spin):** 30 CANCEL_2011 errors in one run. Stale snapshot shows already-cancelled order → planner generates CANCEL → Binance returns -2011 → repeats every tick until next AccountSync refresh.
+- **Decision:**
+  - **BUG-3 fix (a): Log throttle.** `GRID_SHIFT_DEFERRED` logged at INFO once per latch cycle (was WARNING every WS tick). `_inflight_deferred_logged: set[str]` tracks which symbols have logged for current latch. Cleared on latch clear/timeout.
+  - **BUG-3 fix (b): No re-latch for pure shifts.** After convergence clears latch, pure shifts (`cancel_count >= place_count AND place_count > 0`) skip re-latch. Net-new PLACEs (initial placement, fill recovery where `cancel_count < place_count`) still latch. `convergence_cleared` flag tracks whether latch was just cleared in current guard invocation.
+  - **BUG-4 fix: Cancel-failed blacklist.** `_cancel_failed_ids: set[str]` stores order_ids where CANCEL returned failure. Action processing loop skips CANCELs for blacklisted order_ids (`LiveActionStatus.SKIPPED`, `BlockReason.CANCEL_ALREADY_FAILED`). Blacklist cleared on AccountSync refresh (`_account_sync_generation` increment) — fresh snapshot replaces stale state.
+- **Consequences:**
+  - GRID_SHIFT_DEFERRED log volume: O(100/latch) → O(1/latch). Run8 would have had ~80 entries instead of 8,116.
+  - Pure shifts (mid-price drift) no longer cause cascading latch → defer → clear → relatch cycles.
+  - CANCEL_2011 retries: O(N*ticks_until_sync) → O(1). First failure blacklists; subsequent skipped.
+  - BUG-3 fix risk: brief stale-snapshot window (1 sync cycle) where planner may generate redundant PLACE for shifted slot. Self-heals next sync (extra detected → CANCEL).
+  - BUG-4 fix risk: premature blacklist if CANCEL fails for transient reason (non -2011). Self-heals on sync refresh (blacklist cleared).

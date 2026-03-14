@@ -1340,11 +1340,11 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - Non-goal: no Prometheus counters - logs only (`TP_SLOT_TAKEOVER_SKIPPED`, `TP_CLOSE_RETRY_QUEUED`, `_OK`, `_EXHAUSTED`). Counters deferred to observability PR
 - **Converge-first planner + budget-burn stop** (PR-P0-RACE-1, ADR-084):
   - Three guards scoped to planner/grid-shift path ONLY (cycle layer TP/replenish unaffected):
-    1. Sync-gated planner: skip planner until AccountSync refreshes after dispatch (`_account_sync_generation` counter)
-    2. Cancel-first on extras: if `GridPlanResult.diff_extra > 0`, only CANCEL actions pass (PLACEs deferred)
+    1. Sync-gated planner: skip planner until AccountSync refreshes after dispatch (`_account_sync_generation` counter). BUG-3: log throttled (once per latch cycle), pure shifts skip re-latch.
+    2. Cancel-first on extras: if `non_tp_extras > 0` (INV-9b: `diff_extra - diff_extra_tp`), only CANCEL actions pass (PLACEs deferred). TP extras are intentional.
     3. Budget pre-check: if `orders_remaining() <= 0` or PLACEs > budget, entire shift deferred (no partial execution)
-  - Convergence = `diff_extra == 0` after fresh AccountSync
-  - Inflight latch: 30s timeout safety valve (clears sync-wait but cancel-only still applies if extras present)
+  - Convergence = `non_tp_extras == 0` after fresh AccountSync (INV-9b: TP extras do not block)
+  - Inflight latch: 30s timeout safety valve (clears sync-wait but cancel-only still applies if extras present). BUG-3: no re-latch for pure shifts after convergence clear.
   - `ExchangePort.orders_remaining() -> int | None`: clean public API (NoOp returns None = unlimited)
   - Env: `GRINDER_LIVE_CONVERGE_FIRST` (bool, default `True`, safe-by-default)
   - Logs: `GRID_SHIFT_DEFERRED`, `PLACEMENT_DEFERRED`, `INFLIGHT_GENERATION_TIMEOUT`, `ORDER_BUDGET_EXHAUSTED`, `ORDER_BUDGET_NEAR_EXHAUSTION`
@@ -1356,7 +1356,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - Cap logic in `_build_desired_grid()`: reduces `desired_count` naturally
   - Backward-compatible: defaults preserve existing behavior
 - **Rolling Infinite Grid** (ADR-085):
-  - **Status:** V1C implemented -- TP slot ownership (INV-9) added. Planner + engine wiring complete.
+  - **Status:** V1E implemented -- convergence guard + cancel-spin fixes (BUG-3/BUG-4). Live verification pending.
   - **Spec:** `docs/26_ROLLING_INFINITE_GRID_SPEC.md`
   - **Problem:** Current mid-anchored grid rebuilds entirely on price movement (20 actions/shift, budget burn). Grid fills don't advance the ladder.
   - **Solution:** Rolling infinite ladder where grid fills shift `effective_center` by `+/- step_price`. Fill produces 2 grid actions (1 CANCEL + 1 PLACE, inner level reserved for TP) instead of full rebuild.
@@ -1375,7 +1375,13 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - **Convergence target:** `grid + tp = 2*N` (not absolute runtime invariant — transient deviation expected).
     - **Saturation:** reservation clamps at `min(fill_count, N)` per side. Excess TPs self-heal via TTL.
     - **Defense-in-depth:** `_filter_tp_grid_overlap()` in engine. Same-tick anomaly guard (expected fire count: ZERO). Uses `reduce_only` discriminator. Fail-open when config missing.
-    - 22 slot ownership tests (T21-T42), 66 rolling grid tests total.
+    - **`diff_extra_tp` (INV-9b follow-up):** `GridPlanResult.diff_extra_tp` counts TP orders in extras. Convergence guard uses `non_tp_extras = diff_extra - diff_extra_tp` — TP extras are intentional (not cancelled), only grid extras block PLACEs. T43 validates.
+    - 22 slot ownership tests (T21-T42) + T43, 67 rolling grid tests total.
+  - **V1E (convergence guard + cancel-spin fixes, BUG-3/BUG-4):** Live run8 exposed two operational bugs:
+    - **BUG-3 (GRID_SHIFT_DEFERRED churn):** Inflight latch re-created on every sync cycle. Mechanism: PLACE → latch(gen=N) → sync → latch clears → planner SHIFT → new latch(gen=N+1) → repeat. Each latch blocks ~100 WS ticks. Fix: (a) log throttle — `GRID_SHIFT_DEFERRED` logged once per latch cycle, not every tick; (b) no re-latch for pure shifts (cancel_count >= place_count) after convergence clear. Net-new PLACEs still latch.
+    - **BUG-4 (CANCEL_2011 spin):** Stale snapshot shows already-cancelled order → planner generates CANCEL → Binance returns -2011 → repeats every tick until sync refresh. Fix: `_cancel_failed_ids` blacklist. Failed CANCELs recorded; blacklisted order_ids skipped in action loop. Cleared on AccountSync refresh (`_account_sync_generation` increment).
+    - **Logs:** `CANCEL_FAILED_IDS_CLEARED count={} gen={}` (on sync refresh). `BlockReason.CANCEL_ALREADY_FAILED` (SKIPPED status).
+    - 4 BUG-3 tests (log throttle, reset after sync, pure shift no-relatch, net-new relatch) + 5 BUG-4 tests (populated, cleared on sync, persists without sync, error path, empty no-log).
   - **Fill detection:** Rolling fill = disappeared order with `strategy_id="d"` (grid) AND not in pending cancels. TP (`strategy_id="tp"`) and all non-grid strategies do NOT shift offset. Disappearance heuristic (not trade evidence). Known limitation: exchange-side non-trade cancels of grid orders (ADL, margin) treated as fills. Resets on restart.
   - **Obsoletes in rolling mode:** cycle-layer replenish, TP_FILL_REPLENISH, mid-driven GRID_SHIFT, anti-churn, grid freeze.
   - **Migration:** spec -> V1A planner -> V1B engine -> V1C slot ownership -> V1D cross-tick fix (this) -> live verification -> cleanup.

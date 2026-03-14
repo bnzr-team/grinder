@@ -185,6 +185,21 @@ cross-tick overlap (handled by TP inclusion + persistent reservation above).
 **Tie-break:** Within epsilon, closest `price_diff_bps` to desired level wins. On
 exact tie, first in exchange snapshot iteration order wins.
 
+**`diff_extra_tp` (INV-9b follow-up, ADR-086):**
+
+`GridPlanResult.diff_extra_tp` counts TP orders in `diff.extra_orders`. Convergence
+guard (ADR-084) uses `non_tp_extras = diff_extra - diff_extra_tp`. TP extras are
+intentional (planner does not cancel them — cycle layer owns TP lifecycle) and must
+not block grid PLACEs.
+
+**Convergence guard operational fixes (ADR-087, BUG-3/BUG-4):**
+
+1. **BUG-3 (GRID_SHIFT_DEFERRED churn):** Inflight latch log throttled to once per
+   latch cycle. Pure shifts (`cancel_count >= place_count`) skip re-latch after
+   convergence clear. Net-new PLACEs still latch.
+2. **BUG-4 (CANCEL_2011 spin):** `_cancel_failed_ids` blacklist prevents re-cancelling
+   orders that already returned failure. Cleared on AccountSync refresh.
+
 ---
 
 ## 4. State Model

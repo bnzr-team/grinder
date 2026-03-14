@@ -159,6 +159,7 @@ class BlockReason(Enum):
     MAX_POSITION_EXCEEDED = "MAX_POSITION_EXCEEDED"
     TP_RENEW_PLACE_FAILED = "TP_RENEW_PLACE_FAILED"
     TP_CLOSE_PLACE_FAILED = "TP_CLOSE_PLACE_FAILED"
+    CANCEL_ALREADY_FAILED = "CANCEL_ALREADY_FAILED"
 
 
 class LiveActionStatus(Enum):
@@ -489,6 +490,8 @@ class LiveEngineV0:
             "GRINDER_LIVE_CONVERGE_FIRST", default=True, strict=False
         )
         self._inflight_shift: dict[str, _InflightShift] = {}
+        self._inflight_deferred_logged: set[str] = set()  # BUG-3: log once per latch
+        self._cancel_failed_ids: set[str] = set()  # BUG-4: skip re-cancel on -2011
         self._account_sync_generation: int = 0
         # PR-ROLLING-GRID-V1B: rolling grid mode (doc-26, safe-by-default)
         self._rolling_grid_enabled = parse_bool(
@@ -887,8 +890,34 @@ class LiveEngineV0:
                 )
                 continue
 
+            # BUG-4: skip CANCEL for order_ids that already returned -2011.
+            # Stale snapshot may still show the order → planner re-generates CANCEL →
+            # Binance returns -2011 → repeat every tick until sync refreshes.
+            if (
+                action.action_type == ActionType.CANCEL
+                and action.order_id is not None
+                and action.order_id in self._cancel_failed_ids
+            ):
+                live_actions.append(
+                    LiveAction(
+                        action=action,
+                        status=LiveActionStatus.SKIPPED,
+                        block_reason=BlockReason.CANCEL_ALREADY_FAILED,
+                        intent=RiskIntent.CANCEL,
+                    )
+                )
+                continue
+
             live_action = self._process_action(action, snapshot.ts)
             live_actions.append(live_action)
+
+            # BUG-4: track failed CANCELs for -2011 suppression
+            if (
+                action.action_type == ActionType.CANCEL
+                and action.order_id is not None
+                and live_action.status == LiveActionStatus.FAILED
+            ):
+                self._cancel_failed_ids.add(action.order_id)
 
             # Track TP_CLOSE PLACE result by correlation_id
             if action.reason == "TP_CLOSE" and action.action_type == ActionType.PLACE:
@@ -1312,6 +1341,14 @@ class LiveEngineV0:
             self._last_account_snapshot = result.snapshot
             # PR-P0-RACE-1: monotonic generation counter for convergence guards
             self._account_sync_generation += 1
+            # BUG-4: clear cancel-failed blacklist — fresh snapshot replaces stale state
+            if self._cancel_failed_ids:
+                logger.info(
+                    "CANCEL_FAILED_IDS_CLEARED count=%d gen=%d",
+                    len(self._cancel_failed_ids),
+                    self._account_sync_generation,
+                )
+                self._cancel_failed_ids.clear()
 
         # Evidence writing (env-gated, safe-by-default)
         if result.snapshot is not None:
@@ -1765,6 +1802,7 @@ class LiveEngineV0:
             return actions
 
         # Guard 1: Inflight latch — wait for sync refresh after dispatch
+        convergence_cleared = False
         inflight = self._inflight_shift.get(symbol)
         if inflight is not None:
             # Check timeout first (30s safety valve)
@@ -1776,15 +1814,20 @@ class LiveEngineV0:
                     elapsed,
                 )
                 self._inflight_shift.pop(symbol, None)
+                self._inflight_deferred_logged.discard(symbol)
+                convergence_cleared = True
             elif self._account_sync_generation <= inflight.sync_gen:
-                # Sync hasn't refreshed since dispatch → skip planner entirely
-                logger.warning(
-                    "GRID_SHIFT_DEFERRED reason=INFLIGHT_GENERATION symbol=%s "
-                    "sync_gen=%d inflight_gen=%d",
-                    symbol,
-                    self._account_sync_generation,
-                    inflight.sync_gen,
-                )
+                # Sync hasn't refreshed since dispatch → skip planner entirely.
+                # BUG-3 fix: log only once per latch cycle, not every WS tick.
+                if symbol not in self._inflight_deferred_logged:
+                    logger.info(
+                        "GRID_SHIFT_DEFERRED reason=INFLIGHT_GENERATION symbol=%s "
+                        "sync_gen=%d inflight_gen=%d",
+                        symbol,
+                        self._account_sync_generation,
+                        inflight.sync_gen,
+                    )
+                    self._inflight_deferred_logged.add(symbol)
                 return []
             elif plan_result.diff_extra == 0 or (
                 plan_result.diff_extra > 0 and plan_result.diff_extra == plan_result.diff_extra_tp
@@ -1792,6 +1835,8 @@ class LiveEngineV0:
                 # Converged: no non-TP extras after fresh sync → clear latch.
                 # TP extras are intentional (INV-9b) and do not block convergence.
                 self._inflight_shift.pop(symbol, None)
+                self._inflight_deferred_logged.discard(symbol)
+                convergence_cleared = True
             # else: sync refreshed but non-TP extras > 0 → fall through to Guard 2
 
         # Guard 2: Cancel-first on extras (no inflight, latch just cleared, or post-timeout)
@@ -1824,8 +1869,14 @@ class LiveEngineV0:
             )
             return []
 
-        # All guards passed — record inflight if PLACEs dispatched
-        if place_count > 0:
+        # All guards passed — record inflight if PLACEs dispatched.
+        # BUG-3 fix: after convergence just cleared, skip re-latch for pure
+        # shifts (cancel_count >= place_count). This avoids the re-latch cycle
+        # where every sync clears the latch, planner shifts, and re-latches.
+        # Net-new PLACEs (initial placement, fill recovery) still latch.
+        cancel_count = sum(1 for a in actions if a.action_type == ActionType.CANCEL)
+        is_pure_shift = cancel_count >= place_count > 0
+        if place_count > 0 and not (convergence_cleared and is_pure_shift):
             self._inflight_shift[symbol] = _InflightShift(
                 sync_gen=self._account_sync_generation,
                 place_count=place_count,

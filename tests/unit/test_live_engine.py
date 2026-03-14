@@ -5361,7 +5361,8 @@ class TestPlannerConvergence:
         assert "BTCUSDT" in engine._inflight_shift
 
         # Second call: same sync_gen=0, within 30s → blocked
-        with caplog.at_level(logging.WARNING):
+        # BUG-3: log level changed from WARNING to INFO (throttled)
+        with caplog.at_level(logging.INFO):
             result2 = engine._apply_convergence_guards("BTCUSDT", actions, plan, base_ts + 5000)
         assert result2 == []
         assert "GRID_SHIFT_DEFERRED" in caplog.text
@@ -5628,3 +5629,328 @@ class TestPlannerConvergence:
 
         # All pass — guards disabled
         assert len(result) == 3
+
+    # --- BUG-3: inflight latch churn fixes ---
+
+    # 13. test_inflight_deferred_log_throttle
+    def test_inflight_deferred_log_throttle(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """BUG-3: GRID_SHIFT_DEFERRED logged once per latch, not every WS tick."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._account_sync_generation = 0
+
+        actions = [self._place_action(1)]
+        plan = GridPlanResult(actions=actions, diff_extra=0, desired_count=4, actual_count=4)
+        base_ts = 1_000_000_000
+
+        # Dispatch → sets inflight latch
+        engine._apply_convergence_guards("BTCUSDT", actions, plan, base_ts)
+        assert "BTCUSDT" in engine._inflight_shift
+
+        # 3 ticks while latch held (same sync_gen=0)
+        with caplog.at_level(logging.INFO):
+            caplog.clear()
+            for i in range(3):
+                engine._apply_convergence_guards("BTCUSDT", actions, plan, base_ts + (i + 1) * 1000)
+
+        deferred_count = caplog.text.count("GRID_SHIFT_DEFERRED")
+        assert deferred_count == 1, f"Expected 1 log entry, got {deferred_count} — throttle broken"
+
+    # 14. test_inflight_deferred_log_resets_after_sync
+    def test_inflight_deferred_log_resets_after_sync(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """BUG-3: after sync clears latch and new latch set, log fires again."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._account_sync_generation = 0
+
+        actions = [self._place_action(1)]
+        plan = GridPlanResult(actions=actions, diff_extra=0, desired_count=4, actual_count=4)
+        base_ts = 1_000_000_000
+
+        # Latch 1: dispatch
+        engine._apply_convergence_guards("BTCUSDT", actions, plan, base_ts)
+
+        with caplog.at_level(logging.INFO):
+            caplog.clear()
+            # Tick 1: deferred (first log)
+            engine._apply_convergence_guards("BTCUSDT", actions, plan, base_ts + 1000)
+            assert caplog.text.count("GRID_SHIFT_DEFERRED") == 1
+
+        # Sync refresh → latch clears → new dispatch → new latch
+        engine._account_sync_generation = 1
+        engine._apply_convergence_guards("BTCUSDT", actions, plan, base_ts + 6000)
+
+        # Tick after new dispatch (sync_gen=1, inflight gen=1 → blocked again)
+        with caplog.at_level(logging.INFO):
+            caplog.clear()
+            engine._apply_convergence_guards("BTCUSDT", actions, plan, base_ts + 7000)
+            assert caplog.text.count("GRID_SHIFT_DEFERRED") == 1, "Log should fire for new latch"
+
+    # 15. test_pure_shift_no_relatch_after_convergence
+    def test_pure_shift_no_relatch_after_convergence(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """BUG-3: convergence clears latch → pure shift (cancel >= place) → no re-latch."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._account_sync_generation = 0
+
+        # Initial dispatch sets latch
+        actions = [self._place_action(1)]
+        plan = GridPlanResult(actions=actions, diff_extra=0, desired_count=4, actual_count=4)
+        base_ts = 1_000_000_000
+        engine._apply_convergence_guards("BTCUSDT", actions, plan, base_ts)
+        assert "BTCUSDT" in engine._inflight_shift
+
+        # Sync refresh → convergence clears
+        engine._account_sync_generation = 1
+        # Pure shift: 1 cancel + 1 place (cancel >= place)
+        shift_actions = [self._cancel_action(), self._place_action(2)]
+        plan_shift = GridPlanResult(
+            actions=shift_actions,
+            diff_extra=0,
+            desired_count=4,
+            actual_count=4,
+        )
+        result = engine._apply_convergence_guards(
+            "BTCUSDT", shift_actions, plan_shift, base_ts + 6000
+        )
+
+        # Actions pass
+        assert len(result) == 2
+        # No re-latch for pure shift after convergence
+        assert "BTCUSDT" not in engine._inflight_shift, "Pure shift should not re-latch"
+
+    # 16. test_net_new_places_still_latch_after_convergence
+    def test_net_new_places_still_latch_after_convergence(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """BUG-3: convergence clears latch → net-new PLACEs (no cancel) → re-latch."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._account_sync_generation = 0
+
+        # Initial dispatch
+        actions = [self._place_action(1)]
+        plan = GridPlanResult(actions=actions, diff_extra=0, desired_count=4, actual_count=4)
+        base_ts = 1_000_000_000
+        engine._apply_convergence_guards("BTCUSDT", actions, plan, base_ts)
+
+        # Sync refresh → convergence clears
+        engine._account_sync_generation = 1
+        # Net-new: 2 places, 0 cancels
+        new_actions = [self._place_action(1), self._place_action(2)]
+        plan_new = GridPlanResult(
+            actions=new_actions,
+            diff_extra=0,
+            desired_count=4,
+            actual_count=2,
+        )
+        engine._apply_convergence_guards("BTCUSDT", new_actions, plan_new, base_ts + 6000)
+
+        # Net-new places should latch
+        assert "BTCUSDT" in engine._inflight_shift, "Net-new PLACEs must re-latch"
+
+
+class TestCancelFailedSuppression:
+    """BUG-4: CANCEL_2011 spin prevention.
+
+    After a CANCEL returns -2011, the order_id is blacklisted until
+    next AccountSync refresh. Prevents spinning on stale snapshot.
+    """
+
+    @staticmethod
+    def _make_engine(
+        mock_paper_engine: MagicMock,
+        port: NoOpExchangePort | MagicMock,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> LiveEngineV0:
+        monkeypatch.setenv("GRINDER_LIVE_PLANNER_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_ACCOUNT_SYNC_ENABLED", "1")
+        monkeypatch.setenv("GRINDER_LIVE_CONVERGE_FIRST", "1")
+
+        planner = LiveGridPlannerV1(
+            LiveGridConfig(tick_size=Decimal("0.10"), levels=2, size_per_level=Decimal("0.01"))
+        )
+        mock_syncer = MagicMock()
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        return LiveEngineV0(
+            mock_paper_engine,
+            port,
+            config,
+            account_syncer=mock_syncer,
+            grid_planners={"BTCUSDT": planner},
+        )
+
+    # 1. test_cancel_failed_ids_populated_directly
+    def test_cancel_failed_ids_populated_directly(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """_cancel_failed_ids can be populated and queried."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        assert len(engine._cancel_failed_ids) == 0
+
+        engine._cancel_failed_ids.add("grinder_d_BTCUSDT_1_1000000_99")
+        assert "grinder_d_BTCUSDT_1_1000000_99" in engine._cancel_failed_ids
+
+    # 2. test_cancel_failed_ids_cleared_on_sync
+    def test_cancel_failed_ids_cleared_on_sync(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """AccountSync refresh clears _cancel_failed_ids."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+
+        # Populate blacklist
+        engine._cancel_failed_ids.add("order_1")
+        engine._cancel_failed_ids.add("order_2")
+        assert len(engine._cancel_failed_ids) == 2
+
+        # Simulate account sync refresh — syncer uses .sync() not .tick()
+        syncer = engine._account_syncer
+        assert syncer is not None
+        syncer.sync.return_value = MagicMock(  # type: ignore[attr-defined]
+            error=None,
+            snapshot=AccountSnapshot(
+                positions=(),
+                open_orders=(),
+                ts=2000000,
+                source="test",
+            ),
+            mismatches=[],
+        )
+
+        with caplog.at_level(logging.INFO):
+            engine._tick_account_sync()
+
+        assert len(engine._cancel_failed_ids) == 0
+        assert "CANCEL_FAILED_IDS_CLEARED" in caplog.text
+        assert "count=2" in caplog.text
+
+    # 3. test_cancel_failed_not_cleared_without_snapshot
+    def test_cancel_failed_not_cleared_without_snapshot(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Sync with no snapshot → blacklist persists."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._cancel_failed_ids.add("order_x")
+
+        # Simulate sync with error (no snapshot)
+        syncer = engine._account_syncer
+        assert syncer is not None
+        syncer.sync.return_value = MagicMock(error="timeout", snapshot=None, mismatches=[])  # type: ignore[attr-defined]
+        engine._tick_account_sync()
+
+        assert "order_x" in engine._cancel_failed_ids, "No sync refresh → blacklist persists"
+
+    # 4. test_cancel_failed_not_cleared_on_sync_error
+    def test_cancel_failed_not_cleared_on_sync_error(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Sync that returns error → blacklist persists."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        engine._cancel_failed_ids.add("order_y")
+
+        syncer = engine._account_syncer
+        assert syncer is not None
+        syncer.sync.return_value = MagicMock(error="connection_refused", snapshot=None)  # type: ignore[attr-defined]
+        engine._tick_account_sync()
+
+        assert "order_y" in engine._cancel_failed_ids
+
+    # 5. test_cancel_failed_empty_blacklist_no_log
+    def test_cancel_failed_empty_blacklist_no_log(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        """Sync refresh with empty blacklist → no CANCEL_FAILED_IDS_CLEARED log."""
+        engine = self._make_engine(mock_paper_engine, noop_port, monkeypatch)
+        assert len(engine._cancel_failed_ids) == 0
+
+        syncer = engine._account_syncer
+        assert syncer is not None
+        syncer.sync.return_value = MagicMock(  # type: ignore[attr-defined]
+            error=None,
+            snapshot=AccountSnapshot(
+                positions=(),
+                open_orders=(),
+                ts=2000000,
+                source="test",
+            ),
+            mismatches=[],
+        )
+
+        with caplog.at_level(logging.INFO):
+            engine._tick_account_sync()
+
+        assert "CANCEL_FAILED_IDS_CLEARED" not in caplog.text
+
+    # 6. test_cancel_already_failed_skipped_in_action_loop
+    def test_cancel_already_failed_skipped_in_action_loop(
+        self,
+        mock_paper_engine: MagicMock,
+        noop_port: NoOpExchangePort,
+        sample_snapshot: Snapshot,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """BUG-4 main contract: CANCEL for blacklisted order_id → SKIPPED + CANCEL_ALREADY_FAILED.
+
+        Exercises the action loop branch at engine.py:893-909.
+        Uses paper engine path (planner disabled) so mock actions reach the loop.
+        """
+        # Planner DISABLED so paper engine actions reach the action loop directly.
+        # (With planner enabled, _plan_grid() replaces paper engine output.)
+        monkeypatch.setenv("GRINDER_ACCOUNT_SYNC_ENABLED", "1")
+        config = LiveEngineConfig(armed=True, mode=SafeMode.LIVE_TRADE)
+        engine = LiveEngineV0(mock_paper_engine, noop_port, config)
+
+        # Inject a CANCEL action via paper engine
+        cancel = ExecutionAction(
+            action_type=ActionType.CANCEL,
+            order_id="grinder_d_BTCUSDT_1_1000000_42",
+            symbol="BTCUSDT",
+            reason="GRID_TRIM",
+        )
+        mock_paper_engine.process_snapshot.return_value = MagicMock(actions=[cancel])
+
+        # Pre-populate blacklist with the same order_id
+        engine._cancel_failed_ids.add("grinder_d_BTCUSDT_1_1000000_42")
+
+        output = engine.process_snapshot(sample_snapshot)
+
+        # Find the CANCEL action result
+        cancel_results = [
+            la for la in output.live_actions if la.action.action_type == ActionType.CANCEL
+        ]
+        assert len(cancel_results) == 1, f"Expected 1 CANCEL result, got {len(cancel_results)}"
+        assert cancel_results[0].status == LiveActionStatus.SKIPPED
+        assert cancel_results[0].block_reason == BlockReason.CANCEL_ALREADY_FAILED
