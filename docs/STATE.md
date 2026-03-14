@@ -1365,16 +1365,20 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - **Feature flag:** `GRINDER_LIVE_ROLLING_GRID` (bool, default `False`, safe-by-default). Wired in engine.
   - **V1A (planner):** `_RollingLadderState`, `_build_rolling_grid()`, `_match_orders_by_price()`, `plan(rolling_mode=True)`. Planner-only, 18 tests.
   - **V1B (engine wiring):** `GRINDER_LIVE_ROLLING_GRID` env var gates rolling mode. Engine-owned fill detection (`_prev_rolling_orders`, `_rolling_pending_cancels`). Freeze/replenish/anti-churn bypassed. 17 engine integration tests (35 total).
-  - **V1C (TP slot ownership, ADR-086, INV-9):** Planner-side per-tick reservation prevents TP/grid overlap at same price. Reservation lifecycle: created in `apply_fill_offset()`, consumed in `_build_rolling_grid()`, cleared after `plan()`. Exchange-truth matching is SSOT after fill tick.
+  - **V1C (TP slot ownership, ADR-086, INV-9):** Fill-tick reservation prevents planner from placing grid at TP price on same tick.
+    - **Live verification exposed cross-tick overlap** (run4): TP SELL@70843.30 + grid SELL@70843.40 coexisted 45 sync cycles. Root cause: engine filtered TP orders from planner's `open_orders` (PR-INV-3), so planner couldn't see or match TPs.
+  - **V1D (cross-tick TP slot protection, ADR-086 update, INV-9b):** Two-layer fix:
+    1. **Primary:** TP orders included in planner's `open_orders` (removed `is_tp_order` filter from engine). Planner matches TP to desired level → no grid PLACE at TP price. Planner skips CANCEL/REPLACE for TP orders (managed by cycle layer).
+    2. **Secondary:** Reservation persists across ticks until age-out (`max_reservation_age=50`). Age-only clearance avoids multi-fill false-clear (Contract 2a). Defense-in-depth for REST-lag gap between fill detection and TP visibility.
     - **INV-9 formula:** `desired_grid_count = (N - sell_reservation) + (N - buy_reservation)` on fill ticks.
     - **Slot state model:** `{grid, tp, reserved, vacant}`. Ownership applies only to occupied slots.
     - **Convergence target:** `grid + tp = 2*N` (not absolute runtime invariant — transient deviation expected).
     - **Saturation:** reservation clamps at `min(fill_count, N)` per side. Excess TPs self-heal via TTL.
-    - **Defense-in-depth:** `_filter_tp_grid_overlap()` in engine. Anomaly guard (expected fire count: ZERO). Uses `reduce_only` discriminator. Fail-open when config missing.
-    - 17 slot ownership tests (T21-T37), 61 rolling grid tests total.
+    - **Defense-in-depth:** `_filter_tp_grid_overlap()` in engine. Same-tick anomaly guard (expected fire count: ZERO). Uses `reduce_only` discriminator. Fail-open when config missing.
+    - 22 slot ownership tests (T21-T42), 66 rolling grid tests total.
   - **Fill detection:** Rolling fill = disappeared order with `strategy_id="d"` (grid) AND not in pending cancels. TP (`strategy_id="tp"`) and all non-grid strategies do NOT shift offset. Disappearance heuristic (not trade evidence). Known limitation: exchange-side non-trade cancels of grid orders (ADL, margin) treated as fills. Resets on restart.
   - **Obsoletes in rolling mode:** cycle-layer replenish, TP_FILL_REPLENISH, mid-driven GRID_SHIFT, anti-churn, grid freeze.
-  - **Migration:** spec -> V1A planner -> V1B engine -> V1C slot ownership (this) -> live verification -> cleanup.
+  - **Migration:** spec -> V1A planner -> V1B engine -> V1C slot ownership -> V1D cross-tick fix (this) -> live verification -> cleanup.
 
 - **AccountSync visibility instrumentation** (PR-P0-2):
   - `GRINDER_ACCOUNT_SYNC_DEBUG_OPEN_ORDERS=1` (default 0): one flag enables both raw logging + correlation

@@ -968,8 +968,14 @@ class TestTPSlotOwnership:
         assert len(buy_levels) == 2, f"Expected N-1=2 BUY levels, got {len(buy_levels)}"
         assert len(levels) == 3, f"Expected 2*N-3=3 desired, got {len(levels)}"
 
-    def test_t24_next_tick_reservation_cleared(self) -> None:
-        """T24 (INV-9): Next tick (no fill) → desired = 2*N (reservation cleared)."""
+    def test_t24_reservation_persists_across_ticks(self) -> None:
+        """T24 (INV-9b): Reservation persists until age-out, even with TP visible.
+
+        Primary cross-tick protection is TP inclusion in open_orders
+        (price matching prevents grid PLACE at TP price). Reservation is
+        defense-in-depth for REST lag gap. Age-only clearance avoids
+        false-clear in multi-fill scenarios (Contract 2a).
+        """
         planner = _make_planner(levels=3)
         orders = _build_full_grid_orders(planner)
 
@@ -984,15 +990,24 @@ class TestTPSlotOwnership:
         )
         assert result1.desired_count == 5  # 2*3 - 1
 
-        # Tick 2: no fill → reservation cleared
+        # Tick 2: TP visible but reservation persists (age-only clear)
+        ec = ANCHOR - STEP  # 65934 after BUY fill
+        tp_sell = _make_order("grinder_tp_BTCUSDT_1_1000000_1", SYMBOL, "SELL", str(ec + STEP))
+        orders_with_tp = (*orders, tp_sell)
         result2 = planner.plan(
             symbol=SYMBOL,
             mid_price=ANCHOR,
             ts_ms=2_000_000,
-            open_orders=orders,
+            open_orders=orders_with_tp,
             rolling_mode=True,
         )
-        assert result2.desired_count == 6  # 2*3
+        # Reservation persists (age-only), desired still 5.
+        # TP is extra but NOT cancelled (skip-cancel for TP orders).
+        assert result2.desired_count == 5
+
+        # TP should not be cancelled
+        cancel_ids = [a.order_id for a in result2.actions if a.action_type == ActionType.CANCEL]
+        assert tp_sell.order_id not in cancel_ids, "TP must not be cancelled"
 
     # --- T25-T29: Integration / overlap prevention ---
 
@@ -1296,8 +1311,13 @@ class TestTPSlotOwnership:
         assert len(filtered) == 2  # CANCEL + TP PLACE
 
     def test_t32_tp_expiry_slot_recycled(self) -> None:
-        """T32 (INV-9): TP expiry → slot tp → vacant → grid next tick."""
+        """T32 (INV-9b): TP expiry → slot tp → vacant → grid after age-out.
+
+        Full lifecycle: fill → reservation → TP on exchange → TP expired →
+        reservation ages out → planner fills slot with grid.
+        """
         planner = _make_planner(levels=3)
+        planner._max_reservation_age = 3  # low threshold for test
         planner.init_rolling_state(SYMBOL, ANCHOR, SPACING_BPS)
 
         # After BUY fill, TP placed at SELL:L1 zone
@@ -1314,7 +1334,7 @@ class TestTPSlotOwnership:
         )
         assert result1.desired_count == 5  # 3 BUY + 2 SELL
 
-        # Tick 2: TP on exchange at SELL:L1 price. No new fill.
+        # Tick 2: TP on exchange at SELL:L1 price. Reservation persists (age-only).
         tp_sell = _make_order("grinder_tp_BTCUSDT_1_1000000_1", SYMBOL, "SELL", str(ec + STEP))
         grid_orders = tuple(
             _make_order(
@@ -1338,11 +1358,14 @@ class TestTPSlotOwnership:
             open_orders=exchange_tick2,
             rolling_mode=True,
         )
-        assert result2.desired_count == 6  # full 2*N (reservation cleared)
+        # Reservation persists (age-only). TP is extra but not cancelled.
+        assert result2.desired_count == 5
         places2 = [a for a in result2.actions if a.action_type == ActionType.PLACE]
-        assert len(places2) == 0, "TP matches L1 by price → no new PLACE"
+        assert len(places2) == 0, "No new PLACE needed (reservation withholds L1)"
+        cancel_ids2 = [a.order_id for a in result2.actions if a.action_type == ActionType.CANCEL]
+        assert tp_sell.order_id not in cancel_ids2, "TP must not be cancelled"
 
-        # Tick 3: TP expired (gone). Slot becomes vacant → planner fills.
+        # Tick 3: TP expired (gone). Reservation still active (age 3, not > 3).
         exchange_tick3 = grid_orders  # TP removed
         result3 = planner.plan(
             symbol=SYMBOL,
@@ -1351,9 +1374,20 @@ class TestTPSlotOwnership:
             open_orders=exchange_tick3,
             rolling_mode=True,
         )
+        assert result3.desired_count == 5, "Reservation persists (age=3, not > max=3)"
+
+        # Tick 4: age=4 > max=3 → force clear → planner fills vacant slot
+        result4 = planner.plan(
+            symbol=SYMBOL,
+            mid_price=ANCHOR,
+            ts_ms=4_000_000,
+            open_orders=exchange_tick3,
+            rolling_mode=True,
+        )
+        assert result4.desired_count == 6, "Reservation expired, full grid restored"
         sell_places = [
             a
-            for a in result3.actions
+            for a in result4.actions
             if a.action_type == ActionType.PLACE and a.side == OrderSide.SELL
         ]
         assert len(sell_places) == 1, (
@@ -1379,8 +1413,13 @@ class TestTPSlotOwnership:
         assert len(levels) >= 0, "desired count must never be negative"
 
     def test_t34_tp_place_blocked_self_heal(self) -> None:
-        """T34 (INV-9): TP PLACE blocked → reserved → vacant → grid (self-heal)."""
+        """T34 (INV-9b): TP PLACE blocked → reservation persists → age-out → self-heal.
+
+        With age-only reservation clearance, blocked TP means the slot stays
+        reserved until max_reservation_age. After that, planner fills with grid.
+        """
         planner = _make_planner(levels=3)
+        planner._max_reservation_age = 3  # low threshold for test
         planner.init_rolling_state(SYMBOL, ANCHOR, SPACING_BPS)
 
         # BUY fill → reservation
@@ -1397,25 +1436,33 @@ class TestTPSlotOwnership:
         )
         assert result1.desired_count == 5  # 3 BUY + 2 SELL
 
-        # Tick 2: TP PLACE was blocked → no TP on exchange. No new fill.
-        # Planner sees full desired, SELL:L1 is missing → PLACE it
-        result2 = planner.plan(
+        # Ticks 2-3: TP blocked, not on exchange → reservation persists
+        for i in range(2, 4):
+            r = planner.plan(
+                symbol=SYMBOL,
+                mid_price=ANCHOR,
+                ts_ms=i * 1_000_000,
+                open_orders=(),
+                rolling_mode=True,
+            )
+            assert r.desired_count == 5, f"Tick {i}: reservation should persist"
+
+        # Tick 4: age=4 > max=3 → force clear → self-heal
+        result_heal = planner.plan(
             symbol=SYMBOL,
             mid_price=ANCHOR,
-            ts_ms=2_000_000,
+            ts_ms=4_000_000,
             open_orders=(),
             rolling_mode=True,
         )
-        assert result2.desired_count == 6  # full 2*N
+        assert result_heal.desired_count == 6  # full 2*N
         sell_places = [
             a
-            for a in result2.actions
+            for a in result_heal.actions
             if a.action_type == ActionType.PLACE and a.side == OrderSide.SELL
         ]
-        # Planner tries to PLACE all 3 SELL levels (all missing since open_orders=())
         sell_prices = sorted([a.price for a in sell_places if a.price])
         assert len(sell_prices) == 3, f"Expected 3 SELL PLACEs (self-heal), got {len(sell_prices)}"
-        # Innermost SELL = ec + STEP should be among them
         innermost = ec + STEP
         assert innermost in sell_prices, (
             f"Innermost SELL {innermost} not in PLACEs {sell_prices} (self-heal failed)"
@@ -1571,6 +1618,208 @@ class TestTPSlotOwnership:
         # Should return unchanged (fail-open), no crash
         result = engine._filter_tp_grid_overlap(actions, "BTCUSDT")
         assert len(result) == len(actions), "Fail-open: all actions should pass through"
+
+    # --- T38-T42: Cross-tick overlap protection (INV-9b) ---
+
+    def test_t38_reservation_persists_without_tp_visible(self) -> None:
+        """T38 (INV-9b): Reservation persists when TP not in open_orders (WS/REST lag)."""
+        planner = _make_planner(levels=3)
+        orders = _build_full_grid_orders(planner)
+
+        # BUY fill → reservation active
+        planner.apply_fill_offset(SYMBOL, "BUY")
+
+        # Tick 1: fill tick, desired=5
+        result1 = planner.plan(
+            symbol=SYMBOL,
+            mid_price=ANCHOR,
+            ts_ms=1_000_000,
+            open_orders=orders,
+            rolling_mode=True,
+        )
+        assert result1.desired_count == 5
+
+        # Tick 2: NO TP in open_orders → reservation PERSISTS
+        result2 = planner.plan(
+            symbol=SYMBOL,
+            mid_price=ANCHOR,
+            ts_ms=2_000_000,
+            open_orders=orders,
+            rolling_mode=True,
+        )
+        assert result2.desired_count == 5, (
+            "Reservation must persist when TP not visible in open_orders"
+        )
+
+    def test_t39_reservation_persists_with_tp_visible(self) -> None:
+        """T39 (INV-9b): Reservation persists even with TP visible (age-only clearance).
+
+        Primary cross-tick protection is TP inclusion in open_orders.
+        Reservation is secondary defense. TP visibility does NOT clear
+        reservation (avoids multi-fill false-clear, Contract 2a).
+        The TP is extra but not cancelled (skip-cancel for TPs).
+        """
+        planner = _make_planner(levels=3)
+        orders = _build_full_grid_orders(planner)
+
+        planner.apply_fill_offset(SYMBOL, "BUY")
+
+        # Tick 1: fill tick
+        planner.plan(
+            symbol=SYMBOL,
+            mid_price=ANCHOR,
+            ts_ms=1_000_000,
+            open_orders=orders,
+            rolling_mode=True,
+        )
+
+        # Tick 2: TP visible → reservation still persists (age-only)
+        ec = ANCHOR - STEP
+        tp_sell = _make_order("grinder_tp_BTCUSDT_1_1000000_1", SYMBOL, "SELL", str(ec + STEP))
+        result2 = planner.plan(
+            symbol=SYMBOL,
+            mid_price=ANCHOR,
+            ts_ms=2_000_000,
+            open_orders=(*orders, tp_sell),
+            rolling_mode=True,
+        )
+        assert result2.desired_count == 5, (
+            "Reservation must persist even with TP visible (age-only clear)"
+        )
+
+        # TP must NOT be cancelled
+        cancel_ids = [a.order_id for a in result2.actions if a.action_type == ActionType.CANCEL]
+        assert tp_sell.order_id not in cancel_ids, "TP must not be cancelled"
+
+    def test_t40_reservation_force_clears_on_age(self) -> None:
+        """T40 (INV-9b): Reservation force-clears after max_reservation_age (failed TP)."""
+        planner = _make_planner(levels=3)
+        planner._max_reservation_age = 5  # low threshold for test
+        orders = _build_full_grid_orders(planner)
+
+        planner.apply_fill_offset(SYMBOL, "BUY")
+
+        # Tick 1: fill tick
+        planner.plan(
+            symbol=SYMBOL,
+            mid_price=ANCHOR,
+            ts_ms=1_000_000,
+            open_orders=orders,
+            rolling_mode=True,
+        )
+
+        # Ticks 2-5: no TP → reservation persists (age 2..5, all <= max)
+        for i in range(2, 6):
+            r = planner.plan(
+                symbol=SYMBOL,
+                mid_price=ANCHOR,
+                ts_ms=i * 1_000_000,
+                open_orders=orders,
+                rolling_mode=True,
+            )
+            assert r.desired_count == 5, f"Tick {i}: reservation should persist"
+
+        # Tick 6: age=6 > max_reservation_age=5 → force clear before build
+        result_after = planner.plan(
+            symbol=SYMBOL,
+            mid_price=ANCHOR,
+            ts_ms=6_000_000,
+            open_orders=orders,
+            rolling_mode=True,
+        )
+        assert result_after.desired_count == 6, "Reservation should force-clear after max age"
+
+    def test_t41_cross_tick_tp_prevents_grid_place(self) -> None:
+        """T41 (INV-9b): TP on exchange from previous tick prevents grid PLACE at same price.
+
+        Reproduces the failure class from live run4: BUY fill → TP SELL placed →
+        subsequent tick planner sees TP in open_orders → TP matches desired SELL
+        level → no redundant grid SELL PLACE.
+
+        Standard constants: ANCHOR=66000, STEP=66, N=1.
+        After BUY fill: offset=-1, ec=65934.
+        Desired SELL:L1 = ec + STEP = 66000.
+        TP SELL at 66000 → matches desired → no grid SELL PLACE.
+        """
+        planner = _make_planner(levels=1)
+        planner.init_rolling_state(SYMBOL, ANCHOR, SPACING_BPS)
+
+        # BUY fill: offset=-1, ec = 66000 - 66 = 65934
+        planner.apply_fill_offset(SYMBOL, "BUY")
+        rs = planner.get_rolling_state(SYMBOL)
+        assert rs is not None
+        assert rs.net_offset == -1
+        ec = ANCHOR + rs.net_offset * STEP  # 65934
+
+        # TP SELL at desired SELL:L1 price = ec + STEP = 66000
+        tp_price = ec + STEP  # 66000
+        tp_sell = _make_order(
+            "grinder_tp_BTCUSDT_1_2000000_1",
+            SYMBOL,
+            "SELL",
+            str(tp_price),
+        )
+
+        # Grid BUY already on exchange at BUY:L1 = ec - STEP = 65868
+        buy_price = ec - STEP  # 65868
+        grid_buy = _make_order(
+            "grinder_d_BTCUSDT_1_2000000_2",
+            SYMBOL,
+            "BUY",
+            str(buy_price),
+        )
+
+        # Tick N+1: reservation still active (TP visible clears SELL res),
+        # TP in open_orders → matches desired SELL:L1
+        result = planner.plan(
+            symbol=SYMBOL,
+            mid_price=ANCHOR,
+            ts_ms=3_000_000,
+            open_orders=(tp_sell, grid_buy),
+            rolling_mode=True,
+        )
+
+        # TP matches desired SELL → no grid SELL PLACE
+        sell_places = [
+            a
+            for a in result.actions
+            if a.action_type == ActionType.PLACE and a.side == OrderSide.SELL
+        ]
+        assert len(sell_places) == 0, (
+            f"No grid SELL should be placed when TP occupies the slot: {sell_places}"
+        )
+
+        # TP should NOT be cancelled (managed by cycle layer)
+        tp_cancels = [
+            a
+            for a in result.actions
+            if a.action_type == ActionType.CANCEL and a.order_id == tp_sell.order_id
+        ]
+        assert len(tp_cancels) == 0, "Planner must not cancel TP orders"
+
+    def test_t42_tp_extra_not_cancelled(self) -> None:
+        """T42 (INV-9b): TP at non-matching price is extra but NOT cancelled by planner."""
+        planner = _make_planner(levels=3)
+        planner.init_rolling_state(SYMBOL, ANCHOR, SPACING_BPS)
+
+        # TP at a price that doesn't match any desired level
+        tp_far = _make_order("grinder_tp_BTCUSDT_1_1000000_1", SYMBOL, "SELL", "67000")
+        grid_orders = _build_full_grid_orders(planner)
+        all_orders = (*grid_orders, tp_far)
+
+        result = planner.plan(
+            symbol=SYMBOL,
+            mid_price=ANCHOR,
+            ts_ms=1_000_000,
+            open_orders=all_orders,
+            rolling_mode=True,
+        )
+
+        # TP is extra (doesn't match desired) but must NOT be cancelled
+        cancel_ids = [a.order_id for a in result.actions if a.action_type == ActionType.CANCEL]
+        assert tp_far.order_id not in cancel_ids, (
+            "Planner must not cancel TP orders even when extra"
+        )
 
 
 class TestRollingGridEngineIntegrationExtra(TestRollingGridEngineIntegration):

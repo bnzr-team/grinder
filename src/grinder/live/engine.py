@@ -1228,13 +1228,11 @@ class LiveEngineV0:
             return GridPlanResult()
 
         # Filter open orders for this symbol only.
-        # PR-INV-3: Exclude TP orders from planner diff (managed by cycle layer).
-        # TP orders (grinder_tp_...) parse as valid grinder orders and would be
-        # matched/cancelled by the planner without this filter.
+        # INV-9b: TP orders are now INCLUDED so the planner can match them
+        # to desired levels (prevents cross-tick grid/TP overlap). The planner
+        # skips CANCEL/REPLACE for TP orders (managed by cycle layer).
         open_orders = tuple(
-            o
-            for o in self._last_account_snapshot.open_orders
-            if o.symbol == snapshot.symbol and not is_tp_order(o.order_id)
+            o for o in self._last_account_snapshot.open_orders if o.symbol == snapshot.symbol
         )
 
         # Extract NATR from FeatureEngine (PR-L0)

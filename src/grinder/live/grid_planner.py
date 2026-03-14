@@ -27,7 +27,7 @@ from grinder.controller.regime import Regime
 from grinder.core import OrderSide
 from grinder.execution.types import ActionType, ExecutionAction
 from grinder.policies.grid.adaptive import AdaptiveGridConfig, compute_step_bps
-from grinder.reconcile.identity import DEFAULT_PREFIX, parse_client_order_id
+from grinder.reconcile.identity import DEFAULT_PREFIX, is_tp_order, parse_client_order_id
 
 if TYPE_CHECKING:
     from grinder.account.contracts import OpenOrderSnap
@@ -149,9 +149,12 @@ class LiveGridPlannerV1:
         self._last_plan_ts_ms: dict[str, int] = {}
         # Rolling ladder state: per-symbol (doc-26, PR-ROLLING-GRID-V1A)
         self._rolling_state: dict[str, _RollingLadderState] = {}
-        # INV-9: per-tick TP slot reservations (planner-local, one-tick only).
-        # symbol -> {"BUY": count, "SELL": count}. Cleared after plan().
+        # INV-9: TP slot reservations (planner-local).
+        # symbol -> {"BUY": count, "SELL": count, "age": int}.
+        # Created on fill tick, cleared when TP visible in open_orders or
+        # after MAX_RESERVATION_AGE plan() calls (INV-9b, cross-tick).
         self._tp_slot_reservations: dict[str, dict[str, int]] = {}
+        self._max_reservation_age: int = 50  # plan() calls before force-clear
 
     def init_rolling_state(self, symbol: str, anchor_price: Decimal, spacing_bps: float) -> None:
         """Initialize rolling ladder state for symbol (doc-26 SS 4.1).
@@ -174,8 +177,10 @@ class LiveGridPlannerV1:
         No-op if rolling state not initialized for symbol.
 
         INV-9: also reserves a slot on the opposite side for the TP order
-        that cycle layer will generate. Reservation is planner-local and
-        lives exactly one tick (cleared after plan() returns).
+        that cycle layer will generate. Reservation is planner-local.
+        INV-9b: reservation persists until TP is visible in open_orders
+        (cross-tick protection against WS/REST propagation lag), or until
+        max_reservation_age is exceeded (handles failed TP placements).
         """
         st = self._rolling_state.get(symbol)
         if st is None:
@@ -187,8 +192,33 @@ class LiveGridPlannerV1:
             st.net_offset += 1
             tp_side = "BUY"
         # INV-9: reserve slot for TP on opposite side
-        res = self._tp_slot_reservations.setdefault(symbol, {"BUY": 0, "SELL": 0})
+        res = self._tp_slot_reservations.setdefault(symbol, {"BUY": 0, "SELL": 0, "age": 0})
         res[tp_side] += 1
+        res["age"] = 0  # reset age on new fill
+
+    def _clear_reservation_if_ready(self, symbol: str) -> None:
+        """INV-9b: clear TP reservation on age timeout only.
+
+        Reservation persists across ticks until age exceeds
+        max_reservation_age (TP failed/rejected or REST lag resolved).
+
+        Primary cross-tick protection is TP inclusion in open_orders
+        (price matching). Reservation is defense-in-depth for the gap
+        between fill detection and TP visibility in REST snapshot.
+
+        Age-only policy avoids false-clear when existing TP from a prior
+        fill is visible but new reservation is for a different slot
+        (multi-fill case, Contract 2a). See ADR-086.
+        """
+        res = self._tp_slot_reservations.get(symbol)
+        if res is None:
+            return
+
+        res["age"] = res.get("age", 0) + 1
+
+        # Force-clear on age timeout (handles failed TP placements)
+        if res["age"] > self._max_reservation_age:
+            self._tp_slot_reservations.pop(symbol, None)
 
     def get_rolling_state(self, symbol: str) -> _RollingLadderState | None:
         """Read-only access to current rolling state (for tests/logging)."""
@@ -244,10 +274,11 @@ class LiveGridPlannerV1:
             # Rolling mode (doc-26): auto-init state on first tick
             if symbol not in self._rolling_state:
                 self.init_rolling_state(symbol, mid_price, effective_spacing_bps)
+            # INV-9b: clear reservation when TP visible or aged out.
+            # Must run BEFORE _build_rolling_grid so that once TP is on exchange,
+            # the slot is occupied via price-matching (not reservation skip).
+            self._clear_reservation_if_ready(symbol)
             desired = self._build_rolling_grid(symbol)
-            # INV-9: clear per-tick TP reservations after use.
-            # Subsequent ownership determined by exchange-truth matching.
-            self._tp_slot_reservations.pop(symbol, None)
             diff = self._match_orders_by_price(open_orders, desired, mid_price)
             # No hysteresis in rolling mode — grid doesn't track mid_price
         else:
@@ -405,8 +436,10 @@ class LiveGridPlannerV1:
                 )
             )
 
-        # Extra → CANCEL
+        # Extra → CANCEL (skip TP orders — managed by cycle layer, INV-9b)
         for order in diff.extra_orders:
+            if is_tp_order(order.order_id):
+                continue
             actions.append(
                 ExecutionAction(
                     action_type=ActionType.CANCEL,
@@ -416,8 +449,10 @@ class LiveGridPlannerV1:
                 )
             )
 
-        # Mismatch → CANCEL + PLACE
+        # Mismatch → CANCEL + PLACE (skip TP orders, INV-9b)
         for order, desired_level in diff.mismatch_orders:
+            if is_tp_order(order.order_id):
+                continue
             price_diff = float(abs(order.price - desired_level.price) / mid_price) * 10000
             reason = "GRID_SHIFT" if price_diff > cfg.price_epsilon_bps else "GRID_RESIZE"
             actions.append(

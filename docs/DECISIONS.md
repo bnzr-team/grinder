@@ -4187,26 +4187,29 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
 ## ADR-086: TP/Grid Slot Ownership — INV-9 (PR-INV-9)
 
 - **Date:** 2026-03-13
-- **Status:** accepted
+- **Status:** accepted (updated 2026-03-14: INV-9b cross-tick fix)
 - **Context:** Live rolling mode verification exposed a contract breach: after a BUY fill at 67768.30, both a TP SELL at 67836.00 and a grid SELL at 67836.20 coexisted on exchange. Root cause: one-tick race between planner (step 2 in tick pipeline) and cycle layer (step 3). Planner builds grid levels BEFORE cycle layer generates TP, so planner places a grid SELL at approximately the same price where cycle layer will place TP SELL. TP_SLOT_TAKEOVER removes the farthest SELL, but planner independently placed a new inner SELL into the TP zone on the same tick.
-- **Decision:** Planner-side per-tick TP slot reservation with exchange-truth SSOT afterwards:
-  1. **Reservation is planner-local.** Stored in `LiveGridPlannerV1._tp_slot_reservations`. Not shared with cycle layer or engine.
-  2. **Reservation lives exactly one tick.** Created in `apply_fill_offset()`, consumed in `_build_rolling_grid()`, cleared after `plan()` returns.
-  3. **Subsequent ownership SSOT = exchange-truth matching.** After the fill tick, slot ownership is determined solely by which exchange orders match desired levels by price in `_match_orders_by_price()`.
-  4. **Reservation does not create TP.** It only withholds grid placement. TP generation is cycle layer's responsibility.
+- **INV-9 (V1C) fixed fill-tick overlap only.** Cross-tick overlap exposed by live run4: TP SELL@70843.30 + grid SELL@70843.40 coexisted 45 sync cycles. Root cause: engine filtered TP orders from planner's `open_orders` (PR-INV-3 `not is_tp_order` filter), so planner could never see or match TPs to desired levels, placing grid orders at TP prices on subsequent ticks.
+- **Decision (INV-9b, V1D):** Two-layer cross-tick slot protection:
+  1. **Primary: TP inclusion in planner's open_orders.** Engine passes all grinder orders (including TP) to planner. Planner's `_match_orders_by_price()` matches TP to desired level by price → no grid PLACE at TP price. Planner skips CANCEL/REPLACE for TP orders (`is_tp_order` check in `_generate_actions`); TP lifecycle managed by cycle layer.
+  2. **Secondary: Persistent reservation with age-only clearance.** Reservation created in `apply_fill_offset()`, consumed in `_build_rolling_grid()`. Persists across ticks until `max_reservation_age` (default 50 plan() calls). Age-only clearance avoids multi-fill false-clear when existing TP from prior fill triggers premature clearing of new reservation (Contract 2a).
+  3. **Reservation does not create TP.** It only withholds grid placement. TP generation is cycle layer's responsibility.
 - **Invariant INV-9 (TP Slot Exclusion):** `desired_grid_count = (N - sell_reservation) + (N - buy_reservation)` on fill ticks. Steady tick: `2 * N`.
 - **Slot state model:** `{grid, tp, reserved, vacant}`. Ownership applies only to occupied slots (`grid` or `tp`). `reserved` and `vacant` are transient non-ownership states.
 - **Convergence target:** `steady_state_open_count_target = 2 * N` (grid + tp). This is a convergence target, NOT an absolute runtime invariant. Transient deviation within one reconciliation cycle is expected.
 - **Saturation policy (fill_count > N same side):** Reservation clamps at `min(fill_count, N)` per side. Cycle layer generates one TP per fill regardless. Excess TPs self-heal via TP TTL. Known limitation, same category as ADR-085 exchange-side non-trade cancels.
-- **Defense-in-depth:** `_filter_tp_grid_overlap()` in engine.py. Anomaly guard, expected fire count ZERO. Uses `reduce_only` as structural discriminator (TP=True, grid=False). Fail-open when planner config unavailable. Firing in production = bug evidence.
+- **Defense-in-depth:** `_filter_tp_grid_overlap()` in engine.py. Same-tick anomaly guard, expected fire count ZERO. Uses `reduce_only` as structural discriminator (TP=True, grid=False). Fail-open when planner config unavailable. Firing in production = bug evidence. Does NOT protect cross-tick overlap (that's handled by TP inclusion + persistent reservation).
 - **Consequences:**
   - INV-5 updated: fill generates 1 CANCEL + 1 grid PLACE (inner SELL/BUY reserved for TP). Was 1 CANCEL + 2 PLACE.
   - T28 (applied_grid + applied_tp = 2*N) is a post-action application model invariant for unit tests only, NOT a live exchange guarantee.
   - Overlap guard suppression preserves cardinality (grid -1 + TP +1 = same total). Self-heals if TP fails.
-  - TP orders included in planner price matching (existing behavior, unchanged). `grinder_tp_*` parses as `prefix="grinder_"`, matches `startswith("grinder")`.
+  - TP orders included in planner matching (INV-9b, engine change). `grinder_tp_*` parses as `prefix="grinder_"`, matches `startswith("grinder")`. Previously excluded by engine filter (PR-INV-3); now included.
+  - Planner skips CANCEL/REPLACE for TP orders in `_generate_actions()` (`is_tp_order` guard on extra_orders and mismatch_orders). TP lifecycle remains cycle-layer-owned.
   - Tie-break for slot matching within epsilon: closest `price_diff_bps` wins; on exact tie, first in exchange snapshot iteration order wins.
+  - Reservation age-out (max_reservation_age) is defense for REST-lag gap. After age-out, slot returns to grid. If TP appears after age-out, it matches desired level via primary mechanism.
 - **Alternatives considered:**
   - Unified allocator: adds cross-layer coupling, single point of failure.
   - Cycle layer owns all slots: contradicts planner-as-SSOT for grid levels.
   - Post-merge dedup only: doesn't prevent the planner from generating the conflicting PLACE in the first place.
+  - TP-visibility reservation clearing: clears reservation when TP visible in open_orders. Rejected: false-clears in multi-fill case (existing TP from prior fill triggers clearing of new reservation for different slot, Contract 2a).
 - **SSOT:** `docs/26_ROLLING_INFINITE_GRID_SPEC.md` section INV-9
