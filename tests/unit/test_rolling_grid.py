@@ -1821,6 +1821,43 @@ class TestTPSlotOwnership:
             "Planner must not cancel TP orders even when extra"
         )
 
+    def test_t43_tp_extra_does_not_inflate_convergence_extras(self) -> None:
+        """T43 (INV-9b): diff_extra_tp correctly counts TP extras.
+
+        After SELL fill with N=1: cycle layer cancels remaining BUY grid
+        order (TP_SLOT_TAKEOVER) and places TP BUY. Exchange has only TP BUY.
+        Planner desired=1 (SELL only, BUY reserved). TP BUY is extra but
+        diff_extra_tp must equal TP count so convergence is not blocked.
+        """
+        planner = _make_planner(levels=1)
+        planner.init_rolling_state(SYMBOL, ANCHOR, SPACING_BPS)
+
+        # Simulate SELL fill → buy_reservation=1 → desired=1 (SELL only)
+        planner.apply_fill_offset(SYMBOL, "SELL")
+
+        # After fill + TP_SLOT_TAKEOVER: only TP BUY on exchange
+        tp_buy = _make_order("grinder_tp_BTCUSDT_1_1000000_1", SYMBOL, "BUY", "66000")
+
+        result = planner.plan(
+            symbol=SYMBOL,
+            mid_price=ANCHOR,
+            ts_ms=1_000_000,
+            open_orders=(tp_buy,),
+            rolling_mode=True,
+        )
+
+        # desired=1 (SELL only). TP BUY doesn't match → extra.
+        assert result.diff_extra == 1, f"Expected 1 extra, got {result.diff_extra}"
+        assert result.diff_extra_tp == 1, (
+            f"TP extra must be counted: diff_extra_tp={result.diff_extra_tp}"
+        )
+        # Non-TP extras = 0 → convergence guard should NOT block
+        non_tp_extras = result.diff_extra - result.diff_extra_tp
+        assert non_tp_extras == 0, (
+            f"No grid extras expected: diff_extra={result.diff_extra} "
+            f"diff_extra_tp={result.diff_extra_tp}"
+        )
+
 
 class TestRollingGridEngineIntegrationExtra(TestRollingGridEngineIntegration):
     """Continuation of engine integration tests (inherited helpers)."""

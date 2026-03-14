@@ -80,6 +80,7 @@ class GridPlanResult:
         actual_count: Number of matched exchange orders.
         diff_missing: Desired but not on exchange.
         diff_extra: On exchange but not in desired.
+        diff_extra_tp: TP orders in extra (not cancelled, INV-9b).
         diff_mismatch: Matched but price/qty differs.
         effective_spacing_bps: Actual spacing used.
         natr_fallback: True if NATR unavailable, using static.
@@ -90,6 +91,7 @@ class GridPlanResult:
     actual_count: int = 0
     diff_missing: int = 0
     diff_extra: int = 0
+    diff_extra_tp: int = 0
     diff_mismatch: int = 0
     effective_spacing_bps: float = 0.0
     natr_fallback: bool = False
@@ -305,12 +307,14 @@ class LiveGridPlannerV1:
             self._last_plan_center[symbol] = mid_price
             self._last_plan_ts_ms[symbol] = ts_ms
 
+        tp_extra = sum(1 for o in diff.extra_orders if is_tp_order(o.order_id))
         return GridPlanResult(
             actions=actions,
             desired_count=len(desired),
             actual_count=len(diff.matched_keys) - len(diff.mismatch_orders),
             diff_missing=len(diff.missing_keys),
             diff_extra=len(diff.extra_orders),
+            diff_extra_tp=tp_extra,
             diff_mismatch=len(diff.mismatch_orders),
             effective_spacing_bps=effective_spacing_bps,
             natr_fallback=natr_fallback,

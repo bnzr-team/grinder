@@ -1266,12 +1266,13 @@ class LiveEngineV0:
             log_fn = logger.warning if self._debug_open_orders else logger.info
             log_fn(
                 "PLANNER_ACTIONS_SUMMARY %s: desired=%d actual=%d missing=%d extra=%d "
-                "mismatch=%d spacing=%.1f bps natr_fallback=%s actions=%d mid=%.2f",
+                "extra_tp=%d mismatch=%d spacing=%.1f bps natr_fallback=%s actions=%d mid=%.2f",
                 snapshot.symbol,
                 plan_result.desired_count,
                 plan_result.actual_count,
                 plan_result.diff_missing,
                 plan_result.diff_extra,
+                plan_result.diff_extra_tp,
                 plan_result.diff_mismatch,
                 plan_result.effective_spacing_bps,
                 plan_result.natr_fallback,
@@ -1785,19 +1786,25 @@ class LiveEngineV0:
                     inflight.sync_gen,
                 )
                 return []
-            elif plan_result.diff_extra == 0:
-                # Converged: extras=0 after fresh sync → clear latch
+            elif plan_result.diff_extra == 0 or (
+                plan_result.diff_extra > 0 and plan_result.diff_extra == plan_result.diff_extra_tp
+            ):
+                # Converged: no non-TP extras after fresh sync → clear latch.
+                # TP extras are intentional (INV-9b) and do not block convergence.
                 self._inflight_shift.pop(symbol, None)
-            # else: sync refreshed but extras > 0 → fall through to Guard 2
+            # else: sync refreshed but non-TP extras > 0 → fall through to Guard 2
 
         # Guard 2: Cancel-first on extras (no inflight, latch just cleared, or post-timeout)
-        if plan_result.diff_extra > 0:
+        # INV-9b: TP extras are intentional (not cancelled) — only grid extras block.
+        non_tp_extras = plan_result.diff_extra - plan_result.diff_extra_tp
+        if non_tp_extras > 0:
             filtered = [a for a in actions if a.action_type == ActionType.CANCEL]
             logger.warning(
                 "PLACEMENT_DEFERRED reason=ACCOUNT_SYNC_NOT_CONVERGED "
-                "symbol=%s extras=%d open=%d desired=%d",
+                "symbol=%s extras=%d tp_extras=%d open=%d desired=%d",
                 symbol,
                 plan_result.diff_extra,
+                plan_result.diff_extra_tp,
                 plan_result.actual_count,
                 plan_result.desired_count,
             )
