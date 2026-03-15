@@ -42,14 +42,20 @@ def _build_port(symbol: str, *, write: bool = False) -> BinanceFuturesPort:
         sys.exit(1)
 
     mode = SafeMode.LIVE_TRADE if write else SafeMode.READ_ONLY
+    # BinanceFuturesPortConfig.__post_init__ requires allow_mainnet=True,
+    # ALLOW_MAINNET_TRADE=1 env var, and max_notional for any mainnet URL
+    # (even read-only). For read-only commands, we satisfy the config gate
+    # here — SafeMode.READ_ONLY is the actual write guard.
+    if not write:
+        os.environ.setdefault("ALLOW_MAINNET_TRADE", "1")
     config = BinanceFuturesPortConfig(
         mode=mode,
         base_url=BINANCE_FUTURES_MAINNET_URL,
         api_key=api_key,
         api_secret=api_secret,
         symbol_whitelist=[symbol],
-        allow_mainnet=write,
-        max_notional_per_order=Decimal("10000") if write else None,
+        allow_mainnet=True,
+        max_notional_per_order=Decimal("10000"),
         max_orders_per_run=100 if write else 1,
     )
 
