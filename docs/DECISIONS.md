@@ -4257,3 +4257,22 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
   - Saturation edge case (fills > N same side): reservation clamps at `min(fill_count, N)`, excess TPs self-heal via TTL (unchanged from ADR-086).
   - 19 tests (T44-T62): anchor=raw_mid, symmetry, stability, same-tick reset, inflight guard, orders guard, fill+cleanup+reanchor, position_open blocked, prev_orders cleared, pending_cancels cleared, mixed-symbol isolation, throttle behavior, pending_cancels→expiry→reset, position_unknown, stale inflight clearance (T59), stale-vs-fresh boundary (T60/T61), initial placement safety (T62).
   - **INV-10 follow-up (stranded inflight fix):** Live verification exposed that `_apply_convergence_guards()` returned early on `actions=[]` without clearing stale `_inflight_shift` latch, making ANCHOR_RESET unreachable in steady state. Fix: (a) clear stale inflight on empty-actions path when `account_sync_generation > inflight.sync_gen`; (b) ANCHOR_RESET condition uses staleness check (`account_sync_generation <= inflight.sync_gen`) instead of presence check (`symbol not in _inflight_shift`). Part A safety invariant: `_apply_convergence_guards()` is only called from the live planner path (engine.py line 806), not the `budget_dead`/`grid_frozen` path — `actions=[]` genuinely means "planner found no diff", not suppression.
+
+## ADR-089: Operational Hardening for Rolling Live Path
+
+- **Context:** Live verification of INV-10 exposed operational gaps: (1) `run_trading.py` had no logging config — Python defaulted to WARNING, making all INFO/DEBUG engine logs invisible without an external wrapper; (2) key rolling-path state transitions had no explicit log events; (3) no canonical ceremony/runbook for rolling live verification.
+- **Decision:**
+  - **Native logging:** `run_trading.py` calls `logging.basicConfig(level=GRINDER_LOG_LEVEL, force=True)` early in `main()`, before engine/connector construction. `GRINDER_LOG_LEVEL` env var (already documented in DEV.md, .env.example, docker-compose.yml) is now wired. Default: `INFO`. Invalid value: falls back to `INFO` with print warning. Ownership: `run_trading.py` is the canonical process entrypoint and owns root logger setup; library modules use `getLogger(__name__)` and inherit. `force=True` overrides any `lastResort` handler from library imports.
+  - **New log events (observability only, no behavioral changes):**
+    - `ROLLING_STEADY_STATE symbol=X tick=N desired=D actual=A` — DEBUG, emitted in `_plan_grid()` when rolling mode produces 0 actions. Throttled: 1 per 100 zero-action ticks per symbol. Counter resets when actions resume.
+    - `INFLIGHT_STALE_CLEARED symbol=X sync_gen=N inflight_gen=M` — INFO, emitted in `_apply_convergence_guards()` when stale inflight latch is cleared on empty-actions path.
+    - `CANCEL_SKIP_ALREADY_FAILED symbol=X order_id=Y` — DEBUG, emitted in `process_snapshot()` when a CANCEL is skipped because the order_id is in `_cancel_failed_ids` blacklist.
+    - **Coverage:** All three events are unit-test-proven (18 tests: positive + negative + boundary). They require the real live planner path (account sync, exchange orders, -2011 errors) and are not reachable in fixture mode. Intended for live forensics.
+  - **Cleanup contract:** `scripts/exchange_state.py` — canonical operator tool for pre-flight check, cleanup (cancel all + close position), and verify (assert 0 orders + flat, exit 1 if dirty). Documented in `docs/runbooks/34_ROLLING_LIVE_VERIFICATION.md`.
+  - **Runbook:** `docs/runbooks/34_ROLLING_LIVE_VERIFICATION.md` — 6 sections: pre-flight (exchange_state check/verify), launch (canonical command), evidence grep pack, blocked states, cleanup (exchange_state cleanup), acceptance criteria.
+- **Consequences:**
+  - External logging wrapper (`/tmp/run_live_with_logging.py`) is no longer needed. `python3 -m scripts.run_trading` is the canonical launch path.
+  - All INFO-level engine logs are visible by default. DEBUG logs require `GRINDER_LOG_LEVEL=DEBUG`.
+  - No behavioral changes: new log events are purely observational. No new metrics. No policy changes.
+  - No replay/determinism impact: log events do not affect engine state or action generation.
+  - `force=True` in `logging.basicConfig()` is safe: `run_trading.py` is always the top-level process owner. Library modules use `getLogger(__name__)` and inherit. The only effect is that INFO (previously invisible under Python default WARNING) is now visible.

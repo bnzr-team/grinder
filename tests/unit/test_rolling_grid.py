@@ -2931,3 +2931,289 @@ class TestAnchorContract(TestRollingGridEngineIntegration):
         rs = planner.get_rolling_state("BTCUSDT")
         assert rs is not None
         assert rs.anchor_price == old_anchor, "Anchor must not change before first sync refresh"
+
+
+class TestADR089LogEvents(TestRollingGridEngineIntegration):
+    """ADR-089: log event emission tests for operational observability."""
+
+    def _converged_grid(self, engine: LiveEngineV0) -> tuple[OpenOrderSnap, ...]:
+        """Build full 4-order grid matching planner expectations (levels=2 x 2 sides).
+
+        Requires rolling state already initialized (run one tick with empty orders first).
+        Uses anchor_price and step_price from rolling state for exact price match.
+        """
+        planner = engine._grid_planners["BTCUSDT"]  # type: ignore[index]
+        rs = planner.get_rolling_state("BTCUSDT")
+        assert rs is not None, "Rolling state must be initialized before calling _converged_grid"
+        anchor = rs.anchor_price
+        step = rs.step_price
+        return (
+            self._grid_order(0, "BUY", str(anchor - step)),
+            self._grid_order(1, "BUY", str(anchor - 2 * step)),
+            self._grid_order(2, "SELL", str(anchor + step)),
+            self._grid_order(3, "SELL", str(anchor + 2 * step)),
+        )
+
+    # --- ROLLING_STEADY_STATE ---
+
+    def test_steady_state_emitted_on_tick_1(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """ROLLING_STEADY_STATE emitted at DEBUG on first zero-action tick."""
+        engine = self._make_engine(monkeypatch, rolling=True)
+
+        # Tick 1: empty exchange → rolling init + PLACEs (establishes rolling state)
+        engine._last_account_snapshot = self._account_snap(orders=(), pos_qty="0")
+        engine.process_snapshot(self._snap(ts=1_000_000))
+
+        # Build full converged grid from rolling state
+        grid = self._converged_grid(engine)
+        engine._last_account_snapshot = self._account_snap(orders=grid, pos_qty="0")
+        engine._account_sync_generation = 5
+
+        caplog.clear()
+
+        # Tick 2: converged grid → actions=[] → ROLLING_STEADY_STATE tick=1
+        with caplog.at_level(logging.DEBUG, logger="grinder.live.engine"):
+            engine.process_snapshot(self._snap(ts=2_000_000))
+
+        ss_msgs = [r.message for r in caplog.records if "ROLLING_STEADY_STATE" in r.message]
+        assert len(ss_msgs) == 1, f"Expected 1 ROLLING_STEADY_STATE, got {len(ss_msgs)}: {ss_msgs}"
+        assert "tick=1" in ss_msgs[0]
+
+    def test_steady_state_throttled_ticks_2_through_100(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """ROLLING_STEADY_STATE NOT emitted on ticks 2-100 (throttled)."""
+        engine = self._make_engine(monkeypatch, rolling=True)
+
+        # Init rolling state
+        engine._last_account_snapshot = self._account_snap(orders=(), pos_qty="0")
+        engine.process_snapshot(self._snap(ts=1_000_000))
+
+        grid = self._converged_grid(engine)
+        engine._last_account_snapshot = self._account_snap(orders=grid, pos_qty="0")
+        engine._account_sync_generation = 5
+
+        # Tick 2 (steady-state tick=1): emits
+        engine.process_snapshot(self._snap(ts=2_000_000))
+
+        caplog.clear()
+
+        # Ticks 3-101 (steady-state ticks 2-100): should NOT emit
+        with caplog.at_level(logging.DEBUG, logger="grinder.live.engine"):
+            for i in range(99):
+                engine.process_snapshot(self._snap(ts=2_001_000 + i * 1000))
+
+        ss_msgs = [r.message for r in caplog.records if "ROLLING_STEADY_STATE" in r.message]
+        assert len(ss_msgs) == 0, f"Ticks 2-100 must NOT emit ROLLING_STEADY_STATE: {ss_msgs}"
+
+    def test_steady_state_emitted_on_tick_101(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """ROLLING_STEADY_STATE emitted again on tick 101 (count % 100 == 1)."""
+        engine = self._make_engine(monkeypatch, rolling=True)
+
+        # Init rolling state
+        engine._last_account_snapshot = self._account_snap(orders=(), pos_qty="0")
+        engine.process_snapshot(self._snap(ts=1_000_000))
+
+        grid = self._converged_grid(engine)
+        engine._last_account_snapshot = self._account_snap(orders=grid, pos_qty="0")
+        engine._account_sync_generation = 5
+
+        # Run 100 zero-action ticks (tick 1 emits, 2-100 silent)
+        for i in range(100):
+            engine.process_snapshot(self._snap(ts=2_000_000 + i * 1000))
+
+        caplog.clear()
+
+        # Tick 101: should emit
+        with caplog.at_level(logging.DEBUG, logger="grinder.live.engine"):
+            engine.process_snapshot(self._snap(ts=2_100_000))
+
+        ss_msgs = [r.message for r in caplog.records if "ROLLING_STEADY_STATE" in r.message]
+        assert len(ss_msgs) == 1, f"Tick 101 must emit ROLLING_STEADY_STATE: {ss_msgs}"
+        assert "tick=101" in ss_msgs[0]
+
+    def test_steady_state_counter_resets_on_actions(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Counter resets when planner produces actions, so next zero-action tick=1."""
+        engine = self._make_engine(monkeypatch, rolling=True)
+
+        # Init rolling state
+        engine._last_account_snapshot = self._account_snap(orders=(), pos_qty="0")
+        engine.process_snapshot(self._snap(ts=1_000_000))
+
+        grid = self._converged_grid(engine)
+        engine._last_account_snapshot = self._account_snap(orders=grid, pos_qty="0")
+        engine._account_sync_generation = 5
+
+        # Run 50 zero-action ticks
+        for i in range(50):
+            engine.process_snapshot(self._snap(ts=2_000_000 + i * 1000))
+
+        assert engine._rolling_steady_state_count.get("BTCUSDT", 0) == 50
+
+        # Trigger actions: remove orders so planner sees missing
+        engine._last_account_snapshot = self._account_snap(orders=(), pos_qty="0")
+        engine.process_snapshot(self._snap(ts=2_050_000))
+
+        # Counter should be reset (popped)
+        assert "BTCUSDT" not in engine._rolling_steady_state_count, (
+            "Counter must reset when actions resume"
+        )
+
+    def test_steady_state_not_emitted_outside_rolling_mode(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """ROLLING_STEADY_STATE NOT emitted when rolling mode is off."""
+        engine = self._make_engine(monkeypatch, rolling=False)
+
+        engine._last_account_snapshot = self._account_snap(orders=(), pos_qty="0")
+        engine._account_sync_generation = 5
+
+        with caplog.at_level(logging.DEBUG, logger="grinder.live.engine"):
+            engine.process_snapshot(self._snap(ts=2_000_000))
+
+        ss_msgs = [r.message for r in caplog.records if "ROLLING_STEADY_STATE" in r.message]
+        assert len(ss_msgs) == 0, f"Must NOT emit in non-rolling mode: {ss_msgs}"
+
+    # --- INFLIGHT_STALE_CLEARED ---
+
+    def test_inflight_stale_cleared_emitted(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """INFLIGHT_STALE_CLEARED emitted when stale inflight cleared on convergence."""
+        engine = self._make_engine(monkeypatch, rolling=True)
+
+        # Init rolling state
+        engine._last_account_snapshot = self._account_snap(orders=(), pos_qty="0")
+        engine.process_snapshot(self._snap(ts=1_000_000))
+
+        # Setup converged grid + stale inflight
+        grid = self._converged_grid(engine)
+        engine._last_account_snapshot = self._account_snap(orders=grid, pos_qty="0")
+
+        # Set stale inflight: sync_gen=1, advance sync_gen to 2
+        engine._inflight_shift["BTCUSDT"] = _InflightShift(
+            sync_gen=1, place_count=4, ts_ms=1_000_000
+        )
+        engine._account_sync_generation = 2
+
+        caplog.clear()
+
+        with caplog.at_level(logging.INFO, logger="grinder.live.engine"):
+            engine.process_snapshot(self._snap(ts=2_000_000))
+
+        stale_msgs = [r.message for r in caplog.records if "INFLIGHT_STALE_CLEARED" in r.message]
+        assert len(stale_msgs) == 1, f"Expected 1 INFLIGHT_STALE_CLEARED: {stale_msgs}"
+        assert "sync_gen=2" in stale_msgs[0]
+        assert "inflight_gen=1" in stale_msgs[0]
+
+    def test_inflight_stale_cleared_not_emitted_when_fresh(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """INFLIGHT_STALE_CLEARED NOT emitted when inflight is fresh (sync_gen == inflight.sync_gen)."""
+        engine = self._make_engine(monkeypatch, rolling=True)
+
+        # Init rolling state
+        engine._last_account_snapshot = self._account_snap(orders=(), pos_qty="0")
+        engine.process_snapshot(self._snap(ts=1_000_000))
+
+        grid = self._converged_grid(engine)
+        engine._last_account_snapshot = self._account_snap(orders=grid, pos_qty="0")
+
+        # Inflight with sync_gen=2, account sync_gen=2 (fresh, not stale)
+        engine._inflight_shift["BTCUSDT"] = _InflightShift(
+            sync_gen=2, place_count=4, ts_ms=1_000_000
+        )
+        engine._account_sync_generation = 2
+
+        caplog.clear()
+
+        with caplog.at_level(logging.INFO, logger="grinder.live.engine"):
+            engine.process_snapshot(self._snap(ts=2_000_000))
+
+        stale_msgs = [r.message for r in caplog.records if "INFLIGHT_STALE_CLEARED" in r.message]
+        assert len(stale_msgs) == 0, f"Must NOT emit when inflight is fresh: {stale_msgs}"
+        assert "BTCUSDT" in engine._inflight_shift, "Fresh inflight must NOT be cleared"
+
+    # --- CANCEL_SKIP_ALREADY_FAILED ---
+
+    def test_cancel_skip_already_failed_emitted(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """CANCEL_SKIP_ALREADY_FAILED emitted when cancel is skipped for blacklisted order_id."""
+        engine = self._make_engine(monkeypatch, rolling=True)
+
+        # Init rolling state
+        engine._last_account_snapshot = self._account_snap(orders=(), pos_qty="0")
+        engine.process_snapshot(self._snap(ts=1_000_000))
+
+        # Build converged grid + one extra order with a blacklisted order_id.
+        # The extra order has price far from any desired level → planner emits CANCEL for it.
+        grid = self._converged_grid(engine)
+        extra = OpenOrderSnap(
+            order_id="grinder_d_BTCUSDT_99_1000000_99",
+            symbol="BTCUSDT",
+            side="BUY",
+            order_type="LIMIT",
+            price=Decimal("48000.00"),  # far outside grid → planner sees as extra
+            qty=Decimal("0.01"),
+            filled_qty=Decimal("0"),
+            reduce_only=False,
+            status="NEW",
+            ts=1_000_000,
+        )
+
+        # Pre-blacklist the extra order_id (simulates prior -2011 failure)
+        engine._cancel_failed_ids.add("grinder_d_BTCUSDT_99_1000000_99")
+
+        engine._last_account_snapshot = self._account_snap(orders=(*grid, extra), pos_qty="0")
+        engine._account_sync_generation = 5
+
+        caplog.clear()
+
+        with caplog.at_level(logging.DEBUG, logger="grinder.live.engine"):
+            engine.process_snapshot(self._snap(ts=3_000_000))
+
+        skip_msgs = [r.message for r in caplog.records if "CANCEL_SKIP_ALREADY_FAILED" in r.message]
+        assert len(skip_msgs) >= 1, f"Expected CANCEL_SKIP_ALREADY_FAILED: {skip_msgs}"
+        assert "grinder_d_BTCUSDT_99_1000000_99" in skip_msgs[0]
+
+    def test_cancel_skip_not_emitted_for_fresh_cancel(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """CANCEL_SKIP_ALREADY_FAILED NOT emitted for non-blacklisted order_id."""
+        engine = self._make_engine(monkeypatch, rolling=True)
+
+        # No order_ids in _cancel_failed_ids
+        assert len(engine._cancel_failed_ids) == 0
+
+        # Init rolling state
+        engine._last_account_snapshot = self._account_snap(orders=(), pos_qty="0")
+        engine.process_snapshot(self._snap(ts=1_000_000))
+
+        grid = self._converged_grid(engine)
+        extra = OpenOrderSnap(
+            order_id="grinder_d_BTCUSDT_99_1000000_99",
+            symbol="BTCUSDT",
+            side="BUY",
+            order_type="LIMIT",
+            price=Decimal("48000.00"),
+            qty=Decimal("0.01"),
+            filled_qty=Decimal("0"),
+            reduce_only=False,
+            status="NEW",
+            ts=1_000_000,
+        )
+        engine._last_account_snapshot = self._account_snap(orders=(*grid, extra), pos_qty="0")
+        engine._account_sync_generation = 5
+
+        caplog.clear()
+
+        with caplog.at_level(logging.DEBUG, logger="grinder.live.engine"):
+            engine.process_snapshot(self._snap(ts=3_000_000))
+
+        skip_msgs = [r.message for r in caplog.records if "CANCEL_SKIP_ALREADY_FAILED" in r.message]
+        assert len(skip_msgs) == 0, f"Must NOT emit for non-blacklisted orders: {skip_msgs}"

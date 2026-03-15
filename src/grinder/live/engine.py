@@ -493,6 +493,8 @@ class LiveEngineV0:
         self._inflight_deferred_logged: set[str] = set()  # BUG-3: log once per latch
         self._cancel_failed_ids: set[str] = set()  # BUG-4: skip re-cancel on -2011
         self._account_sync_generation: int = 0
+        # ADR-089: rolling steady-state log throttle (1 per 100 zero-action ticks per symbol)
+        self._rolling_steady_state_count: dict[str, int] = {}
         # PR-ROLLING-GRID-V1B: rolling grid mode (doc-26, safe-by-default)
         self._rolling_grid_enabled = parse_bool(
             "GRINDER_LIVE_ROLLING_GRID", default=False, strict=False
@@ -979,6 +981,12 @@ class LiveEngineV0:
                 and action.order_id is not None
                 and action.order_id in self._cancel_failed_ids
             ):
+                # ADR-089: explicit log for skipped cancel (previously silent)
+                logger.debug(
+                    "CANCEL_SKIP_ALREADY_FAILED symbol=%s order_id=%s",
+                    snapshot.symbol,
+                    action.order_id,
+                )
                 live_actions.append(
                     LiveAction(
                         action=action,
@@ -1372,6 +1380,8 @@ class LiveEngineV0:
         )
 
         if plan_result.actions:
+            # Reset steady-state counter when actions resume
+            self._rolling_steady_state_count.pop(snapshot.symbol, None)
             # P0-2d: promote to WARNING when debug active (visible without logging.basicConfig)
             log_fn = logger.warning if self._debug_open_orders else logger.info
             # INV-10: rolling mode appends ec= and anchor= to log (non-rolling unchanged)
@@ -1412,6 +1422,18 @@ class LiveEngineV0:
                     plan_result.natr_fallback,
                     len(plan_result.actions),
                     snapshot.mid_price,
+                )
+        elif rolling_mode:
+            # ADR-089: throttled steady-state log for rolling mode (1 per 100 ticks)
+            count = self._rolling_steady_state_count.get(snapshot.symbol, 0) + 1
+            self._rolling_steady_state_count[snapshot.symbol] = count
+            if count % 100 == 1:
+                logger.debug(
+                    "ROLLING_STEADY_STATE symbol=%s tick=%d desired=%d actual=%d",
+                    snapshot.symbol,
+                    count,
+                    plan_result.desired_count,
+                    plan_result.actual_count,
                 )
 
         return plan_result
@@ -1956,6 +1978,13 @@ class LiveEngineV0:
             if inflight is not None and self._account_sync_generation > inflight.sync_gen:
                 self._inflight_shift.pop(symbol, None)
                 self._inflight_deferred_logged.discard(symbol)
+                # ADR-089: explicit log when stale inflight cleared on convergence
+                logger.info(
+                    "INFLIGHT_STALE_CLEARED symbol=%s sync_gen=%d inflight_gen=%d",
+                    symbol,
+                    self._account_sync_generation,
+                    inflight.sync_gen,
+                )
             return actions
 
         # Guard 1: Inflight latch — wait for sync refresh after dispatch

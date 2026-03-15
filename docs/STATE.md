@@ -1390,6 +1390,9 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - **Two-layer cleanup:** planner-owned (anchor, step, offset, reservations) + engine-owned (prev_orders, pending_cancels, throttle keys).
     - **BLOCKED throttle:** `ANCHOR_RESET_BLOCKED` logged once per reason per episode. Three blocked reasons: POSITION_OPEN, POSITION_UNKNOWN, PENDING_CANCELS.
     - **PLANNER_ACTIONS_SUMMARY:** rolling mode appends `ec=` and `anchor=` to log.
+    - **ADR-089 log events:** `ROLLING_STEADY_STATE` (DEBUG, throttled 1/100 ticks, when actions=0 in rolling mode), `INFLIGHT_STALE_CLEARED` (INFO, when stale inflight cleared on convergence), `CANCEL_SKIP_ALREADY_FAILED` (DEBUG, when cancel skipped due to prior -2011). Unit-test-proven (18 tests). Not reachable in fixture mode; intended for live forensics.
+    - **ADR-089 operator tool:** `scripts/exchange_state.py` — check/cleanup/verify exchange state. Pre-flight and post-run canonical commands.
+    - **Runbook:** `docs/runbooks/34_ROLLING_LIVE_VERIFICATION.md` — canonical ceremony for rolling live verification.
     - 19 anchor contract tests (T44-T62), 95 rolling grid tests total.
   - **Fill detection:** Rolling fill = disappeared order with `strategy_id="d"` (grid) AND not in pending cancels. TP (`strategy_id="tp"`) and all non-grid strategies do NOT shift offset. Disappearance heuristic (not trade evidence). Known limitation: exchange-side non-trade cancels of grid orders (ADL, margin) treated as fills. Resets on restart.
   - **Obsoletes in rolling mode:** cycle-layer replenish, TP_FILL_REPLENISH, mid-driven GRID_SHIFT, anti-churn, grid freeze.
@@ -1403,7 +1406,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - CANCEL -2011 diagnostic log: order_id + parsed identity (before map_binance_error raises)
   - Pure helper `correlate_recent_places()` in `place_tracker.py` for testability
   - DRY: `_PORT_NAME = "futures"` class constant replaces hardcoded strings in BinanceFuturesPort
-  - Debug logs emitted at WARNING level to be visible without `logging.basicConfig()` (run_trading.py has no log config; Python defaults to WARNING)
+  - Debug logs emitted at WARNING level to be visible without `logging.basicConfig()` (historical — run_trading.py now has native logging config via ADR-089; WARNING promotion kept for backward compat when debug active)
   - Debug-only, default off, no behavioral changes
   - P0-2b: on missing orders, `GET /fapi/v1/order` by origClientOrderId (bounded by `GRINDER_ACCOUNT_SYNC_DEBUG_LOOKUP_LIMIT`, default 5, dedup per clientOrderId, set cap 100)
   - Logs: `ORDER_LOOKUP clientOrderId=... status=FILLED/CANCELED/...` or `ORDER_LOOKUP_NOT_FOUND clientOrderId=... code=-2013/-2011` or `ORDER_LOOKUP_ERROR clientOrderId=... status=429/...`
