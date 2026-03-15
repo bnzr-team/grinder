@@ -715,10 +715,15 @@ class LiveEngineV0:
         if rolling and not budget_dead and not grid_frozen:
             _ra_planner = self._grid_planners.get(snapshot.symbol) if self._grid_planners else None
             if _ra_planner and _ra_planner.get_rolling_state(snapshot.symbol) is not None:
-                if (
-                    not self._has_grinder_orders(snapshot.symbol)
-                    and snapshot.symbol not in self._inflight_shift
-                ):
+                # INV-10 fix: inflight blocks reset ONLY while account sync
+                # hasn't refreshed since dispatch (no_fresh_inflight_latch).
+                # Once sync refreshes, REST is the source of truth: if REST
+                # shows 0 orders, exchange is truly empty.
+                _inflight_blocking = False
+                if snapshot.symbol in self._inflight_shift:
+                    _if_entry = self._inflight_shift[snapshot.symbol]
+                    _inflight_blocking = self._account_sync_generation <= _if_entry.sync_gen
+                if not self._has_grinder_orders(snapshot.symbol) and not _inflight_blocking:
                     _pos_qty = self._get_position_qty(snapshot.symbol)
                     _pending_count = self._count_pending_cancels_for_symbol(snapshot.symbol)
 
@@ -1941,6 +1946,16 @@ class LiveEngineV0:
             return actions
 
         if not actions:
+            # INV-10 fix: clear stale inflight latch when planner confirms convergence.
+            # actions=[] means planner found no diff — orders match desired state.
+            # Precondition: this method is only called from the live planner path
+            # (line 806), not the budget_dead/grid_frozen path. So actions=[]
+            # genuinely means "planner found no diff", not suppression.
+            # If sync has refreshed since dispatch, convergence is confirmed.
+            inflight = self._inflight_shift.get(symbol)
+            if inflight is not None and self._account_sync_generation > inflight.sync_gen:
+                self._inflight_shift.pop(symbol, None)
+                self._inflight_deferred_logged.discard(symbol)
             return actions
 
         # Guard 1: Inflight latch — wait for sync refresh after dispatch

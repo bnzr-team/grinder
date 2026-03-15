@@ -29,7 +29,8 @@ from grinder.execution.port import NoOpExchangePort
 from grinder.execution.types import ActionType, ExecutionAction
 from grinder.live import LiveEngineConfig, LiveEngineV0
 from grinder.live.cycle_layer import LiveCycleConfig, LiveCycleLayerV1
-from grinder.live.grid_planner import LiveGridConfig, LiveGridPlannerV1
+from grinder.live.engine import _InflightShift
+from grinder.live.grid_planner import GridPlanResult, LiveGridConfig, LiveGridPlannerV1
 
 if TYPE_CHECKING:
     import pytest
@@ -2727,3 +2728,206 @@ class TestAnchorContract(TestRollingGridEngineIntegration):
         rs = planner.get_rolling_state("BTCUSDT")
         assert rs is not None
         assert rs.anchor_price == old_anchor, "Anchor must not change on unknown position"
+
+    # --- T59: Part A — stale inflight cleared on empty-actions path ---
+
+    def test_t59_stale_inflight_cleared_on_empty_actions(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Part A contract: _apply_convergence_guards() clears stale inflight
+        when planner produces no actions (convergence confirmed).
+
+        Setup: inflight set with sync_gen=1, _account_sync_generation=2.
+        Call _apply_convergence_guards(symbol, [], plan_result, ts).
+        Verify: inflight cleared, deferred log cleared.
+        """
+
+        engine = self._make_engine(monkeypatch, rolling=True)
+
+        # Establish rolling state so engine is in normal operating mode
+        buy1 = self._grid_order(1, "BUY", "49950")
+        sell1 = self._grid_order(2, "SELL", "50050")
+        engine._last_account_snapshot = self._account_snap(orders=(buy1, sell1), pos_qty="0")
+        engine.process_snapshot(self._snap(ts=1_000_000))
+
+        # Set stale inflight: sync_gen=1, but _account_sync_generation=2
+        engine._inflight_shift["BTCUSDT"] = _InflightShift(
+            sync_gen=1, place_count=2, ts_ms=1_000_000
+        )
+        engine._inflight_deferred_logged.add("BTCUSDT")
+        engine._account_sync_generation = 2
+
+        # Precondition: inflight exists
+        assert "BTCUSDT" in engine._inflight_shift
+
+        # Call with empty actions (planner found no diff = convergence confirmed)
+        plan_result = GridPlanResult(desired_count=4, actual_count=4, diff_extra=0, diff_extra_tp=0)
+        result = engine._apply_convergence_guards("BTCUSDT", [], plan_result, 2_000_000)
+
+        # Postcondition: stale inflight cleared
+        assert "BTCUSDT" not in engine._inflight_shift, (
+            "Stale inflight must be cleared on empty-actions path"
+        )
+        assert "BTCUSDT" not in engine._inflight_deferred_logged, (
+            "Deferred log must be cleared with inflight"
+        )
+        assert result == []
+
+    # --- T60/T61: Paired boundary — stale vs fresh inflight ---
+
+    def _setup_inflight_boundary(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> tuple[LiveEngineV0, LiveGridPlannerV1]:
+        """Shared baseline for T60/T61 paired boundary tests.
+
+        Returns engine with:
+        - rolling state exists (anchor established)
+        - inflight set with sync_gen=1
+        - _prev_rolling_orders cleared (no false fills)
+        - account snapshot: 0 orders, flat position
+
+        T60 and T61 differ ONLY in _account_sync_generation.
+        """
+        engine = self._make_engine(monkeypatch, rolling=True)
+
+        # Tick 1: establish rolling state
+        buy1 = self._grid_order(1, "BUY", "49950")
+        sell1 = self._grid_order(2, "SELL", "50050")
+        engine._last_account_snapshot = self._account_snap(orders=(buy1, sell1), pos_qty="0")
+        engine.process_snapshot(self._snap(ts=1_000_000))
+
+        planner = engine._grid_planners["BTCUSDT"]  # type: ignore[index]
+        assert planner.get_rolling_state("BTCUSDT") is not None
+
+        # Set up boundary conditions (shared between T60/T61):
+        # - inflight with sync_gen=1
+        # - prev_rolling_orders cleared (prevent false fills from order disappearance)
+        # - account snapshot: 0 orders, flat position
+        engine._inflight_shift["BTCUSDT"] = _InflightShift(
+            sync_gen=1, place_count=2, ts_ms=1_000_000
+        )
+        engine._prev_rolling_orders.pop("BTCUSDT", None)
+        engine._last_account_snapshot = self._account_snap(orders=(), pos_qty="0", ts=2_000_000)
+
+        return engine, planner
+
+    def test_t60_stale_inflight_does_not_block_anchor_reset(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Paired boundary (PASS): stale inflight does NOT block ANCHOR_RESET.
+
+        Same baseline as T61. Differs ONLY in: _account_sync_generation=2
+        (> inflight.sync_gen=1) → inflight is stale → ANCHOR_RESET fires.
+        """
+        engine, planner = self._setup_inflight_boundary(monkeypatch)
+        old_anchor = planner.get_rolling_state("BTCUSDT").anchor_price  # type: ignore[union-attr]
+        new_mid = Decimal("51000.50")
+
+        # THE ONE DIFFERENCE from T61: sync_gen advanced past inflight
+        engine._account_sync_generation = 2  # > inflight.sync_gen (1)
+
+        with caplog.at_level(logging.WARNING, logger="grinder.live.engine"):
+            engine.process_snapshot(
+                Snapshot(
+                    ts=2_000_000,
+                    symbol="BTCUSDT",
+                    bid_price=Decimal("51000"),
+                    ask_price=Decimal("51001"),
+                    bid_qty=Decimal("1"),
+                    ask_qty=Decimal("1"),
+                    last_price=Decimal("51000"),
+                    last_qty=Decimal("1"),
+                )
+            )
+
+        # ANCHOR_RESET must fire
+        reset_logs = [r for r in caplog.records if "ANCHOR_RESET " in r.message]
+        assert len(reset_logs) >= 1, (
+            f"ANCHOR_RESET should fire with stale inflight: {[r.message for r in caplog.records]}"
+        )
+        assert f"old_anchor={old_anchor}" in reset_logs[0].message
+
+        # Verify re-anchor to new mid
+        rs = planner.get_rolling_state("BTCUSDT")
+        assert rs is not None
+        assert rs.anchor_price == new_mid
+        assert rs.net_offset == 0
+
+        # Verify grid PLACEs from new anchor
+        # (process_snapshot output not captured here, but ANCHOR_RESET + new anchor proves it)
+
+    def test_t61_fresh_inflight_blocks_anchor_reset_on_empty_flat(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Paired boundary (BLOCK): fresh inflight DOES block ANCHOR_RESET
+        even when exchange is empty + flat.
+
+        Same baseline as T60. Differs ONLY in: _account_sync_generation=1
+        (== inflight.sync_gen=1) → inflight is fresh → ANCHOR_RESET blocked.
+        """
+        engine, planner = self._setup_inflight_boundary(monkeypatch)
+        old_anchor = planner.get_rolling_state("BTCUSDT").anchor_price  # type: ignore[union-attr]
+
+        # THE ONE DIFFERENCE from T60: sync_gen NOT advanced
+        engine._account_sync_generation = 1  # == inflight.sync_gen (1)
+
+        with caplog.at_level(logging.WARNING, logger="grinder.live.engine"):
+            engine.process_snapshot(self._snap(ts=2_000_000))
+
+        # ANCHOR_RESET must NOT fire
+        all_msgs = " ".join(r.message for r in caplog.records)
+        assert "ANCHOR_RESET " not in all_msgs, (
+            f"ANCHOR_RESET must NOT fire with fresh inflight: {all_msgs}"
+        )
+
+        # Anchor must be unchanged
+        rs = planner.get_rolling_state("BTCUSDT")
+        assert rs is not None
+        assert rs.anchor_price == old_anchor, "Anchor must not change when inflight is fresh"
+
+    # --- T62: Initial placement safety ---
+
+    def test_t62_no_reset_before_first_sync_refresh(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Initial placement safety: no ANCHOR_RESET before sync refreshes.
+
+        Empty exchange → planner emits initial PLACEs → inflight set with
+        current sync_gen. Next tick before sync advances: no ANCHOR_RESET.
+        """
+        engine = self._make_engine(monkeypatch, rolling=True)
+
+        # Tick 1: empty exchange → rolling init + PLACEs → inflight set
+        engine._last_account_snapshot = self._account_snap(orders=(), pos_qty="0")
+        engine.process_snapshot(self._snap(ts=1_000_000))
+
+        planner = engine._grid_planners["BTCUSDT"]  # type: ignore[index]
+        rs_init = planner.get_rolling_state("BTCUSDT")
+        assert rs_init is not None
+        old_anchor = rs_init.anchor_price
+
+        # Inflight should be set from initial PLACEs
+        assert "BTCUSDT" in engine._inflight_shift, "Inflight must be set after initial PLACEs"
+        init_sync_gen = engine._inflight_shift["BTCUSDT"].sync_gen
+        assert engine._account_sync_generation == init_sync_gen, (
+            "Inflight sync_gen must match current _account_sync_generation"
+        )
+
+        # Tick 2: still empty exchange, sync NOT advanced
+        # (orders dispatched but REST hasn't confirmed yet)
+        with caplog.at_level(logging.WARNING, logger="grinder.live.engine"):
+            engine.process_snapshot(self._snap(ts=1_001_000))
+
+        # No ANCHOR_RESET — orders are in flight, not yet confirmed
+        all_msgs = " ".join(r.message for r in caplog.records)
+        assert "ANCHOR_RESET " not in all_msgs, (
+            f"ANCHOR_RESET must NOT fire before sync refresh: {all_msgs}"
+        )
+
+        # Inflight still set
+        assert "BTCUSDT" in engine._inflight_shift, "Inflight must persist until sync refreshes"
+
+        # Anchor unchanged from ANCHOR_INIT
+        rs = planner.get_rolling_state("BTCUSDT")
+        assert rs is not None
+        assert rs.anchor_price == old_anchor, "Anchor must not change before first sync refresh"

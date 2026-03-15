@@ -617,7 +617,7 @@ Raw `Decimal`, NOT tick-rounded.
 
 1. `rolling_state_exists` — planner has `_RollingLadderState` for symbol.
 2. `no_grinder_orders` — no orders with `parse_client_order_id() != None` and prefix `"grinder"` on exchange.
-3. `no_inflight_latch` — `symbol not in _inflight_shift` (no PLACEs awaiting confirmation).
+3. `no_fresh_inflight_latch` — inflight blocks only while `account_sync_generation <= inflight.sync_gen`. Stale inflight (sync refreshed since dispatch) does not block reset — REST is the source of truth after sync refresh.
 4. `position_flat` — `_get_position_qty(symbol) == 0`. If `None` (AccountSync unavailable), blocked with `reason=POSITION_UNKNOWN`.
 5. `no_pending_cancels_for_symbol` — `_count_pending_cancels_for_symbol(symbol) == 0`.
 
@@ -640,12 +640,16 @@ reset succeeds, or inflight active).
 
 | Exchange | Position | Pending | Inflight | Result |
 |----------|----------|---------|----------|--------|
-| empty | flat | 0 | no | ANCHOR_RESET |
-| empty | flat | >0 | no | BLOCKED (PENDING_CANCELS) |
-| empty | open | any | no | BLOCKED (POSITION_OPEN) |
-| empty | unknown | any | no | BLOCKED (POSITION_UNKNOWN) |
-| empty | any | any | yes | skip (inflight in progress) |
+| empty | flat | 0 | none/stale | ANCHOR_RESET |
+| empty | flat | >0 | none/stale | BLOCKED (PENDING_CANCELS) |
+| empty | open | any | none/stale | BLOCKED (POSITION_OPEN) |
+| empty | unknown | any | none/stale | BLOCKED (POSITION_UNKNOWN) |
+| empty | any | any | fresh | skip (inflight in progress, sync not yet refreshed) |
 | orders | any | any | any | skip (normal operation) |
+
+Inflight is **fresh** when `account_sync_generation <= inflight.sync_gen` (sync hasn't
+refreshed since dispatch). Inflight is **stale** when `account_sync_generation > inflight.sync_gen`
+(sync refreshed — REST is source of truth).
 
 ---
 

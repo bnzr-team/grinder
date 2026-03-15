@@ -1383,12 +1383,14 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - **Logs:** `CANCEL_FAILED_IDS_CLEARED count={} gen={}` (on sync refresh). `BlockReason.CANCEL_ALREADY_FAILED` (SKIPPED status).
     - 4 BUG-3 tests (log throttle, reset after sync, pure shift no-relatch, net-new relatch) + 5 BUG-4 tests (populated, cleared on sync, persists without sync, error path, empty no-log).
   - **V1F (anchor/initial placement contract, ADR-088, INV-10):** Live runs (run9-run13) exposed grid asymmetry after external cleanup. Root cause: no re-anchor mechanism when exchange empties while engine is running.
-    - **ANCHOR_RESET:** 5-condition contract (rolling_state_exists, no_grinder_orders, no_inflight, position_flat, no_pending_cancels). Same-tick: `reset_rolling_state()` → `_plan_grid()` reinits from fresh `mid_price`.
+    - **ANCHOR_RESET:** 5-condition contract (rolling_state_exists, no_grinder_orders, no_fresh_inflight_latch, position_flat, no_pending_cancels). Same-tick: `reset_rolling_state()` → `_plan_grid()` reinits from fresh `mid_price`.
+    - **no_fresh_inflight_latch:** inflight blocks only while `account_sync_generation <= inflight.sync_gen`. Stale inflight does not block reset after sync refresh. Live verification exposed stranded inflight bug: `_apply_convergence_guards()` returned early on `actions=[]` without clearing stale inflight latch. Fix: (a) clear stale inflight on empty-actions path when sync has refreshed; (b) ANCHOR_RESET condition uses staleness check instead of presence check.
+    - **Part A safety invariant:** `_apply_convergence_guards()` is only called from the live planner path (engine.py line 806), not the `budget_dead`/`grid_frozen` path. `actions=[]` in this context genuinely means "planner found no diff", not suppression.
     - **SSOT:** `anchor_price = snapshot.mid_price` (raw Decimal, not tick-rounded).
     - **Two-layer cleanup:** planner-owned (anchor, step, offset, reservations) + engine-owned (prev_orders, pending_cancels, throttle keys).
     - **BLOCKED throttle:** `ANCHOR_RESET_BLOCKED` logged once per reason per episode. Three blocked reasons: POSITION_OPEN, POSITION_UNKNOWN, PENDING_CANCELS.
     - **PLANNER_ACTIONS_SUMMARY:** rolling mode appends `ec=` and `anchor=` to log.
-    - 15 new anchor contract tests (T44-T58), 91 rolling grid tests total.
+    - 19 anchor contract tests (T44-T62), 95 rolling grid tests total.
   - **Fill detection:** Rolling fill = disappeared order with `strategy_id="d"` (grid) AND not in pending cancels. TP (`strategy_id="tp"`) and all non-grid strategies do NOT shift offset. Disappearance heuristic (not trade evidence). Known limitation: exchange-side non-trade cancels of grid orders (ADL, margin) treated as fills. Resets on restart.
   - **Obsoletes in rolling mode:** cycle-layer replenish, TP_FILL_REPLENISH, mid-driven GRID_SHIFT, anti-churn, grid freeze.
   - **Migration:** spec -> V1A planner -> V1B engine -> V1C slot ownership -> V1D cross-tick fix -> V1E convergence guards -> V1F anchor contract -> live verification -> cleanup.
