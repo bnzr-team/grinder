@@ -1395,7 +1395,18 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - **Runbook:** `docs/runbooks/34_ROLLING_LIVE_VERIFICATION.md` — canonical ceremony for rolling live verification.
     - **Minimum live acceptance: PASSED** (2026-03-15). Proven: ANCHOR_INIT, order placement (2x POST 200 OK), 0 errors, clean shutdown (300s, 3073 ticks), post-run status=CLEAN. Full rolling-path acceptance (ANCHOR_RESET, fill→TP, ROLLING_FILL_OFFSET) remains open.
     - 19 anchor contract tests (T44-T62), 95 rolling grid tests total.
-  - **Fill detection:** Rolling fill = disappeared order with `strategy_id="d"` (grid) AND not in pending cancels. TP (`strategy_id="tp"`) and all non-grid strategies do NOT shift offset. Disappearance heuristic (not trade evidence). Known limitation: exchange-side non-trade cancels of grid orders (ADL, margin) treated as fills. Resets on restart.
+  - **V1G (inflight fill detection, ADR-090, INV-11):** Live ceremony A2 (2026-03-15) exposed P0 safety bug: 13 BUY orders in 60s, 11 filled instantly, $1,571 accumulated with zero fills detected. Root cause: disappearance heuristic requires order to appear in at least one REST snapshot — orders filling within one sync interval (~5s) are structurally invisible.
+    - **Inflight CID tracking:** dispatched PLACE CIDs tracked in `_inflight_placed_cids`. After sync refresh, CID absent from REST = inflight fill detected. CID present = survived, handed to disappearance heuristic.
+    - **Reconciliation contract:** every dispatched PLACE increments `_unreconciled_place_count` once; first post-dispatch sync decrements exactly once, regardless of survival or inflight fill.
+    - **Guard 4:** unreconciled placement cap (`levels * 2`). Defense-in-depth — fires only if both fill detection paths fail simultaneously.
+    - **New log events:** `INFLIGHT_FILL_DETECTED` (INFO, operational path), `PLACEMENT_CAPPED` (WARNING, anomaly).
+    - **ANCHOR_RESET cleanup:** `_inflight_placed_cids` filtered + `_unreconciled_place_count` popped alongside existing state cleanup.
+    - 12 inflight fill detection tests (T63-T74), 116 rolling grid tests total.
+  - **Fill detection:** Rolling fill = disappeared order with `strategy_id="d"` (grid) AND not in pending cancels. TP (`strategy_id="tp"`) and all non-grid strategies do NOT shift offset. Two detection paths:
+    1. **Inflight CID reconciliation (ADR-090):** dispatched PLACE CID tracked in `_inflight_placed_cids`. First post-dispatch REST sync resolves fate: CID present = survived (handed to disappearance heuristic); CID absent = inflight fill (emits `INFLIGHT_FILL_DETECTED`). Closes the instant-fill blind spot.
+    2. **Disappearance heuristic:** order in `_prev_rolling_orders` but not in current REST snapshot = fill. Covers fills that happen after the order appeared in at least one snapshot.
+    - Known limitation: exchange-side non-trade cancels of grid orders (ADL, margin) treated as fills. Resets on restart.
+  - **Unreconciled placement cap (ADR-090, Guard 4):** `_unreconciled_place_count[symbol][side]` tracks PLACEs awaiting reconciliation. Incremented on dispatch, decremented on first post-dispatch sync (both survived + filled outcomes). Cap = `levels * 2`. Fires `PLACEMENT_CAPPED` (WARNING) when threshold reached — defense-in-depth for broken fill detection.
   - **Obsoletes in rolling mode:** cycle-layer replenish, TP_FILL_REPLENISH, mid-driven GRID_SHIFT, anti-churn, grid freeze.
   - **Migration:** spec -> V1A planner -> V1B engine -> V1C slot ownership -> V1D cross-tick fix -> V1E convergence guards -> V1F anchor contract -> live verification -> cleanup.
 

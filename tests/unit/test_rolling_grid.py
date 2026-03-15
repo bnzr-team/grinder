@@ -29,7 +29,7 @@ from grinder.execution.port import NoOpExchangePort
 from grinder.execution.types import ActionType, ExecutionAction
 from grinder.live import LiveEngineConfig, LiveEngineV0
 from grinder.live.cycle_layer import LiveCycleConfig, LiveCycleLayerV1
-from grinder.live.engine import _InflightShift
+from grinder.live.engine import _InflightPlacedOrder, _InflightShift
 from grinder.live.grid_planner import GridPlanResult, LiveGridConfig, LiveGridPlannerV1
 
 if TYPE_CHECKING:
@@ -2941,7 +2941,13 @@ class TestADR089LogEvents(TestRollingGridEngineIntegration):
 
         Requires rolling state already initialized (run one tick with empty orders first).
         Uses anchor_price and step_price from rolling state for exact price match.
+        Also clears ADR-090 inflight state from init (NoOp port CIDs don't match
+        grinder-format CIDs in the converged grid, causing false inflight fills).
         """
+        # ADR-090: clear init-time inflight CIDs so converged-grid tests
+        # don't trigger false inflight fill detection on the next tick.
+        engine._inflight_placed_cids.clear()
+        engine._unreconciled_place_count.clear()
         planner = engine._grid_planners["BTCUSDT"]  # type: ignore[index]
         rs = planner.get_rolling_state("BTCUSDT")
         assert rs is not None, "Rolling state must be initialized before calling _converged_grid"
@@ -3217,3 +3223,634 @@ class TestADR089LogEvents(TestRollingGridEngineIntegration):
 
         skip_msgs = [r.message for r in caplog.records if "CANCEL_SKIP_ALREADY_FAILED" in r.message]
         assert len(skip_msgs) == 0, f"Must NOT emit for non-blacklisted orders: {skip_msgs}"
+
+
+class TestInflightFillDetection(TestRollingGridEngineIntegration):
+    """ADR-090: Inflight CID fill detection + unreconciled placement cap.
+
+    Tests T63-T74 prove:
+    - Inflight fill detection closes the disappearance-heuristic blind spot
+    - Reconciliation contract: every dispatched PLACE increments unreconciled once;
+      first post-dispatch sync decrements exactly once, regardless of survival or inflight fill
+    - Defense-in-depth cap fires only when reconciliation is broken, never in normal operation
+    """
+
+    def _init_rolling_state(self, engine: LiveEngineV0) -> None:
+        """Run one tick with empty exchange to establish rolling state (anchor)."""
+        engine._last_account_snapshot = self._account_snap(orders=(), pos_qty="0")
+        engine.process_snapshot(self._snap(ts=1_000_000))
+
+    def _replace_with_grinder_cids(self, engine: LiveEngineV0) -> dict[str, _InflightPlacedOrder]:
+        """Replace NoOp-format inflight CIDs with grinder-format CIDs.
+
+        NoOp port generates CIDs like 'BTCUSDT:1000000:1:BUY:1' which don't pass
+        parse_client_order_id(). This helper replaces them with grinder_d_... format
+        so the engine's fill detection recognizes them in REST snapshots.
+        Returns the new CID->info mapping for test snapshot construction.
+        """
+        old_cids = dict(engine._inflight_placed_cids)
+        engine._inflight_placed_cids.clear()
+        new_cids: dict[str, _InflightPlacedOrder] = {}
+        for idx, (_old_cid, info) in enumerate(old_cids.items()):
+            new_cid = f"grinder_d_BTCUSDT_{idx}_{1000000}_{idx}"
+            engine._inflight_placed_cids[new_cid] = info
+            new_cids[new_cid] = info
+        return new_cids
+
+    def _build_orders_from_cids(
+        self,
+        cids: dict[str, _InflightPlacedOrder],
+        anchor: Decimal,
+        step: Decimal,
+        ts: int = 2_000_000,
+        side_filter: str | None = None,
+    ) -> tuple[OpenOrderSnap, ...]:
+        """Build OpenOrderSnap tuple from CID dict, optionally filtering by side."""
+        orders: list[OpenOrderSnap] = []
+        buy_idx = 0
+        sell_idx = 0
+        for cid, info in cids.items():
+            if side_filter is not None and info.side != side_filter:
+                continue
+            if info.side == "BUY":
+                buy_idx += 1
+                price = anchor - buy_idx * step
+            else:
+                sell_idx += 1
+                price = anchor + sell_idx * step
+            orders.append(
+                OpenOrderSnap(
+                    order_id=cid,
+                    symbol="BTCUSDT",
+                    side=info.side,
+                    order_type="LIMIT",
+                    price=price,
+                    qty=Decimal("0.01"),
+                    filled_qty=Decimal("0"),
+                    reduce_only=False,
+                    status="NEW",
+                    ts=ts,
+                )
+            )
+        return tuple(orders)
+
+    # --- T63: Immediate BUY fill ---
+
+    def test_t63_immediate_buy_fill_detected(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """BUY dispatched, fills within one sync interval.
+
+        Tick 1: init -> planner dispatches BUY+SELL, CIDs tracked.
+        Replace NoOp CIDs with grinder-format. Advance sync_gen.
+        Tick 2: REST shows only SELL (BUY filled). Assert INFLIGHT_FILL_DETECTED.
+        """
+        engine = self._make_engine(monkeypatch, rolling=True)
+        self._init_rolling_state(engine)
+
+        planner = engine._grid_planners["BTCUSDT"]  # type: ignore[index]
+        rs = planner.get_rolling_state("BTCUSDT")
+        assert rs is not None
+        anchor, step = rs.anchor_price, rs.step_price
+
+        # Replace NoOp CIDs with grinder format
+        cids = self._replace_with_grinder_cids(engine)
+        buy_cids = {c: i for c, i in cids.items() if i.side == "BUY"}
+        sell_cids = {c: i for c, i in cids.items() if i.side == "SELL"}
+        assert len(buy_cids) > 0 and len(sell_cids) > 0
+
+        # Advance sync_gen, snapshot with only SELL (BUY filled)
+        engine._account_sync_generation = 2
+        sell_orders = self._build_orders_from_cids(cids, anchor, step, side_filter="SELL")
+        engine._last_account_snapshot = self._account_snap(orders=sell_orders, pos_qty="0")
+
+        with caplog.at_level(logging.INFO, logger="grinder.live.engine"):
+            engine.process_snapshot(self._snap(ts=2_000_000))
+
+        inflight_msgs = [r.message for r in caplog.records if "INFLIGHT_FILL_DETECTED" in r.message]
+        assert len(inflight_msgs) > 0, "Must detect inflight BUY fills"
+        for msg in inflight_msgs:
+            assert "side=BUY" in msg
+
+        rs_after = planner.get_rolling_state("BTCUSDT")
+        assert rs_after is not None
+        assert rs_after.net_offset < 0, (
+            f"BUY fill must produce negative offset, got {rs_after.net_offset}"
+        )
+
+    # --- T64: Immediate SELL fill (symmetric) ---
+
+    def test_t64_immediate_sell_fill_detected(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """SELL dispatched, fills within one sync interval. Symmetric to T63."""
+        engine = self._make_engine(monkeypatch, rolling=True)
+        self._init_rolling_state(engine)
+
+        planner = engine._grid_planners["BTCUSDT"]  # type: ignore[index]
+        rs = planner.get_rolling_state("BTCUSDT")
+        assert rs is not None
+        anchor, step = rs.anchor_price, rs.step_price
+
+        cids = self._replace_with_grinder_cids(engine)
+        buy_cids = {c: i for c, i in cids.items() if i.side == "BUY"}
+        assert len(buy_cids) > 0
+
+        engine._account_sync_generation = 2
+        buy_orders = self._build_orders_from_cids(cids, anchor, step, side_filter="BUY")
+        engine._last_account_snapshot = self._account_snap(orders=buy_orders, pos_qty="0")
+
+        with caplog.at_level(logging.INFO, logger="grinder.live.engine"):
+            engine.process_snapshot(self._snap(ts=2_000_000))
+
+        inflight_msgs = [r.message for r in caplog.records if "INFLIGHT_FILL_DETECTED" in r.message]
+        assert len(inflight_msgs) > 0, "Must detect inflight SELL fills"
+        for msg in inflight_msgs:
+            assert "side=SELL" in msg
+
+        rs_after = planner.get_rolling_state("BTCUSDT")
+        assert rs_after is not None
+        assert rs_after.net_offset > 0, (
+            f"SELL fill must produce positive offset, got {rs_after.net_offset}"
+        )
+
+    # --- T65: Multi-cycle BUY loop (most load-bearing test) ---
+
+    def test_t65_multi_cycle_buy_no_repeated_same_price(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """3+ cycles where each BUY fills immediately via inflight detection.
+
+        Proves: offset shifts each cycle, no same-price BUY churn.
+        This is the exact incident pattern (repeated same-price BUY) -- must not recur.
+        Uses _detect_grid_fills_for_rolling directly to isolate fill detection across
+        cycles (T63/T64 prove the full process_snapshot integration path).
+        """
+        engine = self._make_engine(monkeypatch, rolling=True)
+        self._init_rolling_state(engine)
+
+        planner = engine._grid_planners["BTCUSDT"]  # type: ignore[index]
+        rs = planner.get_rolling_state("BTCUSDT")
+        assert rs is not None
+        anchor, step = rs.anchor_price, rs.step_price
+
+        # Clear init-time inflight state so cycles start clean
+        engine._inflight_placed_cids.clear()
+        engine._unreconciled_place_count.clear()
+        engine._prev_rolling_orders["BTCUSDT"] = {}
+
+        offsets: list[int] = []
+        num_cycles = 4
+
+        # Stable SELL order across all cycles — prevents disappearance heuristic
+        # from detecting SELL fills that would cancel out BUY offsets
+        stable_sell_cid = "grinder_d_BTCUSDT_999_1000000_999"
+        sell_order = OpenOrderSnap(
+            order_id=stable_sell_cid,
+            symbol="BTCUSDT",
+            side="SELL",
+            order_type="LIMIT",
+            price=anchor + step,
+            qty=Decimal("0.01"),
+            filled_qty=Decimal("0"),
+            reduce_only=False,
+            status="NEW",
+            ts=1_000_000,
+        )
+
+        for cycle in range(num_cycles):
+            # Inject fresh BUY inflight CID (simulates planner dispatching BUY at grid edge)
+            buy_cid = f"grinder_d_BTCUSDT_{cycle}_{2000000 + cycle * 1000000}_{cycle}"
+            engine._inflight_placed_cids[buy_cid] = _InflightPlacedOrder(
+                symbol="BTCUSDT", side="BUY", sync_gen=engine._account_sync_generation
+            )
+            engine._unreconciled_place_count.setdefault("BTCUSDT", {"BUY": 0, "SELL": 0})
+            engine._unreconciled_place_count["BTCUSDT"]["BUY"] += 1
+
+            # Advance sync gen
+            engine._account_sync_generation += 1
+
+            # Snapshot WITHOUT the BUY (it filled instantly) but WITH stable SELL
+            engine._last_account_snapshot = self._account_snap(
+                orders=(sell_order,),
+                pos_qty="0",
+                ts=2_000_000 + cycle * 1_000_000,
+            )
+
+            # Run fill detection
+            with caplog.at_level(logging.INFO, logger="grinder.live.engine"):
+                fills = engine._detect_grid_fills_for_rolling("BTCUSDT")
+
+            # Apply fills to offset
+            for _oid, side in fills:
+                planner.apply_fill_offset("BTCUSDT", side)
+
+            rs_now = planner.get_rolling_state("BTCUSDT")
+            assert rs_now is not None
+            offsets.append(rs_now.net_offset)
+
+        # Verify: BUY fills detected across cycles
+        inflight_msgs = [r.message for r in caplog.records if "INFLIGHT_FILL_DETECTED" in r.message]
+        buy_fill_msgs = [m for m in inflight_msgs if "side=BUY" in m]
+        assert len(buy_fill_msgs) == num_cycles, (
+            f"Expected {num_cycles} BUY inflight fills, got {len(buy_fill_msgs)}"
+        )
+
+        # Verify: offset shifted each cycle (no same-price BUY loop)
+        assert len(set(offsets)) == num_cycles, (
+            f"Each cycle must produce unique offset (no same-price churn): {offsets}"
+        )
+        assert all(o < 0 for o in offsets), (
+            f"All offsets must be negative after BUY fills: {offsets}"
+        )
+        # Verify: offsets are strictly decreasing (each fill shifts further)
+        for i in range(1, len(offsets)):
+            assert offsets[i] < offsets[i - 1], f"Offsets must be strictly decreasing: {offsets}"
+
+    # --- T66: Survived order ---
+
+    def test_t66_survived_order_no_false_fill(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """CID appears in next REST snapshot -> no fill emitted, CID removed from inflight."""
+        engine = self._make_engine(monkeypatch, rolling=True)
+        self._init_rolling_state(engine)
+
+        planner = engine._grid_planners["BTCUSDT"]  # type: ignore[index]
+        rs = planner.get_rolling_state("BTCUSDT")
+        assert rs is not None
+        anchor, step = rs.anchor_price, rs.step_price
+
+        cids = self._replace_with_grinder_cids(engine)
+        assert len(cids) > 0
+
+        engine._account_sync_generation = 2
+
+        # ALL orders survive
+        all_orders = self._build_orders_from_cids(cids, anchor, step)
+        engine._last_account_snapshot = self._account_snap(orders=all_orders, pos_qty="0")
+
+        with caplog.at_level(logging.INFO, logger="grinder.live.engine"):
+            engine.process_snapshot(self._snap(ts=2_000_000))
+
+        inflight_msgs = [r.message for r in caplog.records if "INFLIGHT_FILL_DETECTED" in r.message]
+        assert len(inflight_msgs) == 0, (
+            f"Survived orders must NOT trigger INFLIGHT_FILL_DETECTED: {inflight_msgs}"
+        )
+        for cid in cids:
+            assert cid not in engine._inflight_placed_cids, (
+                f"Survived CID {cid} must be removed from _inflight_placed_cids"
+            )
+        rs_after = planner.get_rolling_state("BTCUSDT")
+        assert rs_after is not None
+        assert rs_after.net_offset == 0, (
+            f"No fills -> offset must remain 0, got {rs_after.net_offset}"
+        )
+
+    # --- T67: Early-check (sync_gen not advanced) ---
+
+    def test_t67_early_check_no_premature_detection(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """sync_gen not advanced -> CID not checked, no premature detection."""
+        engine = self._make_engine(monkeypatch, rolling=True)
+        self._init_rolling_state(engine)
+
+        all_cids = dict(engine._inflight_placed_cids)
+        assert len(all_cids) > 0
+
+        # Do NOT advance sync_gen
+        engine._last_account_snapshot = self._account_snap(orders=(), pos_qty="0")
+        engine._prev_rolling_orders.pop("BTCUSDT", None)
+
+        with caplog.at_level(logging.INFO, logger="grinder.live.engine"):
+            engine.process_snapshot(self._snap(ts=2_000_000))
+
+        inflight_msgs = [r.message for r in caplog.records if "INFLIGHT_FILL_DETECTED" in r.message]
+        assert len(inflight_msgs) == 0, (
+            f"Must not detect fills before sync refresh: {inflight_msgs}"
+        )
+        for cid in all_cids:
+            assert cid in engine._inflight_placed_cids, f"CID {cid} must remain before sync refresh"
+
+    # --- T68: Hard cap fires ---
+
+    def test_t68_placement_cap_fires(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """unreconciled[BUY] >= cap -> BUY PLACEs suppressed, PLACEMENT_CAPPED logged."""
+        engine = self._make_engine(monkeypatch, rolling=True)
+        self._init_rolling_state(engine)
+
+        planner = engine._grid_planners["BTCUSDT"]  # type: ignore[index]
+        cap = planner._config.levels * 2
+
+        # Clear inflight shift so Guard 1 doesn't defer before Guard 4
+        engine._inflight_shift.pop("BTCUSDT", None)
+        engine._account_sync_generation = 10
+
+        engine._unreconciled_place_count["BTCUSDT"] = {"BUY": cap, "SELL": 0}
+
+        buy_action = ExecutionAction(
+            symbol="BTCUSDT",
+            action_type=ActionType.PLACE,
+            side=OrderSide.BUY,
+            price=Decimal("49000"),
+            quantity=Decimal("0.01"),
+            level_id=90,
+        )
+        sell_action = ExecutionAction(
+            symbol="BTCUSDT",
+            action_type=ActionType.PLACE,
+            side=OrderSide.SELL,
+            price=Decimal("51000"),
+            quantity=Decimal("0.01"),
+            level_id=91,
+        )
+        plan_result = GridPlanResult(desired_count=4, actual_count=2, diff_extra=0, diff_extra_tp=0)
+
+        with caplog.at_level(logging.WARNING, logger="grinder.live.engine"):
+            result = engine._apply_convergence_guards(
+                "BTCUSDT", [buy_action, sell_action], plan_result, 3_000_000
+            )
+
+        buy_places = [
+            a for a in result if a.action_type == ActionType.PLACE and a.side == OrderSide.BUY
+        ]
+        sell_places = [
+            a for a in result if a.action_type == ActionType.PLACE and a.side == OrderSide.SELL
+        ]
+        assert len(buy_places) == 0, f"BUY must be suppressed: {buy_places}"
+        assert len(sell_places) == 1, f"SELL must pass: {sell_places}"
+
+        cap_msgs = [r.message for r in caplog.records if "PLACEMENT_CAPPED" in r.message]
+        assert len(cap_msgs) == 1, f"Expected 1 PLACEMENT_CAPPED, got {cap_msgs}"
+        assert "BUY" in cap_msgs[0]
+
+    # --- T69: Side isolation ---
+
+    def test_t69_cap_side_isolation(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """BUY capped does not block SELL placement."""
+        engine = self._make_engine(monkeypatch, rolling=True)
+        self._init_rolling_state(engine)
+
+        planner = engine._grid_planners["BTCUSDT"]  # type: ignore[index]
+        cap = planner._config.levels * 2
+
+        engine._inflight_shift.pop("BTCUSDT", None)
+        engine._account_sync_generation = 10
+        engine._unreconciled_place_count["BTCUSDT"] = {"BUY": cap, "SELL": cap - 1}
+
+        buy_action = ExecutionAction(
+            symbol="BTCUSDT",
+            action_type=ActionType.PLACE,
+            side=OrderSide.BUY,
+            price=Decimal("49000"),
+            quantity=Decimal("0.01"),
+            level_id=90,
+        )
+        sell_action = ExecutionAction(
+            symbol="BTCUSDT",
+            action_type=ActionType.PLACE,
+            side=OrderSide.SELL,
+            price=Decimal("51000"),
+            quantity=Decimal("0.01"),
+            level_id=91,
+        )
+        plan_result = GridPlanResult(desired_count=4, actual_count=2, diff_extra=0, diff_extra_tp=0)
+
+        with caplog.at_level(logging.WARNING, logger="grinder.live.engine"):
+            result = engine._apply_convergence_guards(
+                "BTCUSDT", [buy_action, sell_action], plan_result, 3_000_000
+            )
+
+        buy_places = [
+            a for a in result if a.action_type == ActionType.PLACE and a.side == OrderSide.BUY
+        ]
+        sell_places = [
+            a for a in result if a.action_type == ActionType.PLACE and a.side == OrderSide.SELL
+        ]
+        assert len(buy_places) == 0, "BUY must be suppressed (at cap)"
+        assert len(sell_places) == 1, "SELL must pass (below cap)"
+
+    # --- T70: Reconciliation decrement on fill ---
+
+    def test_t70_reconciliation_decrement_on_fill(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Inflight fill decrements _unreconciled_place_count."""
+        engine = self._make_engine(monkeypatch, rolling=True)
+        self._init_rolling_state(engine)
+
+        sym_counts = engine._unreconciled_place_count.get("BTCUSDT", {})
+        initial_buy = sym_counts.get("BUY", 0)
+        initial_sell = sym_counts.get("SELL", 0)
+        assert initial_buy > 0 and initial_sell > 0
+
+        planner = engine._grid_planners["BTCUSDT"]  # type: ignore[index]
+        rs = planner.get_rolling_state("BTCUSDT")
+        assert rs is not None
+        anchor, step = rs.anchor_price, rs.step_price
+
+        cids = self._replace_with_grinder_cids(engine)
+        engine._account_sync_generation = 2
+
+        # SELL survives, BUY fills
+        sell_orders = self._build_orders_from_cids(cids, anchor, step, side_filter="SELL")
+        engine._last_account_snapshot = self._account_snap(orders=sell_orders, pos_qty="0")
+        engine.process_snapshot(self._snap(ts=2_000_000))
+
+        sym_after = engine._unreconciled_place_count.get("BTCUSDT", {})
+        assert sym_after.get("BUY", 0) < initial_buy, (
+            f"BUY must decrement on fill: {initial_buy} -> {sym_after.get('BUY', 0)}"
+        )
+        assert sym_after.get("SELL", 0) < initial_sell, (
+            f"SELL must decrement on survival: {initial_sell} -> {sym_after.get('SELL', 0)}"
+        )
+
+    # --- T71: ANCHOR_RESET full state consistency ---
+
+    def test_t71_anchor_reset_clears_all_state(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """ANCHOR_RESET clears all 6 engine-owned state maps for the reset symbol.
+
+        Other symbols must be preserved.
+        """
+        engine = self._make_engine(monkeypatch, rolling=True)
+        self._init_rolling_state(engine)
+
+        # Seed ETHUSDT state for isolation proof
+        engine._prev_rolling_orders["ETHUSDT"] = {"fake_cid": MagicMock()}
+        engine._inflight_placed_cids["fake_eth_cid"] = _InflightPlacedOrder(
+            symbol="ETHUSDT", side="BUY", sync_gen=0
+        )
+        engine._unreconciled_place_count["ETHUSDT"] = {"BUY": 1, "SELL": 0}
+
+        # Verify BTCUSDT preconditions
+        btc_inflight = {
+            c: i for c, i in engine._inflight_placed_cids.items() if i.symbol == "BTCUSDT"
+        }
+        assert len(btc_inflight) > 0
+        assert "BTCUSDT" in engine._unreconciled_place_count
+
+        # Trigger ANCHOR_RESET: empty exchange, flat, no inflight shift
+        engine._inflight_shift.pop("BTCUSDT", None)
+        engine._prev_rolling_orders["BTCUSDT"] = {}
+        engine._last_account_snapshot = self._account_snap(orders=(), pos_qty="0", ts=3_000_000)
+
+        with caplog.at_level(logging.WARNING, logger="grinder.live.engine"):
+            engine.process_snapshot(self._snap(ts=3_000_000))
+
+        reset_msgs = [r.message for r in caplog.records if "ANCHOR_RESET" in r.message]
+        assert any("ANCHOR_RESET" in m for m in reset_msgs)
+
+        # BTCUSDT cleaned (note: ANCHOR_RESET repopulates prev_rolling_orders and
+        # inflight_placed_cids via the new init PLACEs, so check the ETH isolation instead)
+        assert "BTCUSDT" not in engine._inflight_deferred_logged
+
+        # ETHUSDT preserved
+        assert "ETHUSDT" in engine._prev_rolling_orders
+        assert "fake_eth_cid" in engine._inflight_placed_cids
+        assert "ETHUSDT" in engine._unreconciled_place_count
+
+        # The old BTCUSDT inflight CIDs must be gone (replaced by fresh init ones)
+        for cid in btc_inflight:
+            assert cid not in engine._inflight_placed_cids, (
+                f"Old BTCUSDT CID {cid} must be cleared after ANCHOR_RESET"
+            )
+
+    # --- T72: Reconciliation decrement on survival (proves non-monotonic growth) ---
+
+    def test_t72_reconciliation_decrement_on_survival(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Survived order decrements _unreconciled_place_count.
+
+        Counter returns to 0 after full init reconciliation. Proves non-monotonic growth.
+        """
+        engine = self._make_engine(monkeypatch, rolling=True)
+        self._init_rolling_state(engine)
+
+        sym_counts = engine._unreconciled_place_count.get("BTCUSDT", {})
+        initial_buy = sym_counts.get("BUY", 0)
+        initial_sell = sym_counts.get("SELL", 0)
+        assert initial_buy > 0 and initial_sell > 0
+
+        planner = engine._grid_planners["BTCUSDT"]  # type: ignore[index]
+        rs = planner.get_rolling_state("BTCUSDT")
+        assert rs is not None
+        anchor, step = rs.anchor_price, rs.step_price
+
+        cids = self._replace_with_grinder_cids(engine)
+
+        # ALL survive
+        engine._account_sync_generation = 2
+        all_orders = self._build_orders_from_cids(cids, anchor, step)
+        engine._last_account_snapshot = self._account_snap(orders=all_orders, pos_qty="0")
+        engine.process_snapshot(self._snap(ts=2_000_000))
+
+        sym_after = engine._unreconciled_place_count.get("BTCUSDT", {})
+        assert sym_after.get("BUY", 0) == 0, (
+            f"BUY must be 0 after full survival: {sym_after.get('BUY', 0)}"
+        )
+        assert sym_after.get("SELL", 0) == 0, (
+            f"SELL must be 0 after full survival: {sym_after.get('SELL', 0)}"
+        )
+
+    # --- T73: Healthy init path (cap never fires) ---
+
+    def test_t73_healthy_init_no_cap(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """Place levels orders -> sync shows all survived -> unreconciled=0. Cap never fires."""
+        engine = self._make_engine(monkeypatch, rolling=True)
+        self._init_rolling_state(engine)
+
+        planner = engine._grid_planners["BTCUSDT"]  # type: ignore[index]
+        rs = planner.get_rolling_state("BTCUSDT")
+        assert rs is not None
+        anchor, step = rs.anchor_price, rs.step_price
+
+        cids = self._replace_with_grinder_cids(engine)
+
+        engine._account_sync_generation = 2
+        all_orders = self._build_orders_from_cids(cids, anchor, step)
+        engine._last_account_snapshot = self._account_snap(orders=all_orders, pos_qty="0")
+
+        with caplog.at_level(logging.WARNING, logger="grinder.live.engine"):
+            engine.process_snapshot(self._snap(ts=2_000_000))
+
+        cap_msgs = [r.message for r in caplog.records if "PLACEMENT_CAPPED" in r.message]
+        assert len(cap_msgs) == 0, f"PLACEMENT_CAPPED must not fire on healthy init: {cap_msgs}"
+        sym_counts = engine._unreconciled_place_count.get("BTCUSDT", {})
+        assert sym_counts.get("BUY", 0) == 0
+        assert sym_counts.get("SELL", 0) == 0
+
+    # --- T74: Healthy replacement cycle (cap never fires across 3+ cycles) ---
+
+    def test_t74_healthy_replacement_cycle_no_cap(
+        self, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """fill -> offset shift -> place 1 new -> sync -> survived -> unreconciled=0.
+
+        Cap never fires across 3+ cycles.
+        """
+        engine = self._make_engine(monkeypatch, rolling=True)
+        self._init_rolling_state(engine)
+
+        planner = engine._grid_planners["BTCUSDT"]  # type: ignore[index]
+
+        for cycle in range(3):
+            rs = planner.get_rolling_state("BTCUSDT")
+            assert rs is not None
+            anchor, step = rs.anchor_price, rs.step_price
+
+            cids = self._replace_with_grinder_cids(engine)
+            buy_cids = {c: i for c, i in cids.items() if i.side == "BUY"}
+            if not buy_cids:
+                break
+
+            engine._account_sync_generation += 1
+
+            # BUY fills, SELL survives
+            sell_orders = self._build_orders_from_cids(
+                cids,
+                anchor,
+                step,
+                ts=2_000_000 + cycle * 2_000_000,
+                side_filter="SELL",
+            )
+            prev = engine._prev_rolling_orders.get("BTCUSDT", {})
+            extra = tuple(s for _oid, s in prev.items() if s.side == "SELL" and _oid not in cids)
+
+            engine._last_account_snapshot = self._account_snap(
+                orders=(*sell_orders, *extra),
+                pos_qty="0",
+                ts=2_000_000 + cycle * 2_000_000,
+            )
+            engine.process_snapshot(self._snap(ts=2_000_000 + cycle * 2_000_000))
+
+            # Survive the replacement orders
+            new_cids = self._replace_with_grinder_cids(engine)
+            if new_cids:
+                engine._account_sync_generation += 1
+                rs2 = planner.get_rolling_state("BTCUSDT")
+                if rs2:
+                    new_orders = self._build_orders_from_cids(
+                        new_cids,
+                        rs2.anchor_price,
+                        rs2.step_price,
+                        ts=3_000_000 + cycle * 2_000_000,
+                    )
+                    prev2 = engine._prev_rolling_orders.get("BTCUSDT", {})
+                    extra2 = tuple(s for _oid, s in prev2.items() if _oid not in new_cids)
+                    engine._last_account_snapshot = self._account_snap(
+                        orders=(*new_orders, *extra2),
+                        pos_qty="0",
+                        ts=3_000_000 + cycle * 2_000_000,
+                    )
+                    engine.process_snapshot(self._snap(ts=3_000_000 + cycle * 2_000_000))
+
+        cap_msgs = [r.message for r in caplog.records if "PLACEMENT_CAPPED" in r.message]
+        assert len(cap_msgs) == 0, f"PLACEMENT_CAPPED must not fire in healthy cycles: {cap_msgs}"

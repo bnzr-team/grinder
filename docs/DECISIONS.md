@@ -4278,3 +4278,30 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
   - `force=True` in `logging.basicConfig()` is safe: `run_trading.py` is always the top-level process owner. Library modules use `getLogger(__name__)` and inherit. The only effect is that INFO (previously invisible under Python default WARNING) is now visible.
   - **Operator tool bugfix (5939b07):** `_build_port()` read-only path required `allow_mainnet=True` + `ALLOW_MAINNET_TRADE=1` env var to satisfy `BinanceFuturesPortConfig.__post_init__` validation, even for read-only commands. Fix: always `allow_mainnet=True`, `os.environ.setdefault("ALLOW_MAINNET_TRADE", "1")` for read-only path. `SafeMode.READ_ONLY` remains the actual write guard.
   - **Minimum live acceptance: PASSED** (2026-03-15). Proven: ANCHOR_INIT, placement (2x POST 200 OK), GRID_SHIFT_DEFERRED, INFLIGHT_STALE_CLEARED (live-proven), 0 errors, clean shutdown (300s/3073 ticks), cleanup→verify status=CLEAN. Full rolling-path acceptance (ANCHOR_RESET, fill→TP, ROLLING_FILL_OFFSET) remains open.
+
+## ADR-090 — Inflight Fill Detection (P0 Incident Fix)
+- **Date:** 2026-03-15
+- **Status:** accepted
+- **Context:** Live ceremony A2 (2026-03-15) exposed a P0 safety bug. The rolling grid engine placed 13 BUY orders in 60 seconds, 11 of which filled instantly, accumulating 0.022 BTC long (~$1,571 notional) with zero fills detected (`ROLLING_FILL_OFFSET=0`). Root cause: `_detect_grid_fills_for_rolling()` uses a disappearance heuristic — an order must appear in at least one REST snapshot to enter `_prev_rolling_orders`. An order that fills within one REST sync interval (~5s) is never tracked, so its disappearance is never detected. The inflight latch delays planner for one sync cycle, but once sync refreshes, planner sees `actual < desired` and places another BUY at the same price. Repeat every ~5s.
+- **Decision:** Two-part fix:
+  1. **Inflight CID fill tracking (root cause fix):** Track dispatched PLACE orders by `client_order_id` in `_inflight_placed_cids`. After sync refresh, check if CID survived in REST snapshot. Missing = inflight fill (emit `INFLIGHT_FILL_DETECTED`, shift offset). Surviving = hand off to normal disappearance heuristic. Uses `all_open_ids` (unfiltered set of order IDs) for CID survival check — inflight reconciliation is identity-based, not strategy-based.
+  2. **Unreconciled placement hard cap (defense-in-depth):** Track PLACEs awaiting reconciliation in `_unreconciled_place_count[symbol][side]`. Incremented on dispatch, decremented on first post-dispatch sync (both survived + filled). Cap = `levels * 2`. When reached, suppress PLACEs on that side (`PLACEMENT_CAPPED`, WARNING). Side-selective — capping BUY does not block SELL.
+- **Reconciliation contract:** An order is "unreconciled" from PLACE dispatch until first post-dispatch REST sync. Two outcomes (mutually exclusive, exhaustive): **Survived** (CID in REST → decrement counter) or **Inflight fill** (CID absent → decrement counter + emit fill). Invariant: every dispatched PLACE increments unreconciled once; first post-dispatch sync decrements exactly once, regardless of outcome.
+- **CID identity contract:** `client_order_id` flows unchanged through: port generation → Binance `newClientOrderId` → REST `clientOrderId` → `OpenOrderSnap.order_id` → `all_open_ids` key. No transform path exists.
+- **Why existing guards failed:**
+  - Inflight latch: delays 1 sync cycle, does not verify fill.
+  - Budget pre-check: `max_orders_per_run=50` is too high for safety bound.
+  - Max position cap: env var not set → disabled.
+  - Drawdown guard: PnL hadn't crossed threshold.
+  - Disappearance heuristic: the root cause — structurally blind to sub-sync fills.
+- **Cap value justification (`levels * 2`):** Initial placement dispatches `levels` orders per side. After reconciliation, all are either survived or filled → counter returns to 0. The cap fires only if `levels` consecutive PLACEs are dispatched with ZERO reconciliation — both disappearance heuristic and inflight CID tracking failed. With `levels=1` (incident config), cap=2 would have stopped the loop after 2 undetected fills instead of 11.
+- **New state:** `_InflightPlacedOrder(symbol, side, sync_gen)` dataclass. `_inflight_placed_cids: dict[str, _InflightPlacedOrder]`. `_unreconciled_place_count: dict[str, dict[str, int]]`.
+- **New log events:** `INFLIGHT_FILL_DETECTED` (INFO — operational path, not anomaly), `PLACEMENT_CAPPED` (WARNING — anomaly, fill detection itself is broken).
+- **ANCHOR_RESET cleanup:** `_inflight_placed_cids` filtered by symbol + `_unreconciled_place_count` popped alongside existing state cleanup (6 state maps total).
+- **Intentional coupling:** Guard 4 reads `planner._config.levels` — frozen `@dataclass`, single scalar, follows precedent at engine.py `_filter_tp_grid_overlap()`. Documented for future refactoring.
+- **Consequences:**
+  - Instant fills are now a supported operational path, not an undetectable gap.
+  - Disappearance heuristic remains the primary fill detection path for orders that survive at least one REST snapshot.
+  - Inflight CID tracking is the first-fill path for orders that fill within the sync interval.
+  - 12 new tests (T63-T74): inflight BUY/SELL fill, multi-cycle no-churn, survived order, early-check, cap fires, side isolation, reconciliation decrements, ANCHOR_RESET cleanup, healthy init, healthy replacement.
+  - Incident verdict: FAILED. No further fill ceremonies until this PR merges and is live-verified.

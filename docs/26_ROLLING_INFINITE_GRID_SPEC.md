@@ -445,9 +445,27 @@ Rolling shifts still dispatch PLACEs and CANCELs. Convergence guards still apply
 - Guard 1 (inflight latch): wait for AccountSync after dispatch.
 - Guard 2 (cancel-first on extras): if stale orders exist, cancel only.
 - Guard 3 (budget pre-check): if budget insufficient, defer.
+- Guard 4 (ADR-090, unreconciled placement cap): if `_unreconciled_place_count[symbol][side] >= levels * 2`, suppress PLACEs on that side. Defense-in-depth — fires only if both inflight CID tracking and disappearance heuristic fail. Side-selective (capping BUY does not block SELL). Emits `PLACEMENT_CAPPED` (WARNING).
 
 Key improvement: rolling shifts use 3 actions per fill (vs 20 for full rebuild),
 so budget burns ~7x slower.
+
+### 8.1a Fill Detection Paths (ADR-090)
+
+Fill detection uses two complementary paths:
+
+1. **Inflight CID reconciliation:** dispatched PLACE CIDs tracked in `_inflight_placed_cids`.
+   On first post-dispatch REST sync (`account_sync_generation > dispatch sync_gen`):
+   - CID in `all_open_ids` (unfiltered) → **survived** → handed to disappearance heuristic.
+   - CID absent → **inflight fill** → `INFLIGHT_FILL_DETECTED` (INFO), offset shift applied.
+   This is the first-fill path for orders filling within the REST sync interval (~5s).
+
+2. **Disappearance heuristic:** order in `_prev_rolling_orders` but absent from current
+   `strategy_id="d"` snapshot → fill (unless in pending cancels). This is the primary path
+   for orders surviving at least one REST snapshot.
+
+**Reconciliation contract:** every dispatched PLACE increments `_unreconciled_place_count`
+once; first post-dispatch sync decrements exactly once, regardless of survival or inflight fill.
 
 ### 8.2 Grid Freeze in Position (PR-FREEZE)
 
@@ -628,7 +646,7 @@ Raw `Decimal`, NOT tick-rounded.
 
 **Two-layer cleanup:**
 - Planner-owned: anchor, step, net_offset, tp_slot_reservations.
-- Engine-owned: `_prev_rolling_orders`, pending cancels (symbol-scoped), `_inflight_deferred_logged`, throttle keys.
+- Engine-owned: `_prev_rolling_orders`, pending cancels (symbol-scoped), `_inflight_deferred_logged`, throttle keys, `_inflight_placed_cids` (ADR-090: dispatched PLACE CIDs awaiting reconciliation), `_unreconciled_place_count` (ADR-090: per-symbol per-side unreconciled PLACE counter).
 
 **Slot state model:** `{grid, tp, reserved, vacant}` (unchanged from INV-9).
 

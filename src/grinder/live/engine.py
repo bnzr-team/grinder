@@ -130,6 +130,15 @@ class _InflightShift:
     ts_ms: int  # wall-clock for timeout
 
 
+@dataclass(frozen=True)
+class _InflightPlacedOrder:
+    """Tracks a dispatched PLACE awaiting first REST sync confirmation (ADR-090)."""
+
+    symbol: str
+    side: str  # "BUY" or "SELL"
+    sync_gen: int  # _account_sync_generation at dispatch time
+
+
 def _extract_binance_error_code(error: str | None) -> int | None:
     """Extract numeric error code from Binance error message.
 
@@ -502,6 +511,9 @@ class LiveEngineV0:
         # Rolling fill detection state (engine-owned, no cycle_layer private access)
         self._prev_rolling_orders: dict[str, dict[str, OpenOrderSnap]] = {}
         self._rolling_pending_cancels: dict[str, int] = {}  # order_id -> ts_ms
+        # ADR-090: inflight CID fill detection + unreconciled placement cap
+        self._inflight_placed_cids: dict[str, _InflightPlacedOrder] = {}
+        self._unreconciled_place_count: dict[str, dict[str, int]] = {}
         # INV-10 (ADR-088): ANCHOR_RESET_BLOCKED throttle (log once per reason)
         self._anchor_reset_blocked_logged: set[str] = set()  # "{symbol}:{reason}"
         if self._emergency_exit_enabled:
@@ -773,6 +785,13 @@ class LiveEngineV0:
                         self._prev_rolling_orders.pop(snapshot.symbol, None)
                         self._clear_pending_cancels_for_symbol(snapshot.symbol)
                         self._inflight_deferred_logged.discard(snapshot.symbol)
+                        # ADR-090: clear inflight CIDs and reconciliation counter
+                        self._inflight_placed_cids = {
+                            c: i
+                            for c, i in self._inflight_placed_cids.items()
+                            if i.symbol != snapshot.symbol
+                        }
+                        self._unreconciled_place_count.pop(snapshot.symbol, None)
                         # Clear all throttle keys for this symbol on success
                         self._anchor_reset_blocked_logged.discard(
                             f"{snapshot.symbol}:POSITION_OPEN"
@@ -1184,7 +1203,7 @@ class LiveEngineV0:
 
     _ROLLING_CANCEL_TTL_MS = 30_000  # 30s, same as cycle_layer._CANCEL_TTL_MS
 
-    def _detect_grid_fills_for_rolling(self, symbol: str) -> list[tuple[str, str]]:
+    def _detect_grid_fills_for_rolling(self, symbol: str) -> list[tuple[str, str]]:  # noqa: PLR0912
         """Detect grid fills by snapshot diff for rolling offset update.
 
         Rolling fill classification contract:
@@ -1215,8 +1234,46 @@ class LiveEngineV0:
                 continue
             current[o.order_id] = o
 
-        prev = self._prev_rolling_orders.get(symbol, {})
+        # ADR-090: Inflight CID reconciliation (see Reconciliation Contract).
+        # Each dispatched PLACE is reconciled on the first post-dispatch sync:
+        #   - CID in current REST -> survived (on book) -> decrement unreconciled
+        #   - CID absent from REST -> inflight fill -> decrement unreconciled + emit fill
+        # Note: all_open_ids is unfiltered (no parse_client_order_id gate) because
+        # inflight CID survival is identity-based, not strategy-based.
+        all_open_ids: set[str] = set()
+        for o in snap.open_orders:
+            if o.symbol == symbol:
+                all_open_ids.add(o.order_id)
+
         fills: list[tuple[str, str]] = []
+        expired_cids: list[str] = []
+        for cid, info in self._inflight_placed_cids.items():
+            if info.symbol != symbol:
+                continue
+            if self._account_sync_generation <= info.sync_gen:
+                continue  # sync hasn't refreshed since dispatch -- too early
+            # Reconciliation: decrement unreconciled counter for BOTH outcomes
+            sym_counts = self._unreconciled_place_count.get(symbol, {})
+            if info.side in sym_counts and sym_counts[info.side] > 0:
+                sym_counts[info.side] -= 1
+            expired_cids.append(cid)
+            if cid in all_open_ids:
+                pass  # survived -- normal disappearance heuristic tracks from here
+            else:
+                fills.append((cid, info.side))
+                logger.info(
+                    "INFLIGHT_FILL_DETECTED symbol=%s cid=%s side=%s "
+                    "dispatch_gen=%d current_gen=%d",
+                    symbol,
+                    cid,
+                    info.side,
+                    info.sync_gen,
+                    self._account_sync_generation,
+                )
+        for cid in expired_cids:
+            del self._inflight_placed_cids[cid]
+
+        prev = self._prev_rolling_orders.get(symbol, {})
 
         for oid, snap_order in prev.items():
             if oid in current:
@@ -1945,7 +2002,7 @@ class LiveEngineV0:
             )
         return actions
 
-    def _apply_convergence_guards(
+    def _apply_convergence_guards(  # noqa: PLR0912
         self,
         symbol: str,
         actions: list[ExecutionAction],
@@ -2054,6 +2111,34 @@ class LiveEngineV0:
                 place_count,
             )
             return []
+
+        # Guard 4 (ADR-090): Unreconciled placement hard cap.
+        if self._rolling_grid_enabled and self._grid_planners:
+            planner = self._grid_planners.get(symbol)
+            if planner is not None:
+                cap = planner._config.levels * 2
+                sym_counts = self._unreconciled_place_count.get(symbol, {})
+                suppressed_sides: set[str] = set()
+                for side_str in ("BUY", "SELL"):
+                    if sym_counts.get(side_str, 0) >= cap:
+                        suppressed_sides.add(side_str)
+                if suppressed_sides:
+                    actions = [
+                        a
+                        for a in actions
+                        if not (
+                            a.action_type == ActionType.PLACE
+                            and a.side is not None
+                            and a.side.value in suppressed_sides
+                        )
+                    ]
+                    logger.warning(
+                        "PLACEMENT_CAPPED symbol=%s suppressed_sides=%s unreconciled=%s cap=%d",
+                        symbol,
+                        suppressed_sides,
+                        sym_counts,
+                        cap,
+                    )
 
         # All guards passed — record inflight if PLACEs dispatched.
         # BUG-3 fix: after convergence just cleared, skip re-latch for pure
@@ -2581,6 +2666,17 @@ class LiveEngineV0:
                 if action.action_type == ActionType.PLACE:
                     cid_sent = action.client_order_id or live_action.order_id or ""
                     self._recent_places.append((cid_sent, int(time.time() * 1000), action.symbol))
+                    # ADR-090: track dispatched PLACE CID for inflight fill detection
+                    if self._rolling_grid_enabled and action.side is not None:
+                        self._inflight_placed_cids[cid_sent] = _InflightPlacedOrder(
+                            symbol=action.symbol,
+                            side=action.side.value,
+                            sync_gen=self._account_sync_generation,
+                        )
+                        sym_counts = self._unreconciled_place_count.setdefault(
+                            action.symbol, {"BUY": 0, "SELL": 0}
+                        )
+                        sym_counts[action.side.value] += 1
                 return live_action
             except ConnectorNonRetryableError as e:
                 # Non-retryable: fail immediately
