@@ -172,6 +172,18 @@ class LiveGridPlannerV1:
             anchor_price=anchor_price, step_price=step
         )
 
+    def reset_rolling_state(self, symbol: str) -> None:
+        """Clear rolling state for symbol. Next plan() re-inits from fresh mid.
+
+        Clears planner-owned state: anchor, step, net_offset, reservations.
+        Engine must separately clear engine-owned transient state
+        (_prev_rolling_orders, _rolling_pending_cancels for symbol).
+
+        Part of INV-10 ANCHOR_RESET contract (ADR-088).
+        """
+        self._rolling_state.pop(symbol, None)
+        self._tp_slot_reservations.pop(symbol, None)
+
     def apply_fill_offset(self, symbol: str, side: str) -> None:
         """Update net_offset after grid fill detection (doc-26 SS 6.1/6.2).
 
@@ -276,6 +288,13 @@ class LiveGridPlannerV1:
             # Rolling mode (doc-26): auto-init state on first tick
             if symbol not in self._rolling_state:
                 self.init_rolling_state(symbol, mid_price, effective_spacing_bps)
+                # INV-10 (ADR-088): anchor_price = raw mid_price (not rounded).
+                logger.info(
+                    "ANCHOR_INIT symbol=%s anchor=%s spacing_bps=%.1f",
+                    symbol,
+                    mid_price,
+                    effective_spacing_bps,
+                )
             # INV-9b: clear reservation when TP visible or aged out.
             # Must run BEFORE _build_rolling_grid so that once TP is on exchange,
             # the slot is occupied via price-matching (not reservation skip).

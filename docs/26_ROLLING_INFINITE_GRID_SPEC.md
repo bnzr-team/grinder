@@ -605,6 +605,48 @@ If AccountSync loses connection and reconnects (no engine restart):
 - Planner diffs as usual.
 - No re-anchor needed.
 
+### 10.4 Live Re-Anchor (INV-10, ADR-088)
+
+If all grinder orders disappear while the engine is running (external cleanup,
+exchange-side cancel, margin call), the grid re-anchors to current `mid_price`.
+
+**SSOT:** `anchor_price = snapshot.mid_price = (bid_price + ask_price) / 2`.
+Raw `Decimal`, NOT tick-rounded.
+
+**5-condition contract (all must be true):**
+
+1. `rolling_state_exists` — planner has `_RollingLadderState` for symbol.
+2. `no_grinder_orders` — no orders with `parse_client_order_id() != None` and prefix `"grinder"` on exchange.
+3. `no_inflight_latch` — `symbol not in _inflight_shift` (no PLACEs awaiting confirmation).
+4. `position_flat` — `_get_position_qty(symbol) == 0`. If `None` (AccountSync unavailable), blocked with `reason=POSITION_UNKNOWN`.
+5. `no_pending_cancels_for_symbol` — `_count_pending_cancels_for_symbol(symbol) == 0`.
+
+**Same-tick re-anchor:** `reset_rolling_state()` called BEFORE `_plan_grid()` in the same
+`process_snapshot()` call. Next `plan()` sees no rolling state → re-inits from fresh `mid_price`.
+
+**Formula:** `desired_grid_count = 2 * N` (full grid from new anchor, offset=0).
+
+**Two-layer cleanup:**
+- Planner-owned: anchor, step, net_offset, tp_slot_reservations.
+- Engine-owned: `_prev_rolling_orders`, pending cancels (symbol-scoped), `_inflight_deferred_logged`, throttle keys.
+
+**Slot state model:** `{grid, tp, reserved, vacant}` (unchanged from INV-9).
+
+**Blocked logging:** `ANCHOR_RESET_BLOCKED` throttled via `_anchor_reset_blocked_logged: set[str]`
+keyed by `"{symbol}:{reason}"`. Reason-level throttle. Cleared when state changes (orders reappear,
+reset succeeds, or inflight active).
+
+**State matrix:**
+
+| Exchange | Position | Pending | Inflight | Result |
+|----------|----------|---------|----------|--------|
+| empty | flat | 0 | no | ANCHOR_RESET |
+| empty | flat | >0 | no | BLOCKED (PENDING_CANCELS) |
+| empty | open | any | no | BLOCKED (POSITION_OPEN) |
+| empty | unknown | any | no | BLOCKED (POSITION_UNKNOWN) |
+| empty | any | any | yes | skip (inflight in progress) |
+| orders | any | any | any | skip (normal operation) |
+
 ---
 
 ## 11. Grid Fill vs TP Fill Distinction

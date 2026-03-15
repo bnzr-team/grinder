@@ -4232,3 +4232,26 @@ ACTIVE inference affects policy **only if ALL conditions are true**:
   - CANCEL_2011 retries: O(N*ticks_until_sync) → O(1). First failure blacklists; subsequent skipped.
   - BUG-3 fix risk: brief stale-snapshot window (1 sync cycle) where planner may generate redundant PLACE for shifted slot. Self-heals next sync (extra detected → CANCEL).
   - BUG-4 fix risk: premature blacklist if CANCEL fails for transient reason (non -2011). Self-heals on sync refresh (blacklist cleared).
+
+## ADR-088: Anchor / Initial Placement Contract — INV-10
+
+- **Date:** 2026-03-14
+- **Status:** accepted
+- **Context:** Live rolling mode verification (run9-run13) exposed grid placement asymmetry after external cleanup. Root cause: initial placement contract not formalized. Two modes mixed — initial placement vs live rolling. When an operator externally cancels all orders, the grid rebuilds from a stale anchor (`mid_price` at first init), appearing asymmetric from the current market price. Rolling mode never re-anchors by design (fill-driven offsets only). No mechanism existed to detect "exchange truly empty" and re-init.
+- **Decision:**
+  - **SSOT for anchor:** `anchor_price = snapshot.mid_price = (bid_price + ask_price) / 2`. Raw `Decimal`, NOT tick-rounded. Stored in `_RollingLadderState.anchor_price`.
+  - **`ANCHOR_INIT` log:** Emitted in `plan()` when `init_rolling_state()` is first called for a symbol. Format: `ANCHOR_INIT symbol={} anchor={} spacing_bps={}`.
+  - **`reset_rolling_state(symbol)`:** Planner method clears planner-owned state (anchor, step, net_offset, tp_slot_reservations). Next `plan()` re-inits from fresh `mid_price`.
+  - **ANCHOR_RESET (engine):** 5-condition contract — rolling_state_exists AND no_grinder_orders AND no_inflight_latch AND position_flat AND no_pending_cancels_for_symbol. Same-tick: reset before `_plan_grid()` in same `process_snapshot()` call.
+  - **Two-layer cleanup:** Planner-owned (anchor, step, net_offset, reservations) + Engine-owned (`_prev_rolling_orders`, pending cancels for symbol, `_inflight_deferred_logged`, throttle keys).
+  - **ANCHOR_RESET_BLOCKED throttle:** `_anchor_reset_blocked_logged: set[str]` keyed by `"{symbol}:{reason}"`. Reason-level throttle (not count-level). Cleared when state changes (orders reappear, reset succeeds, inflight active).
+  - **PLANNER_ACTIONS_SUMMARY extension:** Rolling mode appends `mid={} ec={} anchor={}`. Non-rolling unchanged (`mid={}` only).
+- **Consequences:**
+  - External cleanup (operator cancels all orders, margin call, ADL) triggers automatic re-anchor to current market mid on same tick.
+  - `ANCHOR_RESET_BLOCKED` with `reason=POSITION_OPEN` prevents re-anchor when position exists (operator must close position or TP must fill first).
+  - `ANCHOR_RESET_BLOCKED` with `reason=POSITION_UNKNOWN` prevents re-anchor when AccountSync is unavailable (defensive — avoids re-anchor without position confirmation).
+  - `ANCHOR_RESET_BLOCKED` with `reason=PENDING_CANCELS` prevents re-anchor when cancel confirmations are pending (transient — self-heals via 30s TTL).
+  - Throttle prevents log spam: each BLOCKED reason logged once per episode, re-fires after state change.
+  - External-cleanup recovery path: operator can force re-anchor by closing position + cancelling all orders. Engine detects empty+flat → ANCHOR_RESET → fresh grid.
+  - Saturation edge case (fills > N same side): reservation clamps at `min(fill_count, N)`, excess TPs self-heal via TTL (unchanged from ADR-086).
+  - 15 new tests (T44-T58): anchor=raw_mid, symmetry, stability, same-tick reset, inflight guard, orders guard, fill+cleanup+reanchor, position_open blocked, prev_orders cleared, pending_cancels cleared, mixed-symbol isolation, throttle behavior, pending_cancels→expiry→reset, position_unknown.

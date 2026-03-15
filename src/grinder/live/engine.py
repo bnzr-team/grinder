@@ -500,6 +500,8 @@ class LiveEngineV0:
         # Rolling fill detection state (engine-owned, no cycle_layer private access)
         self._prev_rolling_orders: dict[str, dict[str, OpenOrderSnap]] = {}
         self._rolling_pending_cancels: dict[str, int] = {}  # order_id -> ts_ms
+        # INV-10 (ADR-088): ANCHOR_RESET_BLOCKED throttle (log once per reason)
+        self._anchor_reset_blocked_logged: set[str] = set()  # "{symbol}:{reason}"
         if self._emergency_exit_enabled:
             # Duck-type check: port must have cancel_all_orders + place_market_order + get_positions
             port = self._exchange_port
@@ -706,6 +708,80 @@ class LiveEngineV0:
                     len(grid_fills),
                     rs.net_offset if rs else "N/A",
                 )
+
+        # INV-10 (ADR-088): ANCHOR_RESET — re-anchor if exchange truly empty + flat
+        # + no inflight + no pending cancels. Same-tick: reset now, plan() re-inits
+        # from fresh mid_price in _plan_grid() on this same tick.
+        if rolling and not budget_dead and not grid_frozen:
+            _ra_planner = self._grid_planners.get(snapshot.symbol) if self._grid_planners else None
+            if _ra_planner and _ra_planner.get_rolling_state(snapshot.symbol) is not None:
+                if (
+                    not self._has_grinder_orders(snapshot.symbol)
+                    and snapshot.symbol not in self._inflight_shift
+                ):
+                    _pos_qty = self._get_position_qty(snapshot.symbol)
+                    _pending_count = self._count_pending_cancels_for_symbol(snapshot.symbol)
+
+                    if _pos_qty is None:
+                        _key = f"{snapshot.symbol}:POSITION_UNKNOWN"
+                        if _key not in self._anchor_reset_blocked_logged:
+                            logger.warning(
+                                "ANCHOR_RESET_BLOCKED symbol=%s reason=POSITION_UNKNOWN",
+                                snapshot.symbol,
+                            )
+                            self._anchor_reset_blocked_logged.add(_key)
+                    elif _pos_qty != 0:
+                        _key = f"{snapshot.symbol}:POSITION_OPEN"
+                        if _key not in self._anchor_reset_blocked_logged:
+                            logger.warning(
+                                "ANCHOR_RESET_BLOCKED symbol=%s reason=POSITION_OPEN pos_qty=%s",
+                                snapshot.symbol,
+                                _pos_qty,
+                            )
+                            self._anchor_reset_blocked_logged.add(_key)
+                    elif _pending_count > 0:
+                        _key = f"{snapshot.symbol}:PENDING_CANCELS"
+                        if _key not in self._anchor_reset_blocked_logged:
+                            logger.warning(
+                                "ANCHOR_RESET_BLOCKED symbol=%s reason=PENDING_CANCELS count=%d",
+                                snapshot.symbol,
+                                _pending_count,
+                            )
+                            self._anchor_reset_blocked_logged.add(_key)
+                    else:
+                        # All 5 conditions met → ANCHOR_RESET (same-tick)
+                        old_rs = _ra_planner.get_rolling_state(snapshot.symbol)
+                        assert old_rs is not None  # guarded by line 719 check
+                        logger.warning(
+                            "ANCHOR_RESET symbol=%s old_anchor=%s old_offset=%d "
+                            "new_mid=%s reason=EXCHANGE_EMPTY_FLAT",
+                            snapshot.symbol,
+                            old_rs.anchor_price,
+                            old_rs.net_offset,
+                            snapshot.mid_price,
+                        )
+                        # Planner-owned cleanup
+                        _ra_planner.reset_rolling_state(snapshot.symbol)
+                        # Engine-owned cleanup
+                        self._prev_rolling_orders.pop(snapshot.symbol, None)
+                        self._clear_pending_cancels_for_symbol(snapshot.symbol)
+                        self._inflight_deferred_logged.discard(snapshot.symbol)
+                        # Clear all throttle keys for this symbol on success
+                        self._anchor_reset_blocked_logged.discard(
+                            f"{snapshot.symbol}:POSITION_OPEN"
+                        )
+                        self._anchor_reset_blocked_logged.discard(
+                            f"{snapshot.symbol}:PENDING_CANCELS"
+                        )
+                        self._anchor_reset_blocked_logged.discard(
+                            f"{snapshot.symbol}:POSITION_UNKNOWN"
+                        )
+                else:
+                    # Orders present or inflight active → clear blocked-log latch
+                    # (state changed, next empty+blocked cycle should re-log)
+                    self._anchor_reset_blocked_logged.discard(f"{snapshot.symbol}:POSITION_OPEN")
+                    self._anchor_reset_blocked_logged.discard(f"{snapshot.symbol}:PENDING_CANCELS")
+                    self._anchor_reset_blocked_logged.discard(f"{snapshot.symbol}:POSITION_UNKNOWN")
 
         # Step 1: Get actions -- either from LiveGridPlannerV1 or PaperEngine
         if grid_frozen or budget_dead:
@@ -1293,21 +1369,45 @@ class LiveEngineV0:
         if plan_result.actions:
             # P0-2d: promote to WARNING when debug active (visible without logging.basicConfig)
             log_fn = logger.warning if self._debug_open_orders else logger.info
-            log_fn(
-                "PLANNER_ACTIONS_SUMMARY %s: desired=%d actual=%d missing=%d extra=%d "
-                "extra_tp=%d mismatch=%d spacing=%.1f bps natr_fallback=%s actions=%d mid=%.2f",
-                snapshot.symbol,
-                plan_result.desired_count,
-                plan_result.actual_count,
-                plan_result.diff_missing,
-                plan_result.diff_extra,
-                plan_result.diff_extra_tp,
-                plan_result.diff_mismatch,
-                plan_result.effective_spacing_bps,
-                plan_result.natr_fallback,
-                len(plan_result.actions),
-                float(snapshot.mid_price),
-            )
+            # INV-10: rolling mode appends ec= and anchor= to log (non-rolling unchanged)
+            rs = planner.get_rolling_state(snapshot.symbol) if rolling_mode else None
+            if rs is not None:
+                ec_val = rs.anchor_price + rs.net_offset * rs.step_price
+                log_fn(
+                    "PLANNER_ACTIONS_SUMMARY %s: desired=%d actual=%d missing=%d "
+                    "extra=%d extra_tp=%d mismatch=%d spacing=%.1f bps "
+                    "natr_fallback=%s actions=%d mid=%s ec=%s anchor=%s",
+                    snapshot.symbol,
+                    plan_result.desired_count,
+                    plan_result.actual_count,
+                    plan_result.diff_missing,
+                    plan_result.diff_extra,
+                    plan_result.diff_extra_tp,
+                    plan_result.diff_mismatch,
+                    plan_result.effective_spacing_bps,
+                    plan_result.natr_fallback,
+                    len(plan_result.actions),
+                    snapshot.mid_price,
+                    ec_val,
+                    rs.anchor_price,
+                )
+            else:
+                log_fn(
+                    "PLANNER_ACTIONS_SUMMARY %s: desired=%d actual=%d missing=%d "
+                    "extra=%d extra_tp=%d mismatch=%d spacing=%.1f bps "
+                    "natr_fallback=%s actions=%d mid=%s",
+                    snapshot.symbol,
+                    plan_result.desired_count,
+                    plan_result.actual_count,
+                    plan_result.diff_missing,
+                    plan_result.diff_extra,
+                    plan_result.diff_extra_tp,
+                    plan_result.diff_mismatch,
+                    plan_result.effective_spacing_bps,
+                    plan_result.natr_fallback,
+                    len(plan_result.actions),
+                    snapshot.mid_price,
+                )
 
         return plan_result
 
@@ -1535,6 +1635,48 @@ class LiveEngineV0:
             if p.symbol == symbol:
                 return p.qty
         return Decimal("0")
+
+    def _has_grinder_orders(self, symbol: str) -> bool:
+        """Check if exchange has any grinder-owned orders for symbol.
+
+        Used by INV-10 ANCHOR_RESET condition (ADR-088).
+        """
+        snap = self._last_account_snapshot
+        if snap is None:
+            return False
+        for o in snap.open_orders:
+            if o.symbol != symbol:
+                continue
+            parsed = parse_client_order_id(o.order_id)
+            if parsed is not None and parsed.prefix.startswith(DEFAULT_PREFIX.rstrip("_")):
+                return True
+        return False
+
+    def _count_pending_cancels_for_symbol(self, symbol: str) -> int:
+        """Count rolling pending cancel entries for a specific symbol.
+
+        Used by INV-10 ANCHOR_RESET condition (ADR-088).
+        """
+        count = 0
+        for oid in self._rolling_pending_cancels:
+            parsed = parse_client_order_id(oid)
+            if parsed is not None and parsed.symbol == symbol:
+                count += 1
+        return count
+
+    def _clear_pending_cancels_for_symbol(self, symbol: str) -> None:
+        """Remove rolling pending cancel entries for a specific symbol.
+
+        Multi-symbol safe: only clears entries matching the given symbol.
+        Part of INV-10 ANCHOR_RESET engine-side cleanup (ADR-088).
+        """
+        stale = [
+            oid
+            for oid in self._rolling_pending_cancels
+            if (parsed := parse_client_order_id(oid)) is not None and parsed.symbol == symbol
+        ]
+        for oid in stale:
+            del self._rolling_pending_cancels[oid]
 
     def _detect_tp_fill_event(self, symbol: str, pos_qty: Decimal | None) -> bool:
         """Detect TP fill event: position magnitude decreased.

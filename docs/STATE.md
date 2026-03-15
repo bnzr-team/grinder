@@ -1356,7 +1356,7 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
   - Cap logic in `_build_desired_grid()`: reduces `desired_count` naturally
   - Backward-compatible: defaults preserve existing behavior
 - **Rolling Infinite Grid** (ADR-085):
-  - **Status:** V1E implemented -- convergence guard + cancel-spin fixes (BUG-3/BUG-4). Live verification pending.
+  - **Status:** V1F implemented -- anchor/initial placement contract (INV-10, ADR-088). Live verification pending.
   - **Spec:** `docs/26_ROLLING_INFINITE_GRID_SPEC.md`
   - **Problem:** Current mid-anchored grid rebuilds entirely on price movement (20 actions/shift, budget burn). Grid fills don't advance the ladder.
   - **Solution:** Rolling infinite ladder where grid fills shift `effective_center` by `+/- step_price`. Fill produces 2 grid actions (1 CANCEL + 1 PLACE, inner level reserved for TP) instead of full rebuild.
@@ -1382,9 +1382,16 @@ These are **not** a formal checklist. For canonical status, see the ADRs in `doc
     - **BUG-4 (CANCEL_2011 spin):** Stale snapshot shows already-cancelled order → planner generates CANCEL → Binance returns -2011 → repeats every tick until sync refresh. Fix: `_cancel_failed_ids` blacklist. Failed CANCELs recorded; blacklisted order_ids skipped in action loop. Cleared on AccountSync refresh (`_account_sync_generation` increment).
     - **Logs:** `CANCEL_FAILED_IDS_CLEARED count={} gen={}` (on sync refresh). `BlockReason.CANCEL_ALREADY_FAILED` (SKIPPED status).
     - 4 BUG-3 tests (log throttle, reset after sync, pure shift no-relatch, net-new relatch) + 5 BUG-4 tests (populated, cleared on sync, persists without sync, error path, empty no-log).
+  - **V1F (anchor/initial placement contract, ADR-088, INV-10):** Live runs (run9-run13) exposed grid asymmetry after external cleanup. Root cause: no re-anchor mechanism when exchange empties while engine is running.
+    - **ANCHOR_RESET:** 5-condition contract (rolling_state_exists, no_grinder_orders, no_inflight, position_flat, no_pending_cancels). Same-tick: `reset_rolling_state()` → `_plan_grid()` reinits from fresh `mid_price`.
+    - **SSOT:** `anchor_price = snapshot.mid_price` (raw Decimal, not tick-rounded).
+    - **Two-layer cleanup:** planner-owned (anchor, step, offset, reservations) + engine-owned (prev_orders, pending_cancels, throttle keys).
+    - **BLOCKED throttle:** `ANCHOR_RESET_BLOCKED` logged once per reason per episode. Three blocked reasons: POSITION_OPEN, POSITION_UNKNOWN, PENDING_CANCELS.
+    - **PLANNER_ACTIONS_SUMMARY:** rolling mode appends `ec=` and `anchor=` to log.
+    - 15 new anchor contract tests (T44-T58), 91 rolling grid tests total.
   - **Fill detection:** Rolling fill = disappeared order with `strategy_id="d"` (grid) AND not in pending cancels. TP (`strategy_id="tp"`) and all non-grid strategies do NOT shift offset. Disappearance heuristic (not trade evidence). Known limitation: exchange-side non-trade cancels of grid orders (ADL, margin) treated as fills. Resets on restart.
   - **Obsoletes in rolling mode:** cycle-layer replenish, TP_FILL_REPLENISH, mid-driven GRID_SHIFT, anti-churn, grid freeze.
-  - **Migration:** spec -> V1A planner -> V1B engine -> V1C slot ownership -> V1D cross-tick fix (this) -> live verification -> cleanup.
+  - **Migration:** spec -> V1A planner -> V1B engine -> V1C slot ownership -> V1D cross-tick fix -> V1E convergence guards -> V1F anchor contract -> live verification -> cleanup.
 
 - **AccountSync visibility instrumentation** (PR-P0-2):
   - `GRINDER_ACCOUNT_SYNC_DEBUG_OPEN_ORDERS=1` (default 0): one flag enables both raw logging + correlation
